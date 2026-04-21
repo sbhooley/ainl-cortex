@@ -19,11 +19,13 @@ from shared.logger import log_event, log_error, get_logger
 logger = get_logger("user_prompt_submit")
 
 
-def format_memory_brief(context: dict) -> str:
+def format_memory_brief(context: dict, compress: bool = False, compression_mode: str = "balanced") -> tuple:
     """
     Format memory context into compact text brief.
 
     Max ~800 tokens to preserve Claude Code context budget.
+
+    Returns: (brief_text, compression_metrics)
     """
     lines = ["## Relevant Graph Memory", ""]
 
@@ -86,13 +88,40 @@ def format_memory_brief(context: dict) -> str:
 
     brief = "\n".join(lines)
 
-    # Truncate if over budget (rough estimate: 1 token ≈ 4 chars)
+    compression_metrics = None
+
+    # Apply AINL compression if enabled
+    if compress:
+        try:
+            # Import here to avoid circular dependency
+            sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+            from compression import compress_text
+
+            compressed, metrics = compress_text(brief, mode=compression_mode, emit_metrics=True)
+
+            if metrics and metrics.tokens_saved > 0:
+                brief = compressed
+                compression_metrics = {
+                    "mode": compression_mode,
+                    "original_tokens": metrics.original_tokens,
+                    "compressed_tokens": metrics.compressed_tokens,
+                    "tokens_saved": metrics.tokens_saved,
+                    "savings_pct": metrics.savings_ratio_pct
+                }
+                logger.info(
+                    f"Compressed memory context: {metrics.original_tokens} → "
+                    f"{metrics.compressed_tokens} tokens ({metrics.savings_ratio_pct:.1f}% savings)"
+                )
+        except Exception as e:
+            logger.warning(f"Compression failed, using original: {e}")
+
+    # Fallback truncation if still over budget
     max_chars = 800 * 4
     if len(brief) > max_chars:
         brief = brief[:max_chars] + "\n\n[... truncated for context budget]"
         logger.warning(f"Memory brief truncated to {max_chars} chars")
 
-    return brief
+    return brief, compression_metrics
 
 
 def recall_context(project_id: str, prompt: str) -> dict:
@@ -131,8 +160,17 @@ def main():
         # Recall context from graph memory
         context = recall_context(project_id, prompt)
 
-        # Format compact brief
-        brief = format_memory_brief(context)
+        # Check if compression should be used
+        # TODO: Load from config file when MCP integration is complete
+        use_compression = True  # Default to enabled
+        compression_mode = "balanced"  # Default mode
+
+        # Format compact brief (with optional compression)
+        brief, compression_metrics = format_memory_brief(
+            context,
+            compress=use_compression,
+            compression_mode=compression_mode
+        )
 
         # Prepare result
         result = {}
@@ -141,6 +179,11 @@ def main():
         if brief.strip() and len(brief) > len("## Relevant Graph Memory\n\n"):
             result["systemMessage"] = brief
             logger.info(f"Injected {len(brief)} chars of memory context")
+
+            # Add compression badge if compression was used
+            if compression_metrics and compression_metrics['tokens_saved'] > 0:
+                savings_pct = compression_metrics['savings_pct']
+                logger.info(f"⚡ eco: {savings_pct:.0f}% token savings on memory context")
         else:
             logger.debug("No memory context to inject")
 
@@ -149,7 +192,8 @@ def main():
             "project_id": project_id,
             "prompt_length": len(prompt),
             "brief_length": len(brief),
-            "injected": bool(result)
+            "injected": bool(result),
+            "compression": compression_metrics
         })
 
         # Output result as JSON

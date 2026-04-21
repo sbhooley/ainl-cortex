@@ -19,6 +19,7 @@ AINL Graph Memory is a **Claude Code plugin** that demonstrates the power of the
 ✅ **Soft Axes Persona Evolution** - Learn project/developer preferences without LLM calls  
 ✅ **Pattern Extraction** - Automatically promote successful workflows to reusable patterns  
 ✅ **Context-Aware Retrieval** - Inject only relevant memories (ranked by project, recency, fitness)  
+✅ **AINL Compression & Eco Mode** - 40-70% token savings on memory context (Balanced/Aggressive modes)  
 ✅ **Project Isolation** - Memories never leak between different codebases  
 ✅ **Graceful Degradation** - Hooks never break Claude Code, even on errors  
 ✅ **Inspectable** - CLI tools for debugging and exploration
@@ -67,6 +68,28 @@ python3 cli/memory_cli.py list --type persona
 python3 cli/memory_cli.py validate
 ```
 
+### Managing Compression (Eco Mode)
+
+```bash
+# Check current compression settings
+python3 cli/compression_cli.py config
+
+# Set compression mode (off, balanced, aggressive)
+python3 cli/compression_cli.py config --mode aggressive
+
+# Test compression on sample text
+python3 cli/compression_cli.py test --file prompt.txt --show-output
+
+# Benchmark compression modes
+python3 cli/compression_cli.py benchmark
+```
+
+**Typical savings:**
+- Balanced mode: 40-50% token reduction
+- Aggressive mode: 55-70% token reduction
+
+See [docs/COMPRESSION_ECO_MODE.md](docs/COMPRESSION_ECO_MODE.md) for details.
+
 ### Memory Location
 
 Your graph memory lives at:
@@ -108,7 +131,7 @@ Each project gets its own isolated graph.
 
 ## AINL Concepts
 
-This plugin demonstrates five core concepts from the AINL architecture:
+This plugin demonstrates six core concepts from the AINL architecture:
 
 ### 1. Graph-as-Memory Paradigm
 
@@ -138,7 +161,16 @@ Successful tool sequences automatically become reusable patterns:
 - Fitness tracking: EMA of success/failure ratio
 - Tool canonicalization: `bash`/`shell`/`sh` → `bash`
 
-### 5. Inbox Pattern for Multi-Writer Sync
+### 5. Intelligent Compression (Eco Mode)
+
+Embedding-free prompt compression reduces token costs:
+- **Balanced**: ~55% retention (40-50% savings)
+- **Aggressive**: ~35% retention (55-70% savings)
+- Preserves code blocks, technical terms, user intent
+- Strips filler phrases and meta-commentary
+- Sub-30ms latency
+
+### 6. Inbox Pattern for Multi-Writer Sync
 
 Safe memory updates from multiple processes:
 - Hooks append to lightweight capture files
@@ -146,7 +178,7 @@ Safe memory updates from multiple processes:
 - No DB locking conflicts
 - Eventual consistency
 
-See [docs/AINL_CONCEPTS.md](docs/AINL_CONCEPTS.md) for detailed explanations.
+See [docs/AINL_CONCEPTS.md](docs/AINL_CONCEPTS.md) and [docs/COMPRESSION_ECO_MODE.md](docs/COMPRESSION_ECO_MODE.md) for detailed explanations.
 
 ## Configuration
 
@@ -193,8 +225,9 @@ This plugin is directly inspired by the **AINL (AINativeLang) unified graph exec
 - **ainl-graph-extractor** - Pattern detection, recurrence tracking
 - **ainl-runtime** - Turn orchestration, memory context compilation
 - **ainl-semantic-tagger** - Tool canonicalization
+- **ainl-compression** - Prompt compression algorithms, eco modes
 
-All core architectural concepts are attributed to the AINL project.
+All core architectural concepts and compression algorithms are attributed to the AINL project.
 
 ## License
 
