@@ -2,12 +2,25 @@
 """AINL opportunity detection hook for Claude Code.
 
 Detects when to suggest using .ainl files based on user prompts and context.
+Includes persona evolution tracking.
 """
 import json
 import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+try:
+    from mcp_server.persona_evolution import (
+        PersonaEvolutionEngine,
+        detect_action_from_context
+    )
+    PERSONA_AVAILABLE = True
+except ImportError:
+    PERSONA_AVAILABLE = False
 
 
 # Trigger keywords that suggest AINL usage
@@ -46,8 +59,20 @@ CONDITIONAL_KEYWORDS = [
 class AINLDetector:
     """Detects opportunities to suggest AINL."""
 
-    def __init__(self):
+    def __init__(self, project_id: Optional[str] = None):
         self.confidence_threshold = 0.6
+        self.project_id = project_id
+
+        # Initialize persona engine if available
+        self.persona_engine = None
+        if PERSONA_AVAILABLE and project_id:
+            try:
+                persona_db = Path.home() / ".claude" / "projects" / project_id / "persona.db"
+                persona_db.parent.mkdir(parents=True, exist_ok=True)
+                self.persona_engine = PersonaEvolutionEngine(persona_db)
+            except Exception as e:
+                sys.stderr.write(f"Failed to initialize persona engine: {e}\n")
+                self.persona_engine = None
 
     def analyze_prompt(self, prompt: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -124,19 +149,40 @@ class AINLDetector:
         # Cap confidence at 1.0
         confidence_score = min(1.0, confidence_score)
 
+        # Extract persona signals from prompt
+        if self.persona_engine and PERSONA_AVAILABLE:
+            try:
+                action = detect_action_from_context(prompt)
+                if action:
+                    signals = self.persona_engine.extract_signals(action, context)
+                    if signals:
+                        self.persona_engine.ingest_signals(signals)
+            except Exception as e:
+                sys.stderr.write(f"Persona signal extraction failed: {e}\n")
+
         # Generate suggestion text
         suggestion_text = ""
+        persona_traits = ""
+
         if confidence_score >= self.confidence_threshold:
             suggestion_text = self._generate_suggestion(
                 use_case, confidence_score, reasons
             )
+
+            # Add persona traits if available
+            if self.persona_engine:
+                try:
+                    persona_traits = self.persona_engine.format_traits_for_prompt(min_strength=0.6)
+                except Exception as e:
+                    sys.stderr.write(f"Persona trait formatting failed: {e}\n")
 
         return {
             "suggest_ainl": confidence_score >= self.confidence_threshold,
             "confidence": round(confidence_score, 2),
             "reasons": reasons,
             "use_case": use_case,
-            "suggestion_text": suggestion_text
+            "suggestion_text": suggestion_text,
+            "persona_traits": persona_traits
         }
 
     def _check_ainl_files(self, context: Dict[str, Any]) -> bool:
@@ -254,22 +300,28 @@ def main():
         event = json.loads(sys.stdin.read())
 
         prompt = event.get("prompt", "")
+        project_id = event.get("projectId")
         context = {
             "workingDir": event.get("workingDir"),
-            "projectId": event.get("projectId")
+            "projectId": project_id
         }
 
         # Analyze
-        detector = AINLDetector()
+        detector = AINLDetector(project_id=project_id)
         result = detector.analyze_prompt(prompt, context)
 
         # Only output if we should suggest
         if result["suggest_ainl"]:
+            # Combine suggestion with persona traits
+            content = result["suggestion_text"]
+            if result.get("persona_traits"):
+                content = f"{result['persona_traits']}\n\n{content}"
+
             # Output suggestion as context injection
             output = {
                 "contextInjection": {
                     "priority": "medium",
-                    "content": result["suggestion_text"],
+                    "content": content,
                     "metadata": {
                         "source": "ainl_detection",
                         "confidence": result["confidence"],

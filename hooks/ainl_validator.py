@@ -12,15 +12,30 @@ from typing import Dict, Any, Optional
 try:
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from mcp_server.ainl_tools import AINLTools, _HAS_AINL
+    from mcp_server.failure_learning import FailureLearningStore
+    _HAS_FAILURE_LEARNING = True
 except ImportError:
     _HAS_AINL = False
+    _HAS_FAILURE_LEARNING = False
 
 
 class AINLValidator:
-    """Auto-validates .ainl files."""
+    """Auto-validates .ainl files with failure learning."""
 
-    def __init__(self):
+    def __init__(self, project_id: Optional[str] = None):
         self.tools = AINLTools() if _HAS_AINL else None
+        self.project_id = project_id
+
+        # Initialize failure learning store
+        self.failure_store = None
+        if _HAS_FAILURE_LEARNING and project_id:
+            try:
+                failure_db = Path.home() / ".claude" / "projects" / project_id / "failures.db"
+                failure_db.parent.mkdir(parents=True, exist_ok=True)
+                self.failure_store = FailureLearningStore(failure_db)
+            except Exception as e:
+                sys.stderr.write(f"Failed to initialize failure store: {e}\n")
+                self.failure_store = None
 
     def should_validate(self, event: Dict[str, Any]) -> Optional[str]:
         """
@@ -80,9 +95,10 @@ class AINLValidator:
     def format_validation_output(
         self,
         file_path: str,
-        validation: Dict[str, Any]
+        validation: Dict[str, Any],
+        source: str
     ) -> str:
-        """Format validation results as markdown."""
+        """Format validation results as markdown with failure learning."""
 
         if validation.get("valid"):
             return f"""
@@ -93,7 +109,7 @@ class AINLValidator:
 **Next steps:** {', '.join(validation.get('recommended_next_tools', []))}
 """
 
-        # Validation failed
+        # Validation failed - check for similar failures
         diagnostics = validation.get("diagnostics", [])
         primary = validation.get("primary_diagnostic")
 
@@ -107,6 +123,31 @@ class AINLValidator:
             if "line" in primary:
                 output += f"**Line:** {primary['line']}\n"
             output += "\n"
+
+        # Record failure and check for similar issues
+        if self.failure_store and primary:
+            try:
+                error_msg = primary.get('message', '')
+
+                # Record this failure
+                failure_id = self.failure_store.record_failure(
+                    error_type=primary.get('error_type', 'validation_error'),
+                    error_message=error_msg,
+                    ainl_source=source,
+                    context={'file': file_path}
+                )
+
+                # Search for similar failures with resolutions
+                similar = self.failure_store.find_similar_failures(error_msg, limit=3)
+                resolved = [f for f in similar if f.resolution]
+
+                if resolved:
+                    best_match = resolved[0]
+                    output += f"\n**💡 I've seen this error before ({best_match.prevented_count} times).**\n"
+                    output += f"**Previous fix:**\n```\n{best_match.resolution_diff}\n```\n\n"
+
+            except Exception as e:
+                sys.stderr.write(f"Failure learning error: {e}\n")
 
         repair_steps = validation.get("agent_repair_steps", [])
         if repair_steps:
@@ -135,12 +176,21 @@ def main():
         # Read event from stdin
         event = json.loads(sys.stdin.read())
 
-        validator = AINLValidator()
+        project_id = event.get("projectId")
+        validator = AINLValidator(project_id=project_id)
 
         # Check if we should validate
         file_path = validator.should_validate(event)
         if not file_path:
             return
+
+        # Read source for failure learning
+        source = ""
+        try:
+            with open(file_path, 'r') as f:
+                source = f.read()
+        except Exception:
+            pass
 
         # Validate
         validation = validator.validate_file(file_path)
@@ -148,7 +198,7 @@ def main():
             return
 
         # Format output
-        output_text = validator.format_validation_output(file_path, validation)
+        output_text = validator.format_validation_output(file_path, validation, source)
 
         # Output as context injection
         output = {

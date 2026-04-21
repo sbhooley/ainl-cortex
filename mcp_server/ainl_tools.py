@@ -41,10 +41,19 @@ except ImportError:
 class AINLTools:
     """AINL MCP tool implementations."""
 
-    def __init__(self):
+    def __init__(self, memory_db_path: Optional[Path] = None):
         if not _HAS_AINL:
             raise ImportError("ainativelang package not installed")
         self.compiler = AICodeCompiler()
+
+        # Initialize trajectory store
+        from .trajectory_capture import TrajectoryStore
+        if memory_db_path:
+            self.trajectory_store = TrajectoryStore(
+                memory_db_path.parent / "ainl_trajectories.db"
+            )
+        else:
+            self.trajectory_store = None
 
     def validate(
         self,
@@ -160,7 +169,9 @@ class AINLTools:
         frame: Optional[Dict[str, Any]] = None,
         adapters: Optional[Dict[str, Any]] = None,
         limits: Optional[Dict[str, Any]] = None,
-        label: Optional[str] = None
+        label: Optional[str] = None,
+        session_id: Optional[str] = None,
+        project_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Compile and execute AINL workflow.
@@ -181,7 +192,12 @@ class AINLTools:
                     "max_time_ms": 900000
                 }
             label: Specific label to execute (default: first label)
+            session_id: Session ID for trajectory tracking
+            project_id: Project ID for trajectory tracking
         """
+        import time
+        start_time = time.time()
+
         try:
             # Compile
             ctx = CompilerContext(strict=True)
@@ -231,21 +247,83 @@ class AINLTools:
             # Execute
             result = engine.run(ir, frame=frame or {}, label=label)
 
-            return {
+            # Calculate execution time
+            duration_ms = (time.time() - start_time) * 1000
+
+            response = {
                 "ok": True,
                 "result": result,
                 "stats": {
                     "steps_executed": getattr(engine, 'steps_executed', 0),
                     "adapter_calls": getattr(engine, 'adapter_calls', 0),
-                }
+                },
+                "duration_ms": duration_ms
             }
 
+            # Capture trajectory if store is available
+            if self.trajectory_store and session_id and project_id:
+                from .trajectory_capture import capture_trajectory_from_run
+
+                trajectory_result = {
+                    "success": True,
+                    "duration_ms": duration_ms,
+                    "steps": [],  # RuntimeEngine doesn't expose steps yet
+                }
+
+                trajectory = capture_trajectory_from_run(
+                    ainl_source=source,
+                    frame=frame or {},
+                    adapters=adapters or {},
+                    result=trajectory_result,
+                    session_id=session_id,
+                    project_id=project_id
+                )
+
+                try:
+                    self.trajectory_store.record_trajectory(trajectory)
+                    response["trajectory_id"] = trajectory.trajectory_id
+                except Exception as e:
+                    # Non-fatal: trajectory recording failed
+                    response["trajectory_error"] = str(e)
+
+            return response
+
         except AinlRuntimeError as e:
-            return {
+            duration_ms = (time.time() - start_time) * 1000
+
+            response = {
                 "ok": False,
                 "error": str(e),
-                "error_type": "runtime_error"
+                "error_type": "runtime_error",
+                "duration_ms": duration_ms
             }
+
+            # Capture failed trajectory
+            if self.trajectory_store and session_id and project_id:
+                from .trajectory_capture import capture_trajectory_from_run
+
+                trajectory_result = {
+                    "success": False,
+                    "error": str(e),
+                    "duration_ms": duration_ms,
+                    "steps": [],
+                }
+
+                try:
+                    trajectory = capture_trajectory_from_run(
+                        ainl_source=source,
+                        frame=frame or {},
+                        adapters=adapters or {},
+                        result=trajectory_result,
+                        session_id=session_id,
+                        project_id=project_id
+                    )
+                    self.trajectory_store.record_trajectory(trajectory)
+                except:
+                    pass  # Silent failure
+
+            return response
+
         except CompilationDiagnosticError as e:
             return {
                 "ok": False,

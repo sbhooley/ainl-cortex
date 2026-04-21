@@ -47,6 +47,8 @@ class AINLPatternStore:
                 uses INTEGER DEFAULT 0,
                 successes INTEGER DEFAULT 0,
                 failures INTEGER DEFAULT 0,
+                recurrence_count INTEGER DEFAULT 1,
+                last_seen TEXT,
                 tags TEXT,  -- JSON array
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -137,9 +139,10 @@ class AINLPatternStore:
             conn.execute("""
                 UPDATE ainl_patterns
                 SET uses = ?, successes = ?, failures = ?,
-                    fitness_score = ?, updated_at = ?, metadata = ?
+                    fitness_score = ?, recurrence_count = recurrence_count + 1,
+                    last_seen = ?, updated_at = ?, metadata = ?
                 WHERE id = ?
-            """, (uses, successes, failures, new_fitness, now,
+            """, (uses, successes, failures, new_fitness, now, now,
                   json.dumps(metadata or {}), pattern_id))
 
         else:
@@ -150,12 +153,13 @@ class AINLPatternStore:
                 INSERT INTO ainl_patterns (
                     id, pattern_type, ainl_source, description,
                     adapters_used, fitness_score, uses, successes, failures,
-                    tags, created_at, updated_at, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    recurrence_count, last_seen, tags, created_at, updated_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pattern_id, pattern_type, ainl_source, description,
                 json.dumps(adapters), fitness_score, 1,
                 1 if success else 0, 0 if success else 1,
+                1, now,  # recurrence_count, last_seen
                 json.dumps(tags), now, now, json.dumps(metadata or {})
             ))
 
@@ -300,6 +304,125 @@ class AINLPatternStore:
 
         return True
 
+    def track_recurrence(self, pattern_id: str, outcome: str = "success") -> bool:
+        """
+        Track pattern recurrence and update fitness score.
+
+        Args:
+            pattern_id: Pattern ID
+            outcome: Execution outcome ('success', 'failure', 'partial')
+
+        Returns:
+            True if pattern was updated, False if not found
+        """
+        conn = sqlite3.connect(self.db_path)
+
+        # Get current pattern
+        cursor = conn.execute("""
+            SELECT uses, successes, failures, fitness_score, recurrence_count
+            FROM ainl_patterns WHERE id = ?
+        """, (pattern_id,))
+
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return False
+
+        uses, successes, failures, fitness, recurrence = row
+
+        # Update counts
+        uses += 1
+        recurrence += 1
+        if outcome == 'success':
+            successes += 1
+        elif outcome == 'failure':
+            failures += 1
+
+        # Calculate new fitness (EMA-style)
+        success_rate = successes / uses if uses > 0 else 0.0
+        alpha = 0.3  # EMA smoothing factor
+        new_fitness = alpha * success_rate + (1 - alpha) * fitness
+
+        # Update DB
+        now = datetime.utcnow().isoformat()
+        conn.execute("""
+            UPDATE ainl_patterns
+            SET uses = ?, successes = ?, failures = ?,
+                fitness_score = ?, recurrence_count = ?, last_seen = ?, updated_at = ?
+            WHERE id = ?
+        """, (uses, successes, failures, new_fitness, recurrence, now, now, pattern_id))
+
+        conn.commit()
+        conn.close()
+
+        return True
+
+    def get_ranked_facts(
+        self,
+        project_id: Optional[str] = None,
+        min_confidence: float = 0.5,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Get patterns ranked by confidence × recurrence × recency.
+
+        This implements semantic fact ranking for high-signal pattern surfacing.
+
+        Args:
+            project_id: Filter by project (stored in metadata)
+            min_confidence: Minimum fitness score
+            limit: Maximum results
+
+        Returns:
+            List of ranked patterns with rank_score
+        """
+        import math
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        sql = """
+            SELECT * FROM ainl_patterns
+            WHERE fitness_score >= ?
+        """
+        params = [min_confidence]
+
+        if project_id:
+            # Filter by project_id in metadata (if stored)
+            sql += " AND json_extract(metadata, '$.project_id') = ?"
+            params.append(project_id)
+
+        sql += " ORDER BY fitness_score DESC, recurrence_count DESC"
+
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+
+        # Calculate rank scores
+        ranked = []
+        now = datetime.utcnow()
+
+        for row in rows:
+            last_seen = datetime.fromisoformat(row['last_seen']) if row['last_seen'] else now
+            days_old = (now - last_seen).days
+
+            # Recency weight (exponential decay, half-life 30 days)
+            recency_weight = math.exp(-days_old / 30.0)
+
+            # Recurrence weight (logarithmic)
+            recurrence_weight = 1 + math.log(1 + row['recurrence_count'])
+
+            # Combined rank score
+            rank_score = row['fitness_score'] * recurrence_weight * recency_weight
+
+            pattern_dict = self._row_to_dict(row)
+            pattern_dict['rank_score'] = rank_score
+            ranked.append(pattern_dict)
+
+        # Sort by rank and return top N
+        ranked.sort(key=lambda p: p['rank_score'], reverse=True)
+        return ranked[:limit]
+
     def _hash_source(self, source: str) -> str:
         """Generate pattern ID from source code."""
         # Normalize source (remove comments, whitespace)
@@ -347,11 +470,161 @@ class AINLPatternStore:
             'uses': row['uses'],
             'successes': row['successes'],
             'failures': row['failures'],
+            'recurrence_count': row.get('recurrence_count', 1),
+            'last_seen': row.get('last_seen'),
             'tags': json.loads(row['tags']),
             'created_at': row['created_at'],
             'updated_at': row['updated_at'],
             'metadata': json.loads(row['metadata']) if row['metadata'] else {}
         }
+
+    def consolidate_patterns(
+        self,
+        min_similarity: float = 0.9,
+        max_per_run: int = 50
+    ) -> Dict[str, int]:
+        """
+        Consolidate duplicate patterns to prevent bloat.
+
+        Finds patterns with similar source and same adapters,
+        keeps the highest fitness, merges stats.
+
+        Args:
+            min_similarity: Minimum Jaccard similarity for duplicate detection
+            max_per_run: Maximum patterns to consolidate per run
+
+        Returns:
+            Statistics: {'duplicates_found', 'patterns_merged', 'patterns_deleted'}
+        """
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Get all patterns grouped by adapters
+        rows = conn.execute("""
+            SELECT * FROM ainl_patterns
+            ORDER BY adapters_used, fitness_score DESC
+        """).fetchall()
+
+        groups = {}
+        for row in rows:
+            adapters_key = row['adapters_used']
+            if adapters_key not in groups:
+                groups[adapters_key] = []
+            groups[adapters_key].append(row)
+
+        duplicates_found = 0
+        patterns_merged = 0
+        patterns_deleted = 0
+
+        # Find duplicates within each adapter group
+        for adapters_key, patterns in groups.items():
+            if len(patterns) < 2:
+                continue
+
+            # Compare patterns pairwise
+            merged = set()
+
+            for i in range(len(patterns)):
+                if patterns[i]['id'] in merged:
+                    continue
+
+                best = patterns[i]
+                to_merge = []
+
+                for j in range(i + 1, len(patterns)):
+                    if patterns[j]['id'] in merged:
+                        continue
+
+                    # Calculate similarity
+                    similarity = self._calculate_similarity(
+                        best['ainl_source'],
+                        patterns[j]['ainl_source']
+                    )
+
+                    if similarity >= min_similarity:
+                        to_merge.append(patterns[j])
+
+                if to_merge:
+                    duplicates_found += len(to_merge)
+
+                    # Merge stats into best
+                    total_uses = best['uses']
+                    total_successes = best['successes']
+                    total_failures = best['failures']
+                    total_recurrence = best.get('recurrence_count', 1)
+
+                    for dup in to_merge:
+                        total_uses += dup['uses']
+                        total_successes += dup['successes']
+                        total_failures += dup['failures']
+                        total_recurrence += dup.get('recurrence_count', 1)
+
+                    # Recalculate fitness
+                    new_fitness = total_successes / total_uses if total_uses > 0 else best['fitness_score']
+
+                    # Update best pattern
+                    conn.execute("""
+                        UPDATE ainl_patterns
+                        SET uses = ?,
+                            successes = ?,
+                            failures = ?,
+                            fitness_score = ?,
+                            recurrence_count = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                    """, (
+                        total_uses,
+                        total_successes,
+                        total_failures,
+                        new_fitness,
+                        total_recurrence,
+                        datetime.utcnow().isoformat(),
+                        best['id']
+                    ))
+
+                    patterns_merged += 1
+
+                    # Delete duplicates
+                    for dup in to_merge:
+                        conn.execute("DELETE FROM ainl_patterns WHERE id = ?", (dup['id'],))
+                        merged.add(dup['id'])
+                        patterns_deleted += 1
+
+                    if patterns_merged >= max_per_run:
+                        break
+
+            if patterns_merged >= max_per_run:
+                break
+
+        conn.commit()
+        conn.close()
+
+        return {
+            'duplicates_found': duplicates_found,
+            'patterns_merged': patterns_merged,
+            'patterns_deleted': patterns_deleted
+        }
+
+    def _calculate_similarity(self, source1: str, source2: str) -> float:
+        """Calculate Jaccard similarity between two AINL sources."""
+        # Tokenize by lines (ignoring comments/whitespace)
+        def tokenize(source):
+            return set(
+                line.strip()
+                for line in source.split('\n')
+                if line.strip() and not line.strip().startswith('#')
+            )
+
+        tokens1 = tokenize(source1)
+        tokens2 = tokenize(source2)
+
+        if not tokens1 or not tokens2:
+            return 0.0
+
+        intersection = len(tokens1 & tokens2)
+        union = len(tokens1 | tokens2)
+
+        return intersection / union if union > 0 else 0.0
 
 
 def integrate_with_graph_memory(
