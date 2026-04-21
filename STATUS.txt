@@ -1,0 +1,39 @@
+AINL GRAPH MEMORY PLUGIN - ACTIVATION STATUS
+============================================
+
+Plugin Location: ~/.claude/plugins/ainl-graph-memory/
+
+✅ ACTIVE - Plugin is installed and will automatically load on Claude Code startup
+
+Persistence: Permanent
+- Plugin directory is in permanent location (~/.claude/plugins/)
+- Configuration stored in .mcp.json (not session-specific)
+- All hooks are executable and properly registered
+- Memory databases persist in ~/.claude/projects/[project-hash]/graph_memory/
+
+Hooks Registered:
+- UserPromptSubmit: Injects memory context before each response
+- PostToolUse: Captures tool usage in graph
+- PreCompact/PostCompact: Handles conversation compression
+- Stop: Flushes memory to disk on session end
+
+Features Active:
+- Graph Memory (episodes, semantic, procedural, persona, failure nodes)
+- AINL Compression (40-70% token savings)
+- Adaptive Eco Mode (content-aware compression)
+- Semantic Scoring (quality tracking)
+- Project Profiles (per-project learning)
+- Cache Awareness (5-min TTL coordination)
+
+Verification:
+- Run: ./verify_activation.sh
+- Check: find ~/.claude/projects -name "ainl_memory.db"
+- Test: python3 cli/memory_cli.py list --type episode
+
+Documentation:
+- ACTIVATION.md - Activation guide
+- README.md - Overview
+- docs/ADVANCED_COMPRESSION.md - Advanced features
+
+Last Activated: 2026-04-21
+Status: ✅ READY FOR USE
