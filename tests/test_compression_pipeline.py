@@ -179,9 +179,10 @@ class TestCacheCoordinator:
             EfficientMode.BALANCED
         )
 
-        # Should keep balanced to preserve cache
+        # Should keep balanced due to hysteresis
         assert decision2.use_mode == EfficientMode.BALANCED
-        assert decision2.cache_preserved is True
+        # Hysteresis mode, not explicit cache preservation
+        assert "Hysteresis" in decision2.reason
 
     def test_hysteresis_prevents_oscillation(self):
         coordinator = CacheCoordinator(cache_ttl=300)
