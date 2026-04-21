@@ -19,13 +19,13 @@ from shared.logger import log_event, log_error, get_logger
 logger = get_logger("user_prompt_submit")
 
 
-def format_memory_brief(context: dict, compress: bool = False, compression_mode: str = "balanced") -> tuple:
+def format_memory_brief(context: dict, project_id: str, compress: bool = False) -> tuple:
     """
     Format memory context into compact text brief.
 
     Max ~800 tokens to preserve Claude Code context budget.
 
-    Returns: (brief_text, compression_metrics)
+    Returns: (brief_text, compression_metrics, pipeline_stats)
     """
     lines = ["## Relevant Graph Memory", ""]
 
@@ -89,31 +89,49 @@ def format_memory_brief(context: dict, compress: bool = False, compression_mode:
     brief = "\n".join(lines)
 
     compression_metrics = None
+    pipeline_stats = None
 
-    # Apply AINL compression if enabled
+    # Apply unified compression pipeline if enabled
     if compress:
         try:
             # Import here to avoid circular dependency
             sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
-            from compression import compress_text
+            from compression_pipeline import get_compression_pipeline
 
-            compressed, metrics = compress_text(brief, mode=compression_mode, emit_metrics=True)
+            pipeline = get_compression_pipeline()
+            result = pipeline.compress_memory_context(brief, project_id)
 
-            if metrics and metrics.tokens_saved > 0:
-                brief = compressed
+            brief = result.compressed_text
+
+            if result.compression_metrics:
                 compression_metrics = {
-                    "mode": compression_mode,
-                    "original_tokens": metrics.original_tokens,
-                    "compressed_tokens": metrics.compressed_tokens,
-                    "tokens_saved": metrics.tokens_saved,
-                    "savings_pct": metrics.savings_ratio_pct
+                    "mode": result.mode_used.value,
+                    "mode_source": result.mode_source,
+                    "original_tokens": result.compression_metrics.original_tokens,
+                    "compressed_tokens": result.compression_metrics.compressed_tokens,
+                    "tokens_saved": result.compression_metrics.tokens_saved,
+                    "savings_pct": result.compression_metrics.savings_ratio_pct
                 }
+
+                # Add quality score if available
+                if result.preservation_score:
+                    compression_metrics["quality_score"] = result.preservation_score.overall_score
+                    compression_metrics["key_term_retention"] = result.preservation_score.key_term_retention
+
                 logger.info(
-                    f"Compressed memory context: {metrics.original_tokens} → "
-                    f"{metrics.compressed_tokens} tokens ({metrics.savings_ratio_pct:.1f}% savings)"
+                    f"Compressed memory context: {result.compression_metrics.original_tokens} → "
+                    f"{result.compression_metrics.compressed_tokens} tokens "
+                    f"({result.compression_metrics.savings_ratio_pct:.1f}% savings, "
+                    f"mode: {result.mode_used.value}, source: {result.mode_source})"
                 )
+
+                # Log quality warnings if any
+                if result.warnings:
+                    for warning in result.warnings:
+                        logger.warning(warning)
+
         except Exception as e:
-            logger.warning(f"Compression failed, using original: {e}")
+            logger.warning(f"Compression pipeline failed, using original: {e}")
 
     # Fallback truncation if still over budget
     max_chars = 800 * 4
@@ -121,7 +139,7 @@ def format_memory_brief(context: dict, compress: bool = False, compression_mode:
         brief = brief[:max_chars] + "\n\n[... truncated for context budget]"
         logger.warning(f"Memory brief truncated to {max_chars} chars")
 
-    return brief, compression_metrics
+    return brief, compression_metrics, pipeline_stats
 
 
 def recall_context(project_id: str, prompt: str) -> dict:
@@ -160,16 +178,17 @@ def main():
         # Recall context from graph memory
         context = recall_context(project_id, prompt)
 
-        # Check if compression should be used
-        # TODO: Load from config file when MCP integration is complete
-        use_compression = True  # Default to enabled
-        compression_mode = "balanced"  # Default mode
+        # Check if compression should be used (load from config)
+        sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+        from config import get_config
+        config = get_config()
+        use_compression = config.is_compression_memory_enabled()
 
-        # Format compact brief (with optional compression)
-        brief, compression_metrics = format_memory_brief(
+        # Format compact brief (with unified compression pipeline)
+        brief, compression_metrics, pipeline_stats = format_memory_brief(
             context,
-            compress=use_compression,
-            compression_mode=compression_mode
+            project_id,
+            compress=use_compression
         )
 
         # Prepare result

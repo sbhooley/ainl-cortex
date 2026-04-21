@@ -37,7 +37,46 @@ class PluginConfig:
                 "mode": "balanced",  # off, balanced, aggressive
                 "compress_memory_context": True,
                 "compress_user_prompt": False,  # Optional: compress user input
-                "min_tokens_for_compression": 80
+                "compress_output": False,  # Compress Claude's responses
+                "min_tokens_for_compression": 80,
+
+                # Adaptive eco mode
+                "adaptive_eco": {
+                    "enabled": True,
+                    "min_confidence": 0.7,  # Min confidence to override manual mode
+                    "hysteresis_count": 2  # Consistent recommendations before switching
+                },
+
+                # Semantic preservation scoring
+                "semantic_scoring": {
+                    "enabled": True,
+                    "min_overall_score": 0.70,  # Fallback if score too low
+                    "min_key_term_retention": 0.80,  # Min key term preservation
+                    "track_quality": True
+                },
+
+                # Per-project profiles
+                "project_profiles": {
+                    "enabled": True,
+                    "auto_detect_mode": True,  # Auto-detect best mode per project
+                    "min_compressions_for_detection": 5
+                },
+
+                # Cache awareness
+                "cache_awareness": {
+                    "enabled": True,
+                    "cache_ttl": 300,  # 5 minutes (Anthropic/OpenAI default)
+                    "hysteresis_duration": 120,  # 2 minutes before mode switch
+                    "preserve_warm_cache": True
+                },
+
+                # Output compression
+                "output": {
+                    "enabled": False,
+                    "mode": "balanced",
+                    "min_length_tokens": 200,
+                    "show_badge": False  # Show compression savings badge
+                }
             },
             "memory": {
                 "max_context_tokens": 800,
@@ -47,7 +86,9 @@ class PluginConfig:
             },
             "telemetry": {
                 "track_compression_savings": True,
-                "log_compression_details": False
+                "log_compression_details": False,
+                "track_quality_scores": True,
+                "track_adaptive_decisions": True
             }
         }
 
@@ -85,6 +126,74 @@ class PluginConfig:
             self.is_compression_enabled() and
             self.config.get("compression", {}).get("compress_memory_context", True)
         )
+
+    # Adaptive eco mode
+    def is_adaptive_eco_enabled(self) -> bool:
+        """Check if adaptive eco mode is enabled"""
+        return self.config.get("compression", {}).get("adaptive_eco", {}).get("enabled", True)
+
+    def get_adaptive_eco_config(self) -> dict:
+        """Get adaptive eco configuration"""
+        return self.config.get("compression", {}).get("adaptive_eco", {
+            "enabled": True,
+            "min_confidence": 0.7,
+            "hysteresis_count": 2
+        })
+
+    # Semantic scoring
+    def is_semantic_scoring_enabled(self) -> bool:
+        """Check if semantic scoring is enabled"""
+        return self.config.get("compression", {}).get("semantic_scoring", {}).get("enabled", True)
+
+    def get_semantic_scoring_config(self) -> dict:
+        """Get semantic scoring configuration"""
+        return self.config.get("compression", {}).get("semantic_scoring", {
+            "enabled": True,
+            "min_overall_score": 0.70,
+            "min_key_term_retention": 0.80,
+            "track_quality": True
+        })
+
+    # Project profiles
+    def is_project_profiles_enabled(self) -> bool:
+        """Check if per-project profiles are enabled"""
+        return self.config.get("compression", {}).get("project_profiles", {}).get("enabled", True)
+
+    def get_project_profiles_config(self) -> dict:
+        """Get project profiles configuration"""
+        return self.config.get("compression", {}).get("project_profiles", {
+            "enabled": True,
+            "auto_detect_mode": True,
+            "min_compressions_for_detection": 5
+        })
+
+    # Cache awareness
+    def is_cache_awareness_enabled(self) -> bool:
+        """Check if cache awareness is enabled"""
+        return self.config.get("compression", {}).get("cache_awareness", {}).get("enabled", True)
+
+    def get_cache_awareness_config(self) -> dict:
+        """Get cache awareness configuration"""
+        return self.config.get("compression", {}).get("cache_awareness", {
+            "enabled": True,
+            "cache_ttl": 300,
+            "hysteresis_duration": 120,
+            "preserve_warm_cache": True
+        })
+
+    # Output compression
+    def is_output_compression_enabled(self) -> bool:
+        """Check if output compression is enabled"""
+        return self.config.get("compression", {}).get("output", {}).get("enabled", False)
+
+    def get_output_compression_config(self) -> dict:
+        """Get output compression configuration"""
+        return self.config.get("compression", {}).get("output", {
+            "enabled": False,
+            "mode": "balanced",
+            "min_length_tokens": 200,
+            "show_badge": False
+        })
 
 
 # Global config singleton

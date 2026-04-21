@@ -20,6 +20,7 @@ AINL Graph Memory is a **Claude Code plugin** that demonstrates the power of the
 ✅ **Pattern Extraction** - Automatically promote successful workflows to reusable patterns  
 ✅ **Context-Aware Retrieval** - Inject only relevant memories (ranked by project, recency, fitness)  
 ✅ **AINL Compression & Eco Mode** - 40-70% token savings on memory context (Balanced/Aggressive modes)  
+✅ **Advanced Compression Pipeline** - Adaptive eco, semantic scoring, project profiles, cache awareness  
 ✅ **Project Isolation** - Memories never leak between different codebases  
 ✅ **Graceful Degradation** - Hooks never break Claude Code, even on errors  
 ✅ **Inspectable** - CLI tools for debugging and exploration
@@ -89,6 +90,34 @@ python3 cli/compression_cli.py benchmark
 - Aggressive mode: 55-70% token reduction
 
 See [docs/COMPRESSION_ECO_MODE.md](docs/COMPRESSION_ECO_MODE.md) for details.
+
+### Advanced Compression Features (v0.2+)
+
+```bash
+# Test unified compression pipeline
+echo "Your text" | python3 cli/compression_advanced_cli.py test -p myproject
+
+# Show adaptive mode statistics
+python3 cli/compression_advanced_cli.py adaptive
+
+# Show quality preservation scores
+python3 cli/compression_advanced_cli.py quality
+
+# Auto-detect best mode for project
+python3 cli/compression_advanced_cli.py auto-detect -p myproject --apply
+
+# Show all advanced features config
+python3 cli/compression_advanced_cli.py config
+```
+
+**Advanced features:**
+- **Adaptive Eco Mode** - Auto-select compression based on content
+- **Semantic Scoring** - Track quality without embeddings
+- **Project Profiles** - Learn optimal mode per codebase
+- **Cache Awareness** - Coordinate with prompt cache (5min TTL)
+- **Output Compression** - Optionally compress responses
+
+See [docs/ADVANCED_COMPRESSION.md](docs/ADVANCED_COMPRESSION.md) for full documentation.
 
 ### Memory Location
 
