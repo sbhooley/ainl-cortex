@@ -144,22 +144,59 @@ def format_memory_brief(context: dict, project_id: str, compress: bool = False) 
 
 def recall_context(project_id: str, prompt: str) -> dict:
     """
-    Call MCP server to recall context.
+    Recall context from graph memory database.
 
-    In production, this would use MCP client library.
-    For now, we return empty context gracefully.
+    Directly accesses the SQLite database to retrieve relevant memory nodes.
     """
-    # TODO: Implement MCP client call when MCP SDK is integrated
-    # For now, return empty context to avoid breaking
-    logger.debug(f"Would recall context for project {project_id}, prompt: {prompt[:50]}...")
+    try:
+        # Import graph store components
+        sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+        from graph_store import SQLiteGraphStore
+        from retrieval import MemoryRetrieval, RetrievalContext
 
-    return {
-        'recent_episodes': [],
-        'relevant_facts': [],
-        'applicable_patterns': [],
-        'known_failures': [],
-        'persona_traits': []
-    }
+        # Get database path
+        memory_dir = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+        db_path = memory_dir / "ainl_memory.db"
+
+        # Check if database exists
+        if not db_path.exists():
+            logger.debug(f"No memory database found at {db_path}")
+            return {
+                'recent_episodes': [],
+                'relevant_facts': [],
+                'applicable_patterns': [],
+                'known_failures': [],
+                'persona_traits': []
+            }
+
+        # Initialize store and retrieval
+        store = SQLiteGraphStore(db_path)
+        retrieval = MemoryRetrieval(store)
+
+        # Create retrieval context
+        context = RetrievalContext(
+            project_id=project_id,
+            current_task=prompt[:200] if prompt else None,
+            files_mentioned=[]
+        )
+
+        # Retrieve memory context
+        memory_context = retrieval.compile_memory_context(context, max_nodes=20)
+
+        logger.info(f"Recalled memory context: {sum(len(v) for v in memory_context.values() if isinstance(v, list))} nodes")
+
+        return memory_context
+
+    except Exception as e:
+        logger.warning(f"Failed to recall context: {e}")
+        # Return empty context on error to avoid breaking
+        return {
+            'recent_episodes': [],
+            'relevant_facts': [],
+            'applicable_patterns': [],
+            'known_failures': [],
+            'persona_traits': []
+        }
 
 
 def main():
@@ -182,7 +219,7 @@ def main():
         sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
         from config import get_config
         config = get_config()
-        use_compression = config.is_compression_memory_enabled()
+        use_compression = config.should_compress_memory_context()
 
         # Format compact brief (with unified compression pipeline)
         brief, compression_metrics, pipeline_stats = format_memory_brief(
