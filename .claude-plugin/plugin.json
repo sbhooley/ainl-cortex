@@ -1,14 +1,21 @@
 {
   "name": "ainl-graph-memory",
   "displayName": "AINL Graph Memory",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Production-grade graph-native memory system inspired by AINL unified graph execution engine. Execution becomes memory through typed graph nodes.",
-  "author": "Claude Code Community",
+  "author": { "name": "Claude Code Community" },
   "repository": "https://github.com/claude-code/ainl-graph-memory",
   "keywords": ["memory", "graph", "ainl", "persistence", "agent", "coding-assistant"],
   "license": "MIT OR Apache-2.0",
   "compatibility": {
     "minClaudeCodeVersion": "0.1.0"
   },
-  "readme": "README.md"
+  "readme": "README.md",
+  "mcpServers": {
+    "ainl-graph-memory": {
+      "command": "bash",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp_launch.sh"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}"
+    }
+  }
 }

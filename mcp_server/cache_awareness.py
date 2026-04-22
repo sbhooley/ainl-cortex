@@ -13,7 +13,10 @@ from dataclasses import dataclass
 from datetime import datetime
 import logging
 
-from .compression import EfficientMode
+try:
+    from .compression import EfficientMode
+except ImportError:
+    from compression import EfficientMode
 
 logger = logging.getLogger(__name__)
 

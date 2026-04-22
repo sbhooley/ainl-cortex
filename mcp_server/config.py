@@ -4,12 +4,17 @@ Configuration Management
 Handles plugin configuration including eco mode settings.
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 import json
 import logging
 
-from .compression import EfficientMode
+try:
+    from .compression import EfficientMode
+except ImportError:
+    # Fallback for when module is imported without package context
+    from compression import EfficientMode
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +22,24 @@ logger = logging.getLogger(__name__)
 class PluginConfig:
     """Plugin configuration singleton"""
 
+    @staticmethod
+    def _compression_block(cfg: dict) -> dict:
+        c = cfg.get("compression")
+        return c if isinstance(c, dict) else {}
+
+    def _compression(self) -> dict:
+        return self._compression_block(self.config)
+
+    def _compression_nested(self, key: str) -> dict:
+        v = self._compression().get(key)
+        return v if isinstance(v, dict) else {}
+
     def __init__(self):
-        self.config_path = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "config.json"
+        root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+        if root:
+            self.config_path = Path(root) / "config.json"
+        else:
+            self.config_path = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "config.json"
         self.config = self._load_config()
 
     def _load_config(self) -> dict:
@@ -34,7 +55,7 @@ class PluginConfig:
         return {
             "compression": {
                 "enabled": True,
-                "mode": "balanced",  # off, balanced, aggressive
+                "mode": "aggressive",  # off, balanced, aggressive
                 "compress_memory_context": True,
                 "compress_user_prompt": False,  # Optional: compress user input
                 "compress_output": False,  # Compress Claude's responses
@@ -103,13 +124,17 @@ class PluginConfig:
             logger.error(f"Failed to save config: {e}")
 
     def get_compression_mode(self) -> EfficientMode:
-        """Get current compression mode"""
-        mode_str = self.config.get("compression", {}).get("mode", "balanced")
+        """Get current compression mode (default: aggressive)"""
+        mode_str = self._compression().get("mode", "aggressive")
+        if not isinstance(mode_str, str):
+            mode_str = "aggressive"
         return EfficientMode.parse_config(mode_str)
 
     def set_compression_mode(self, mode: str) -> None:
         """Set compression mode"""
-        if "compression" not in self.config:
+        if "compression" not in self.config or not isinstance(
+            self.config.get("compression"), dict
+        ):
             self.config["compression"] = {}
 
         self.config["compression"]["mode"] = mode
@@ -118,82 +143,108 @@ class PluginConfig:
 
     def is_compression_enabled(self) -> bool:
         """Check if compression is enabled"""
-        return self.config.get("compression", {}).get("enabled", True)
+        return self._compression().get("enabled", True)
 
     def should_compress_memory_context(self) -> bool:
         """Check if memory context should be compressed"""
         return (
             self.is_compression_enabled() and
-            self.config.get("compression", {}).get("compress_memory_context", True)
+            self._compression().get("compress_memory_context", True)
         )
+
+    def should_compress_user_prompt(self) -> bool:
+        """Check if user prompts should be compressed"""
+        return (
+            self.is_compression_enabled() and
+            self._compression().get("compress_user_prompt", False)
+        )
+
+    def get_min_tokens_for_compression(self) -> int:
+        """Get minimum token threshold for compression"""
+        return self._compression().get("min_tokens_for_compression", 80)
 
     # Adaptive eco mode
     def is_adaptive_eco_enabled(self) -> bool:
         """Check if adaptive eco mode is enabled"""
-        return self.config.get("compression", {}).get("adaptive_eco", {}).get("enabled", True)
+        return self._compression_nested("adaptive_eco").get("enabled", True)
 
     def get_adaptive_eco_config(self) -> dict:
         """Get adaptive eco configuration"""
-        return self.config.get("compression", {}).get("adaptive_eco", {
+        b = self._compression_nested("adaptive_eco")
+        if b:
+            return b
+        return {
             "enabled": True,
             "min_confidence": 0.7,
             "hysteresis_count": 2
-        })
+        }
 
     # Semantic scoring
     def is_semantic_scoring_enabled(self) -> bool:
         """Check if semantic scoring is enabled"""
-        return self.config.get("compression", {}).get("semantic_scoring", {}).get("enabled", True)
+        return self._compression_nested("semantic_scoring").get("enabled", True)
 
     def get_semantic_scoring_config(self) -> dict:
         """Get semantic scoring configuration"""
-        return self.config.get("compression", {}).get("semantic_scoring", {
+        b = self._compression_nested("semantic_scoring")
+        if b:
+            return b
+        return {
             "enabled": True,
             "min_overall_score": 0.70,
             "min_key_term_retention": 0.80,
             "track_quality": True
-        })
+        }
 
     # Project profiles
     def is_project_profiles_enabled(self) -> bool:
         """Check if per-project profiles are enabled"""
-        return self.config.get("compression", {}).get("project_profiles", {}).get("enabled", True)
+        return self._compression_nested("project_profiles").get("enabled", True)
 
     def get_project_profiles_config(self) -> dict:
         """Get project profiles configuration"""
-        return self.config.get("compression", {}).get("project_profiles", {
+        b = self._compression_nested("project_profiles")
+        if b:
+            return b
+        return {
             "enabled": True,
             "auto_detect_mode": True,
             "min_compressions_for_detection": 5
-        })
+        }
 
     # Cache awareness
     def is_cache_awareness_enabled(self) -> bool:
         """Check if cache awareness is enabled"""
-        return self.config.get("compression", {}).get("cache_awareness", {}).get("enabled", True)
+        return self._compression_nested("cache_awareness").get("enabled", True)
 
     def get_cache_awareness_config(self) -> dict:
         """Get cache awareness configuration"""
-        return self.config.get("compression", {}).get("cache_awareness", {
+        b = self._compression_nested("cache_awareness")
+        if b:
+            return b
+        return {
             "enabled": True,
             "cache_ttl": 300,
             "hysteresis_duration": 120,
             "preserve_warm_cache": True
-        })
+        }
 
     # Output compression
     def is_output_compression_enabled(self) -> bool:
         """Check if output compression is enabled"""
-        return self.config.get("compression", {}).get("output", {}).get("enabled", False)
+        return self._compression_nested("output").get("enabled", False)
 
     def get_output_compression_config(self) -> dict:
         """Get output compression configuration"""
-        return self.config.get("compression", {}).get("output", {
+        b = self._compression_nested("output")
+        if b:
+            return b
+        return {
             "enabled": False,
             "mode": "balanced",
             "min_length_tokens": 200,
             "show_badge": False
-        })
+        }
 
 
 # Global config singleton

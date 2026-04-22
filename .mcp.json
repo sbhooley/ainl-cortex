@@ -1,6 +1,7 @@
 {
   "ainl-graph-memory": {
-    "command": "python3",
-    "args": ["${CLAUDE_PLUGIN_ROOT}/mcp_server/server.py"]
+    "command": "bash",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/mcp_launch.sh"],
+    "cwd": "${CLAUDE_PLUGIN_ROOT}"
   }
 }

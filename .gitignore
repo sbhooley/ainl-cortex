@@ -21,9 +21,13 @@ wheels/
 *.egg
 
 # Virtual environments
+.venv/
 venv/
 env/
 ENV/
+
+# Per-machine Claude Code / plugin runtime
+profiles/
 
 # IDE
 .vscode/
@@ -60,3 +64,7 @@ Thumbs.db
 *.tmp
 tmp/
 temp/
+
+# Editor / merge backups
+*_old.py
+*~

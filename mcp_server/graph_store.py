@@ -12,7 +12,10 @@ import sqlite3
 import json
 import logging
 
-from .node_types import GraphNode, GraphEdge, NodeType, EdgeType
+try:
+    from .node_types import GraphNode, GraphEdge, NodeType, EdgeType
+except ImportError:
+    from node_types import GraphNode, GraphEdge, NodeType, EdgeType
 
 logger = logging.getLogger(__name__)
 

@@ -1,0 +1,30 @@
+{
+  "compression": {
+    "enabled": true,
+    "mode": "aggressive",
+    "compress_memory_context": true,
+    "compress_user_prompt": true,
+    "compress_output": false,
+    "min_tokens_for_compression": 80,
+    "adaptive_eco": {
+      "enabled": true,
+      "min_confidence": 0.7,
+      "hysteresis_count": 2
+    },
+    "semantic_scoring": {
+      "enabled": true,
+      "min_overall_score": 0.70,
+      "min_key_term_retention": 0.80,
+      "track_quality": true
+    },
+    "project_profiles": {
+      "enabled": true,
+      "auto_detect_mode": true,
+      "min_compressions_for_detection": 5
+    },
+    "cache_awareness": {
+      "enabled": true,
+      "prefer_cache_hits": true
+    }
+  }
+}

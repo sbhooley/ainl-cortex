@@ -13,13 +13,22 @@ from typing import Tuple, Optional
 from dataclasses import dataclass
 import logging
 
-from .compression import EfficientMode, CompressionMetrics, compress_text
-from .adaptive_eco import AdaptivePolicy
-from .semantic_scoring import SemanticScorer, PreservationScore
-from .project_profiles import get_profile_manager, ProjectProfileManager
-from .cache_awareness import get_cache_coordinator, CacheCoordinator, CacheDecision
-from .output_compression import OutputCompressor, OutputCompressionConfig
-from .config import get_config
+try:
+    from .compression import EfficientMode, CompressionMetrics, compress_text
+    from .adaptive_eco import AdaptivePolicy
+    from .semantic_scoring import SemanticScorer, PreservationScore
+    from .project_profiles import get_profile_manager, ProjectProfileManager
+    from .cache_awareness import get_cache_coordinator, CacheCoordinator, CacheDecision
+    from .output_compression import OutputCompressor, OutputCompressionConfig
+    from .config import get_config
+except ImportError:
+    from compression import EfficientMode, CompressionMetrics, compress_text
+    from adaptive_eco import AdaptivePolicy
+    from semantic_scoring import SemanticScorer, PreservationScore
+    from project_profiles import get_profile_manager, ProjectProfileManager
+    from cache_awareness import get_cache_coordinator, CacheCoordinator, CacheDecision
+    from output_compression import OutputCompressor, OutputCompressionConfig
+    from config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +221,24 @@ class CompressionPipeline:
             cache_decision=cache_decision,
             warnings=warnings
         )
+
+    def compress_user_prompt(self,
+                            text: str,
+                            project_id: str) -> PipelineResult:
+        """
+        Compress user prompt with full pipeline.
+        Uses the same pipeline as memory context but with prompt-specific settings.
+
+        Args:
+            text: User prompt to compress
+            project_id: Project identifier for profiling
+
+        Returns:
+            PipelineResult with compressed text and metadata
+        """
+        # Reuse the same compression pipeline as memory context
+        # This ensures consistent compression behavior
+        return self.compress_memory_context(text, project_id)
 
     def compress_output(self, text: str) -> Tuple[str, Optional[CompressionMetrics]]:
         """

@@ -10,8 +10,14 @@ from dataclasses import dataclass
 import time
 import logging
 
-from .node_types import GraphNode, NodeType
-from .graph_store import GraphStore
+try:
+    from .node_types import GraphNode, NodeType
+except ImportError:
+    from node_types import GraphNode, NodeType
+try:
+    from .graph_store import GraphStore
+except ImportError:
+    from graph_store import GraphStore
 
 logger = logging.getLogger(__name__)
 
