@@ -124,7 +124,7 @@ def flush_episode_if_due(project_id: str, capture_count: int, plugin_root: Path)
             return
 
         sys.path.insert(0, str(plugin_root / "mcp_server"))
-        from stop import drain_session_inbox, write_episode, write_failures, write_persona, write_patterns
+        from stop import drain_session_inbox, write_episode, write_failures, write_persona, write_patterns, write_semantics
 
         session_data = drain_session_inbox(project_id)
         if session_data["tool_captures"]:
@@ -132,7 +132,8 @@ def flush_episode_if_due(project_id: str, capture_count: int, plugin_root: Path)
             write_failures(store, project_id, session_data)
             write_persona(store, project_id, episode_data)
             write_patterns(store, project_id)
-            logger.info(f"Mid-session flush: all nodes written at {capture_count} captures")
+            write_semantics(store, project_id)
+            logger.info(f"Mid-session flush: all node types written at {capture_count} captures")
 
     except Exception as e:
         logger.warning(f"Mid-session flush failed (non-fatal): {e}")

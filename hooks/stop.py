@@ -176,6 +176,145 @@ def write_persona(store, project_id: str, episode_data: dict) -> int:
     return count
 
 
+def write_semantics(store, project_id: str) -> int:
+    """
+    Mine semantic facts from accumulated episode and failure history.
+
+    Patterns detected across multiple sessions:
+      - Files touched in 3+ episodes          → "frequently modified core file"
+      - Tools used in 50%+ episodes           → "consistently used tool"
+      - Error type in 3+ failures             → "recurring failure pattern"
+      - Tool in 3+ failures                   → "error-prone tool"
+      - File in 2+ failures                   → "failure-associated file"
+      - Sessions majority partial/error       → "project has persistent complexity"
+
+    Skips facts that are already represented in existing semantic nodes
+    (prefix-based fingerprint dedup — prevents re-writing the same fact
+    every session).
+    """
+    from collections import Counter
+    from node_types import create_semantic_node, NodeType
+
+    MIN_EP = 3    # minimum episode occurrences for a file/tool fact
+    MIN_FAIL = 2  # minimum failure occurrences for a failure fact
+
+    # ── Fetch history ─────────────────────────────────────────────────────────
+    try:
+        episode_nodes = store.query_by_type(NodeType.EPISODE, project_id, limit=100)
+        failure_nodes = store.query_by_type(NodeType.FAILURE, project_id, limit=100)
+        semantic_nodes = store.query_by_type(NodeType.SEMANTIC, project_id, limit=500)
+    except Exception:
+        return 0
+
+    n_ep = len(episode_nodes)
+    if n_ep < MIN_EP:
+        return 0  # Not enough history yet
+
+    # ── Build frequency tables ────────────────────────────────────────────────
+    file_counts: Counter = Counter()
+    tool_counts: Counter = Counter()
+    partial_count = 0
+
+    for ep in episode_nodes:
+        d = ep.data if isinstance(ep.data, dict) else {}
+        for f in d.get("files_touched", []):
+            file_counts[Path(f).name] += 1
+        for t in d.get("tool_calls", []):
+            tool_counts[t] += 1
+        if d.get("outcome") in ("partial", "failure"):
+            partial_count += 1
+
+    fail_type_counts: Counter = Counter()
+    fail_tool_counts: Counter = Counter()
+    fail_file_counts: Counter = Counter()
+
+    for fail in failure_nodes:
+        d = fail.data if isinstance(fail.data, dict) else {}
+        if d.get("error_type"):
+            fail_type_counts[d["error_type"]] += 1
+        if d.get("tool"):
+            fail_tool_counts[d["tool"]] += 1
+        # file is an optional field in FailureData
+        if d.get("file"):
+            fail_file_counts[Path(d["file"]).name] += 1
+
+    # ── Build candidate facts ─────────────────────────────────────────────────
+    candidates: list = []  # list of (fact_str, confidence)
+
+    for fname, count in file_counts.most_common(15):
+        if count >= MIN_EP:
+            conf = min(count / n_ep, 1.0)
+            candidates.append((
+                f"File '{fname}' is a frequently modified core file (seen in {count}/{n_ep} sessions)",
+                conf,
+            ))
+
+    for tool, count in tool_counts.most_common(10):
+        ratio = count / n_ep
+        if ratio >= 0.5 and count >= MIN_EP:
+            candidates.append((
+                f"Tool '{tool}' is consistently used across this project ({count} uses in {n_ep} sessions)",
+                min(ratio, 1.0),
+            ))
+
+    for err_type, count in fail_type_counts.most_common(10):
+        if count >= MIN_FAIL and err_type:
+            conf = min(count / max(n_ep, 1), 1.0)
+            candidates.append((
+                f"Recurring failure pattern: '{err_type}' has occurred {count} time(s)",
+                conf,
+            ))
+
+    for tool, count in fail_tool_counts.most_common(10):
+        if count >= MIN_FAIL and tool:
+            conf = min(count / max(n_ep, 1), 1.0)
+            candidates.append((
+                f"Tool '{tool}' is error-prone in this project ({count} failure(s) recorded)",
+                conf,
+            ))
+
+    for fname, count in fail_file_counts.most_common(10):
+        if count >= MIN_FAIL:
+            conf = min(count / max(n_ep, 1), 1.0)
+            candidates.append((
+                f"File '{fname}' is associated with repeated failures ({count} time(s))",
+                conf,
+            ))
+
+    if partial_count / n_ep >= 0.6:
+        candidates.append((
+            f"This project consistently produces complex multi-step outcomes "
+            f"({partial_count}/{n_ep} sessions ended partial/error)",
+            partial_count / n_ep,
+        ))
+
+    # ── Dedup against existing semantic nodes ─────────────────────────────────
+    # Use first 50 chars of existing facts as fingerprints
+    existing_fingerprints = {
+        n.data.get("fact", "")[:50]
+        for n in semantic_nodes
+        if isinstance(n.data, dict)
+    }
+
+    count = 0
+    for fact, confidence in candidates:
+        fingerprint = fact[:50]
+        if any(fingerprint[:30] in fp for fp in existing_fingerprints):
+            continue  # Already have a similar fact
+        node = create_semantic_node(
+            project_id=project_id,
+            fact=fact,
+            confidence=round(confidence, 3),
+        )
+        store.write_node(node)
+        existing_fingerprints.add(fingerprint)
+        count += 1
+
+    if count:
+        logger.info(f"Wrote {count} semantic fact(s) from cross-session pattern mining")
+    return count
+
+
 def write_patterns(store, project_id: str) -> int:
     """
     Scan recent successful episodes for repeated tool sequences.
@@ -257,6 +396,11 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             write_patterns(store, project_id)
         except Exception as e:
             logger.warning(f"Pattern write failed: {e}")
+
+        try:
+            write_semantics(store, project_id)
+        except Exception as e:
+            logger.warning(f"Semantic write failed: {e}")
 
     # Write self-note if session was substantial (helps resume next session)
     try:
