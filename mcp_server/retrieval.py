@@ -5,8 +5,9 @@ Context-aware retrieval with AINL-inspired ranking algorithm.
 Follows ainl-runtime memory context compilation pattern.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+from pathlib import Path
 import time
 import logging
 
@@ -18,6 +19,10 @@ try:
     from .graph_store import GraphStore
 except ImportError:
     from graph_store import GraphStore
+try:
+    from .similarity import get_or_build_index
+except ImportError:
+    from similarity import get_or_build_index
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +61,51 @@ class MemoryRetrieval:
     SUCCESS_SCORE = 3.0
     PATTERN_FITNESS_MULTIPLIER = 0.5
     OVERLAP_SCORE = 2.0
+    SIMILARITY_WEIGHT = 6.0   # Max bonus for TF-IDF cosine similarity
 
-    def __init__(self, store: GraphStore):
+    def __init__(self, store: GraphStore, cache_dir: Optional[Path] = None, tfidf_ttl: int = 300):
         self.store = store
+        self._cache_dir = cache_dir
+        self._tfidf_ttl = tfidf_ttl
+        self._sim_scores: Dict[str, float] = {}  # node_id → score for current query
+
+    def compute_similarity_scores(
+        self,
+        nodes: List[GraphNode],
+        query_text: str,
+        project_id: str
+    ) -> None:
+        """
+        Pre-compute TF-IDF similarity scores for all nodes against query_text.
+        Results stored in self._sim_scores so rank_nodes() can use them without
+        rebuilding the index on each call.
+        """
+        self._sim_scores = {}
+        if not query_text or not nodes:
+            return
+
+        # Build corpus from all nodes that have embedding text
+        corpus = [
+            (n.id, n.embedding_text)
+            for n in nodes
+            if n.embedding_text
+        ]
+        if not corpus:
+            return
+
+        try:
+            cache_dir = self._cache_dir or Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+            idx = get_or_build_index(corpus, project_id, cache_dir, self._tfidf_ttl)
+            for node_id, score in idx.query(query_text, top_k=len(corpus)):
+                self._sim_scores[node_id] = score
+        except Exception as e:
+            logger.debug(f"Similarity scoring failed (non-fatal): {e}")
 
     def rank_nodes(
         self,
         nodes: List[GraphNode],
         context: RetrievalContext
-    ) -> List[tuple[GraphNode, float]]:
+    ) -> List[Tuple[GraphNode, float]]:
         """
         Rank nodes by relevance to context.
 
@@ -120,6 +161,10 @@ class MemoryRetrieval:
                 strength = node.data.get('strength', 0.0)
                 score += strength * 1.5
 
+            # Semantic similarity bonus (TF-IDF cosine against current task)
+            sim = self._sim_scores.get(node.id, 0.0)
+            score += sim * self.SIMILARITY_WEIGHT
+
             # Confidence multiplier
             score *= node.confidence
 
@@ -145,58 +190,53 @@ class MemoryRetrieval:
         - persona_traits: Active persona axes
         """
 
-        # Recent episodes (last 30 days; include partial outcomes)
-        month_ago = int(time.time()) - (30 * 86400)
-        episodes = self.store.query_episodes_since(month_ago, limit=20, project_id=context.project_id)
-        ranked_episodes = self.rank_nodes(episodes, context)
+        # Build similarity query from all available context signals
+        query_text = " ".join(filter(None, [
+            context.current_task or "",
+            " ".join(context.files_mentioned),
+            " ".join(context.topics)
+        ])).strip()
+
+        # Gather broad candidate pools — similarity re-ranks them so old-but-relevant
+        # nodes surface alongside recent ones
+        all_episodes = self.store.query_episodes_since(0, limit=100, project_id=context.project_id)
+        all_semantics = self.store.query_by_type(NodeType.SEMANTIC, context.project_id, limit=200, min_confidence=0.2)
+        all_procedurals = self.store.query_by_type(NodeType.PROCEDURAL, context.project_id, limit=100, min_confidence=0.2)
+        all_personas = self.store.query_by_type(NodeType.PERSONA, context.project_id, limit=100, min_confidence=0.1)
+
+        # Pre-compute similarity scores across ALL candidates in one pass
+        all_candidates = all_episodes + all_semantics + all_procedurals + all_personas
+        if query_text:
+            self.compute_similarity_scores(all_candidates, query_text, context.project_id)
+
+        # Rank each pool with similarity scores already populated
+        ranked_episodes = self.rank_nodes(all_episodes, context)
         recent_episodes = [node.to_dict() for node, score in ranked_episodes[:5]]
 
-        # Semantic facts — lower confidence floor so new nodes aren't filtered out
-        semantics = self.store.query_by_type(
-            NodeType.SEMANTIC,
-            context.project_id,
-            limit=100,
-            min_confidence=0.3
-        )
-        ranked_semantics = self.rank_nodes(semantics, context)
+        ranked_semantics = self.rank_nodes(all_semantics, context)
         relevant_facts = [node.to_dict() for node, score in ranked_semantics[:10]]
 
-        # Procedural patterns — lower thresholds so early patterns are usable
-        procedurals = self.store.query_by_type(
-            NodeType.PROCEDURAL,
-            context.project_id,
-            limit=50,
-            min_confidence=0.3
-        )
-        ranked_procedurals = self.rank_nodes(procedurals, context)
+        ranked_procedurals = self.rank_nodes(all_procedurals, context)
         applicable_patterns = [
             node.to_dict() for node, score in ranked_procedurals[:5]
             if node.data.get('fitness', 0) > 0.2
         ]
 
-        # Failures — show all unresolved for this project (don't gate on files_mentioned)
-        failures = self.store.query_by_type(
-            NodeType.FAILURE,
-            context.project_id,
-            limit=50
-        )
-        known_failures = [
-            node.to_dict() for node in failures
-            if not node.data.get('resolved_at')
-        ][:5]
-
-        # Persona traits (active, high strength)
-        personas = self.store.query_by_type(
-            NodeType.PERSONA,
-            context.project_id,
-            limit=50,
-            min_confidence=0.1  # Threshold for active traits
-        )
-        ranked_personas = self.rank_nodes(personas, context)
+        ranked_personas = self.rank_nodes(all_personas, context)
         persona_traits = [
             node.to_dict() for node, score in ranked_personas[:5]
             if node.data.get('strength', 0) >= 0.1
         ]
+
+        # Failures — similarity-ranked unresolved failures for this project
+        failures = self.store.get_unresolved_failures(context.project_id, limit=50)
+        if query_text and failures:
+            self.compute_similarity_scores(failures, query_text, context.project_id)
+        ranked_failures = self.rank_nodes(failures, context)
+        known_failures = [node.to_dict() for node, score in ranked_failures[:5]]
+
+        # Clear sim scores after compile (don't pollute next call)
+        self._sim_scores = {}
 
         return {
             "recent_episodes": recent_episodes,

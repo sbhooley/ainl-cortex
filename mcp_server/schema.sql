@@ -2,7 +2,7 @@
 -- Inspired by ainl-memory SQLite schema from ArmaraOS
 -- Version 1.0
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS ainl_graph_nodes (
     metadata JSON,                          -- Extensible metadata
     embedding_text TEXT,                    -- For FTS
     CONSTRAINT valid_node_type CHECK (node_type IN (
-        'episode', 'semantic', 'procedural', 'persona', 'failure', 'runtime_state'
+        'episode', 'semantic', 'procedural', 'persona', 'failure', 'runtime_state', 'goal'
     )),
     CONSTRAINT valid_confidence CHECK (confidence >= 0.0 AND confidence <= 1.0)
 );
@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS ainl_graph_edges (
     CONSTRAINT valid_edge_type CHECK (edge_type IN (
         'FOLLOWS', 'MENTIONS', 'TOUCHES', 'DEPENDS_ON', 'FIXED_BY',
         'DERIVES_FROM', 'RELATED_TO', 'PATTERN_FOR', 'OCCURRED_IN',
-        'RESOLVES', 'EMIT_TO', 'LEARNED_FROM', 'REFERENCES'
+        'RESOLVES', 'EMIT_TO', 'LEARNED_FROM', 'REFERENCES',
+        'A2A_THREAD', 'GOAL_TRACKS'
     ))
 );
 

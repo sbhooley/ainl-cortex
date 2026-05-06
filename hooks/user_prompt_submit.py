@@ -413,6 +413,36 @@ def main():
                 clear_inbox(inbox_dir)
                 logger.info(f"Injected {len(messages)} A2A messages (critical:{len(a2a_blocks['critical'])} normal:{len(a2a_blocks['normal'])} low:{len(a2a_blocks['low'])})")
 
+        # ── Goal context + failure warnings (loaded once, used in assembly) ─────
+        goal_context_text = ""
+        failure_warning_text = ""
+        try:
+            mcp_path = str(Path(__file__).parent.parent / "mcp_server")
+            if mcp_path not in sys.path:
+                sys.path.insert(0, mcp_path)
+            from graph_store import SQLiteGraphStore
+            from goal_tracker import GoalTracker
+            from failure_advisor import FailureAdvisor
+
+            db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
+            if db_path.exists():
+                _store = SQLiteGraphStore(db_path)
+
+                # Active goals
+                _tracker = GoalTracker(_store, project_id)
+                _goals = _tracker.get_active_goals()
+                if _goals:
+                    goal_context_text = _tracker.format_goal_context(_goals)
+
+                # Failure pre-warnings
+                _advisor = FailureAdvisor(_store, project_id)
+                _warnings = _advisor.analyse_prompt(prompt)
+                if _warnings:
+                    failure_warning_text = _advisor.format_warnings(_warnings)
+                    logger.info(f"Injecting {len(_warnings)} failure warning(s)")
+        except Exception as _ge:
+            logger.debug(f"Goal/failure context failed (non-fatal): {_ge}")
+
         # ── Assemble system message ───────────────────────────────────────────
         system_parts = []
 
@@ -420,8 +450,16 @@ def main():
             block = "\n\n".join(a2a_blocks["critical"])
             system_parts.append(f"━━━ CRITICAL A2A MESSAGES ━━━\n{block}\n━━━ END CRITICAL ━━━")
 
+        # Goals go first — they frame everything that follows
+        if goal_context_text:
+            system_parts.append(goal_context_text)
+
         if brief.strip() and len(brief) > len("## Relevant Graph Memory\n\n"):
             system_parts.append(brief)
+
+        # Failure warnings after memory brief — salient but not overriding goals
+        if failure_warning_text:
+            system_parts.append(failure_warning_text)
 
         other_a2a = a2a_blocks["normal"] or a2a_blocks["low"]
         if other_a2a:

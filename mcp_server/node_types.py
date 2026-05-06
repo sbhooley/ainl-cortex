@@ -20,6 +20,7 @@ class NodeType(str, Enum):
     PERSONA = "persona"
     FAILURE = "failure"
     RUNTIME_STATE = "runtime_state"
+    GOAL = "goal"
 
 
 class EdgeType(str, Enum):
@@ -38,6 +39,7 @@ class EdgeType(str, Enum):
     LEARNED_FROM = "LEARNED_FROM"    # Persona → Evidence episodes
     REFERENCES = "REFERENCES"        # Semantic → Referenced entity
     A2A_THREAD = "A2A_THREAD"        # A2A message → thread (links messages in same thread)
+    GOAL_TRACKS = "GOAL_TRACKS"      # Goal → Episode (episode contributed to this goal)
 
 
 @dataclass
@@ -181,6 +183,24 @@ class FailureData:
     resolution: Optional[str] = None
     resolution_turn_id: Optional[str] = None
     resolved_at: Optional[int] = None
+
+
+@dataclass
+class GoalData:
+    """
+    Goal node data.
+    Persists multi-session intent and tracks progress toward a named objective.
+    """
+    title: str
+    description: str
+    status: Literal["active", "completed", "abandoned", "blocked"] = "active"
+    completion_criteria: Optional[str] = None
+    progress_notes: List[Dict[str, Any]] = field(default_factory=list)  # [{ts, note}]
+    contributing_episodes: List[str] = field(default_factory=list)      # episode node IDs
+    tags: List[str] = field(default_factory=list)
+    created_session: Optional[str] = None
+    last_active_session: Optional[str] = None
+    inferred: bool = False   # True if auto-inferred, False if explicitly set
 
 
 @dataclass
@@ -351,6 +371,39 @@ def create_failure_node(
         updated_at=now,
         confidence=1.0,
         data=asdict(failure_data),
+        embedding_text=embedding_text
+    )
+
+
+def create_goal_node(
+    project_id: str,
+    title: str,
+    description: str,
+    status: str = "active",
+    inferred: bool = False,
+    **kwargs
+) -> GraphNode:
+    """Create a goal / intent node"""
+    now = int(time.time())
+
+    goal_data = GoalData(
+        title=title,
+        description=description,
+        status=status,
+        inferred=inferred,
+        **{k: v for k, v in kwargs.items() if k in GoalData.__annotations__}
+    )
+
+    embedding_text = f"{title} {description}"
+
+    return GraphNode(
+        id=str(uuid.uuid4()),
+        node_type=NodeType.GOAL,
+        project_id=project_id,
+        created_at=now,
+        updated_at=now,
+        confidence=0.7 if inferred else 1.0,
+        data=asdict(goal_data),
         embedding_text=embedding_text
     )
 

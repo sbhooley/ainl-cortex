@@ -40,6 +40,28 @@
     "thread_recall_n": 5,
     "monitor_script": "agents/context_monitor.py"
   },
+  "retrieval": {
+    "similarity_enabled": true,
+    "similarity_backend": "auto",
+    "tfidf_cache_ttl_seconds": 300,
+    "min_similarity_score": 0.15,
+    "candidate_pool_size": 100
+  },
+  "failure_advisor": {
+    "enabled": true,
+    "min_confidence": 0.3,
+    "max_warnings": 3,
+    "warn_on_files": true,
+    "warn_on_commands": true
+  },
+  "goals": {
+    "enabled": true,
+    "auto_infer": true,
+    "min_episodes_for_inference": 3,
+    "max_active_goals": 10,
+    "inject_in_context": true,
+    "link_threshold": 0.15
+  },
   "compression": {
     "enabled": true,
     "mode": "balanced",

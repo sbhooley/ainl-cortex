@@ -52,6 +52,7 @@ try:
     from .extractor import PatternExtractor, canonicalize_tool_sequence
     from .ainl_tools import AINLTools
     from .a2a_tools import A2ATools
+    from .goal_tracker import GoalTracker
 except ImportError:
     # Fallback for when run as script
     sys.path.insert(0, str(Path(__file__).parent))
@@ -66,6 +67,7 @@ except ImportError:
     from extractor import PatternExtractor, canonicalize_tool_sequence
     from ainl_tools import AINLTools
     from a2a_tools import A2ATools
+    from goal_tracker import GoalTracker
 
 
 class AINLGraphMemoryServer:
@@ -74,7 +76,7 @@ class AINLGraphMemoryServer:
     def __init__(self):
         self.db_path = self._get_db_path()
         self.store = SQLiteGraphStore(self.db_path)
-        self.retrieval = MemoryRetrieval(self.store)
+        self.retrieval = MemoryRetrieval(self.store, cache_dir=self.db_path.parent)
         self.persona_engine = PersonaEvolutionEngine()
         self.extractor = PatternExtractor()
 
@@ -96,6 +98,9 @@ class AINLGraphMemoryServer:
         project_id = self._compute_project_hash(Path.cwd())
         self.a2a_tools = A2ATools(plugin_root, self.store, project_id, config)
         logger.info("A2A tools initialized successfully")
+
+        self.goal_tracker = GoalTracker(self.store, project_id)
+        logger.info("Goal tracker initialized")
 
         logger.info(f"AINL Graph Memory Server initialized with DB: {self.db_path}")
 
@@ -380,6 +385,56 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["task_id"]
             }
+        ),
+        # Goal management tools
+        Tool(
+            name="memory_set_goal",
+            description="Create a new goal that persists across sessions, tracking a multi-session objective",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short goal title (e.g. 'Implement A2A messaging')"},
+                    "description": {"type": "string", "description": "Full description of what we're trying to accomplish and why"},
+                    "completion_criteria": {"type": "string", "description": "How we'll know the goal is done (optional)"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Topic tags for this goal (optional)"}
+                },
+                "required": ["title", "description"]
+            }
+        ),
+        Tool(
+            name="memory_update_goal",
+            description="Update a goal's status or append a progress note",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "goal_id": {"type": "string", "description": "Goal node ID"},
+                    "status": {"type": "string", "enum": ["active", "completed", "abandoned", "blocked"], "description": "New status (optional)"},
+                    "progress_note": {"type": "string", "description": "Progress update to append (optional)"}
+                },
+                "required": ["goal_id"]
+            }
+        ),
+        Tool(
+            name="memory_complete_goal",
+            description="Mark a goal as completed with an optional summary of how it was achieved",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "goal_id": {"type": "string", "description": "Goal node ID"},
+                    "summary": {"type": "string", "description": "What was accomplished (optional)"}
+                },
+                "required": ["goal_id"]
+            }
+        ),
+        Tool(
+            name="memory_list_goals",
+            description="List goals for this project — active by default, or all including completed/abandoned",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "include_completed": {"type": "boolean", "description": "Include completed/abandoned goals", "default": False}
+                }
+            }
         )
     ]
 
@@ -444,6 +499,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = memory_server.a2a_tools.a2a_task_send(**arguments)
         elif name == "a2a_task_status":
             result = memory_server.a2a_tools.a2a_task_status(**arguments)
+        elif name == "memory_set_goal":
+            result = await memory_server.memory_set_goal(**arguments)
+        elif name == "memory_update_goal":
+            result = await memory_server.memory_update_goal(**arguments)
+        elif name == "memory_complete_goal":
+            result = await memory_server.memory_complete_goal(**arguments)
+        elif name == "memory_list_goals":
+            result = await memory_server.memory_list_goals(**arguments)
         else:
             raise ValueError(f"Unknown tool: {name}")
 
@@ -678,6 +741,67 @@ async def memory_evolve_persona(
         return {"error": str(e)}
 
 
+async def memory_set_goal(
+    title: str,
+    description: str,
+    completion_criteria: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Create a new persistent goal node"""
+    try:
+        goal_id = memory_server.goal_tracker.create_goal(
+            title=title,
+            description=description,
+            completion_criteria=completion_criteria,
+            tags=tags or [],
+            inferred=False,
+        )
+        return {"goal_id": goal_id, "title": title, "status": "active"}
+    except Exception as e:
+        logger.error(f"Failed to set goal: {e}")
+        return {"error": str(e)}
+
+
+async def memory_update_goal(
+    goal_id: str,
+    status: Optional[str] = None,
+    progress_note: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Update a goal's status or progress"""
+    try:
+        ok = memory_server.goal_tracker.update_goal(goal_id, status=status, progress_note=progress_note)
+        return {"updated": ok, "goal_id": goal_id}
+    except Exception as e:
+        logger.error(f"Failed to update goal: {e}")
+        return {"error": str(e)}
+
+
+async def memory_complete_goal(
+    goal_id: str,
+    summary: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Mark a goal complete"""
+    try:
+        ok = memory_server.goal_tracker.complete_goal(goal_id, summary=summary)
+        return {"completed": ok, "goal_id": goal_id}
+    except Exception as e:
+        logger.error(f"Failed to complete goal: {e}")
+        return {"error": str(e)}
+
+
+async def memory_list_goals(
+    include_completed: bool = False,
+) -> Dict[str, Any]:
+    """List goals for this project"""
+    try:
+        project_id = memory_server.goal_tracker.project_id
+        goals = memory_server.goal_tracker.get_all_goals(include_completed=include_completed)
+        return {"goals": goals, "count": len(goals), "project_id": project_id}
+    except Exception as e:
+        logger.error(f"Failed to list goals: {e}")
+        return {"error": str(e)}
+
+
 # Add methods to the server instance
 memory_server.memory_store_episode = memory_store_episode
 memory_server.memory_store_semantic = memory_store_semantic
@@ -686,6 +810,10 @@ memory_server.memory_promote_pattern = memory_promote_pattern
 memory_server.memory_recall_context = memory_recall_context
 memory_server.memory_search = memory_search
 memory_server.memory_evolve_persona = memory_evolve_persona
+memory_server.memory_set_goal = memory_set_goal
+memory_server.memory_update_goal = memory_update_goal
+memory_server.memory_complete_goal = memory_complete_goal
+memory_server.memory_list_goals = memory_list_goals
 
 
 async def main():

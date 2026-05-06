@@ -10,6 +10,7 @@ import json
 import uuid
 import time
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
@@ -138,6 +139,8 @@ def write_failures(store, project_id: str, session_data: dict) -> int:
             error_type=capture.get("type", "tool_error"),
             tool=capture.get("tool", "unknown"),
             error_message=capture.get("error", "")[:500],
+            file=capture.get("file"),
+            command=capture.get("command", "")[:200] if capture.get("command") else None,
         )
         store.write_node(node)
         count += 1
@@ -145,6 +148,78 @@ def write_failures(store, project_id: str, session_data: dict) -> int:
     if count:
         logger.info(f"Wrote {count} failure node(s)")
     return count
+
+
+def link_resolutions(store, project_id: str, episode_data: dict) -> int:
+    """
+    Retrospectively link open failure nodes to the episode that resolved them.
+
+    After a successful episode, check all unresolved failures for this project.
+    If the episode touched the same file(s) or used the same tool as the failure,
+    assume the episode resolved it: write a RESOLVES edge and update the failure
+    node's resolution/resolved_at fields.
+
+    Returns the number of failures linked.
+    """
+    if episode_data.get("outcome") not in ("success",):
+        return 0
+
+    from node_types import create_edge, EdgeType
+    import time as _time
+
+    episode_files = set(episode_data.get("files_touched", []))
+    episode_tools = set(episode_data.get("tool_calls", []))
+    episode_id = episode_data.get("turn_id", "")
+    episode_task = episode_data.get("task_description", "")
+    now = int(_time.time())
+
+    unresolved = store.get_unresolved_failures(project_id)
+    linked = 0
+
+    for failure in unresolved:
+        fail_file = failure.data.get("file") or ""
+        fail_tool = failure.data.get("tool") or ""
+
+        file_match = bool(fail_file and episode_files and fail_file in episode_files)
+        tool_match = bool(fail_tool and fail_tool in episode_tools)
+
+        if not (file_match or tool_match):
+            continue
+
+        # Update the failure node with resolution info
+        store.update_node_data(failure.id, {
+            "resolution": f"Resolved by: {episode_task[:150]}",
+            "resolution_turn_id": episode_id,
+            "resolved_at": now,
+        })
+
+        # Write RESOLVES edge (episode → failure) — need the episode node ID
+        # The episode was just written; query it by turn_id
+        try:
+            recent = store.query_episodes_since(now - 10, limit=5, project_id=project_id)
+            ep_node_id = None
+            for ep in recent:
+                if ep.data.get("turn_id") == episode_id:
+                    ep_node_id = ep.id
+                    break
+
+            if ep_node_id:
+                edge = create_edge(
+                    from_node=ep_node_id,
+                    to_node=failure.id,
+                    edge_type=EdgeType.RESOLVES,
+                    project_id=project_id,
+                    metadata={"matched_on": "file" if file_match else "tool"}
+                )
+                store.write_edge(edge)
+        except Exception as edge_err:
+            logger.debug(f"Could not write RESOLVES edge: {edge_err}")
+
+        linked += 1
+
+    if linked:
+        logger.info(f"Linked {linked} failure resolution(s) to episode {episode_id[:8]}")
+    return linked
 
 
 def write_persona(store, project_id: str, episode_data: dict) -> int:
@@ -446,6 +521,44 @@ def write_patterns(store, project_id: str) -> int:
     return count
 
 
+def write_goals(store, project_id: str, episode_data: Optional[dict] = None) -> int:
+    """
+    Update active goals from the latest episode and, at session end,
+    auto-infer new goals from episode clusters if none exist yet.
+
+    Returns number of goal nodes created or updated.
+    """
+    try:
+        from goal_tracker import GoalTracker
+    except ImportError:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+        from goal_tracker import GoalTracker
+
+    tracker = GoalTracker(store, project_id)
+    updated = 0
+
+    # Auto-update active goals with the latest episode
+    if episode_data:
+        try:
+            updated += tracker.auto_update_from_episode(episode_data)
+        except Exception as e:
+            logger.debug(f"Goal auto-update failed: {e}")
+
+    # If there are no active goals at all, try to infer some from recent episodes
+    try:
+        active = store.query_goals(project_id, status="active", limit=1)
+        if not active:
+            recent_eps = store.query_episodes_since(since=0, limit=20, project_id=project_id)
+            if recent_eps:
+                new_ids = tracker.infer_goals_from_episodes(recent_eps)
+                updated += len(new_ids)
+    except Exception as e:
+        logger.debug(f"Goal inference failed: {e}")
+
+    return updated
+
+
 def flush_pending_captures(project_id: str) -> int:
     """
     Flush any buffered captures to the graph DB right now.
@@ -470,8 +583,10 @@ def flush_pending_captures(project_id: str) -> int:
             write_failures(store, project_id, session_data)
             if episode_data:
                 write_persona(store, project_id, episode_data)
+                link_resolutions(store, project_id, episode_data)
             write_patterns(store, project_id)
             write_semantics(store, project_id)
+            write_goals(store, project_id, episode_data)
             logger.info(f"Per-prompt flush: wrote all node types for {count} captures")
         return count
     except Exception as e:
@@ -504,6 +619,12 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             logger.warning(f"Persona write failed: {e}")
 
         try:
+            if episode_data:
+                link_resolutions(store, project_id, episode_data)
+        except Exception as e:
+            logger.warning(f"Resolution linking failed: {e}")
+
+        try:
             write_patterns(store, project_id)
         except Exception as e:
             logger.warning(f"Pattern write failed: {e}")
@@ -512,6 +633,11 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             write_semantics(store, project_id)
         except Exception as e:
             logger.warning(f"Semantic write failed: {e}")
+
+        try:
+            write_goals(store, project_id, episode_data)
+        except Exception as e:
+            logger.warning(f"Goal write failed: {e}")
 
     # Write self-note if session was substantial (helps resume next session)
     try:
