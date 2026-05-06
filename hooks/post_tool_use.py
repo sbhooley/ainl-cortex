@@ -10,6 +10,7 @@ import sys
 import json
 from pathlib import Path
 import time
+import uuid
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -17,6 +18,13 @@ from shared.project_id import get_project_id
 from shared.logger import log_event, log_error, get_logger
 
 logger = get_logger("post_tool_use")
+
+try:
+    import ainl_native as _ainl_native
+    _NATIVE_OK = True
+except ImportError:
+    _ainl_native = None
+    _NATIVE_OK = False
 
 
 # Tool canonicalization (matches extractor.py)
@@ -139,6 +147,30 @@ def flush_episode_if_due(project_id: str, capture_count: int, plugin_root: Path)
         logger.warning(f"Mid-session flush failed (non-fatal): {e}")
 
 
+def _buffer_traj_step(project_id: str, tool: str, capture: dict) -> None:
+    """
+    Buffer a lightweight trajectory step record for the native DB.
+    Written to {project_id}_traj_steps.jsonl; flushed to ainl_native.db at session end.
+    """
+    try:
+        inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        step_file = inbox_dir / f"{project_id}_traj_steps.jsonl"
+        step = {
+            "step_id": str(uuid.uuid4()),
+            "timestamp_ms": int(time.time() * 1000),
+            "adapter": tool,
+            "operation": capture.get("type", "run"),
+            "success": capture.get("success", True),
+            "error": capture.get("error"),
+            "duration_ms": 0,
+        }
+        with open(step_file, "a") as f:
+            f.write(json.dumps(step) + "\n")
+    except Exception as e:
+        logger.debug(f"traj step buffer failed (non-fatal): {e}")
+
+
 def main():
     """Main hook entry point"""
     try:
@@ -169,6 +201,10 @@ def main():
         plugin_root = Path(__file__).parent.parent
         count = buffer_capture(project_id, capture)
         flush_episode_if_due(project_id, count, plugin_root)
+
+        # Buffer native trajectory step (persisted at session end)
+        if _NATIVE_OK:
+            _buffer_traj_step(project_id, canonical_tool, capture)
 
         # Log event
         log_event("post_tool_use", {

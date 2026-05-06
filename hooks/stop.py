@@ -12,6 +12,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
+try:
+    import ainl_native as _ainl_native
+    _NATIVE_OK = True
+except ImportError:
+    _ainl_native = None
+    _NATIVE_OK = False
+
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
@@ -108,6 +115,17 @@ def write_episode(project_id: str, session_data: dict):
         "error_message": None,
     }
 
+    # Enrich episode with native semantic tags if available
+    native_tags: list = []
+    if _NATIVE_OK:
+        try:
+            tools_str = " ".join(session_data.get("tools_used", []))
+            tags = _ainl_native.tag_turn(task_summary, None, session_data.get("tools_used", []))
+            native_tags = [{"namespace": t["namespace"], "value": t["value"]} for t in tags[:10]]
+            episode_data["semantic_tags"] = native_tags
+        except Exception:
+            pass
+
     node = GraphNode(
         id=str(uuid.uuid4()),
         node_type=NodeType.EPISODE,
@@ -117,7 +135,7 @@ def write_episode(project_id: str, session_data: dict):
         updated_at=now,
         confidence=1.0,
         data=episode_data,
-        metadata={},
+        metadata={"native_tags": native_tags} if native_tags else {},
         embedding_text=task_summary,
     )
 
@@ -223,9 +241,44 @@ def link_resolutions(store, project_id: str, episode_data: dict) -> int:
 
 
 def write_persona(store, project_id: str, episode_data: dict) -> int:
-    """Evolve persona traits from episode signals and write persona nodes."""
-    from persona_engine import PersonaEvolutionEngine
+    """Evolve persona traits from episode signals.
+
+    Uses ainl_native.AinlPersonaEngine (Rust) when available,
+    falling back to the pure-Python PersonaEvolutionEngine.
+    """
     from node_types import create_persona_node
+
+    # ── Native path: ainl-persona crate via Rust bindings ──────────────────
+    if _NATIVE_OK:
+        try:
+            db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+            db_path.mkdir(parents=True, exist_ok=True)
+            native_db = str(db_path / "ainl_native.db")
+            engine = _ainl_native.AinlPersonaEngine("claude-code")
+            snap = engine.evolve(native_db)
+            # Write one persona node per axis that has moved from baseline
+            count = 0
+            for axis_name, score in snap.get("axes", {}).items():
+                if abs(score - 0.5) > 0.05:  # only write axes that differ from neutral
+                    node = create_persona_node(
+                        project_id=project_id,
+                        trait_name=f"axis_{axis_name}",
+                        strength=score,
+                        learned_from=[episode_data.get("turn_id", "")],
+                    )
+                    store.write_node(node)
+                    count += 1
+            if count:
+                logger.info(f"Native persona: wrote {count} axis trait(s) from ainl_native")
+            return count
+        except Exception as e:
+            logger.debug(f"Native persona engine failed, falling back to Python: {e}")
+
+    # ── Python fallback ─────────────────────────────────────────────────────
+    try:
+        from persona_engine import PersonaEvolutionEngine
+    except ImportError:
+        return 0
 
     engine = PersonaEvolutionEngine()
     signals = engine.extract_signals_from_episode(episode_data)
@@ -247,7 +300,7 @@ def write_persona(store, project_id: str, episode_data: dict) -> int:
         count += 1
 
     if count:
-        logger.info(f"Wrote {count} persona trait(s): {[t['trait_name'] for t in traits]}")
+        logger.info(f"Python persona: wrote {count} trait(s): {[t['trait_name'] for t in traits]}")
     return count
 
 
@@ -594,6 +647,74 @@ def flush_pending_captures(project_id: str) -> int:
         return 0
 
 
+def _flush_native_trajectories(project_id: str, episode_data: dict) -> None:
+    """
+    Read buffered traj step records, build a TrajectoryDetailRecord,
+    and write it to the native DB using ainl_native.AinlNativeStore.
+    """
+    if not _NATIVE_OK:
+        return
+
+    inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+    step_file = inbox_dir / f"{project_id}_traj_steps.jsonl"
+    if not step_file.exists():
+        return
+
+    try:
+        steps = []
+        with open(step_file) as f:
+            for line in f:
+                if line.strip():
+                    steps.append(json.loads(line))
+        step_file.unlink()
+    except Exception as e:
+        logger.debug(f"Could not read traj steps: {e}")
+        return
+
+    if not steps:
+        return
+
+    try:
+        db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+        db_path.mkdir(parents=True, exist_ok=True)
+        native_db = str(db_path / "ainl_native.db")
+
+        store = _ainl_native.AinlNativeStore.open(native_db)
+
+        # Register a matching episode in the native DB so FK constraints pass.
+        # We use the tool list from the Python episode_data.
+        native_ep_id = store.record_episode(
+            list(episode_data.get("tool_calls", [])),
+            None,
+            None,
+        )
+
+        outcome = episode_data.get("outcome", "partial")
+        outcome_map = {"success": "success", "partial": "partial_success",
+                       "error": "failure", "aborted": "aborted"}
+        traj_outcome = outcome_map.get(outcome, "partial_success")
+
+        # Compute total duration from steps
+        total_duration = sum(s.get("duration_ms", 0) for s in steps)
+
+        record = {
+            "id": str(uuid.uuid4()),
+            "episode_id": native_ep_id,
+            "agent_id": "claude-code",
+            "session_id": project_id,
+            "project_id": project_id,
+            "recorded_at": int(time.time()),
+            "outcome": traj_outcome,
+            "duration_ms": total_duration,
+            "steps": steps,
+        }
+
+        store.insert_trajectory(record)
+        logger.info(f"Native trajectory flushed: {len(steps)} steps for episode {episode_id[:8]}")
+    except Exception as e:
+        logger.debug(f"Native trajectory write failed: {e}")
+
+
 def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> None:
     """Write all node types, self-note (if substantial), and log structured event."""
     task_summary = create_episode_summary(session_data)
@@ -667,6 +788,13 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             logger.info(f"Self-note written: {note_id} ({capture_count} captures)")
     except Exception as e:
         logger.warning(f"Self-note write failed: {e}")
+
+    # Flush native trajectory steps to ainl_native.db if any accumulated
+    if _NATIVE_OK and episode_data:
+        try:
+            _flush_native_trajectories(project_id, episode_data)
+        except Exception as e:
+            logger.debug(f"Native trajectory flush failed (non-fatal): {e}")
 
     log_event("session_finalized", {
         "project_id": project_id,

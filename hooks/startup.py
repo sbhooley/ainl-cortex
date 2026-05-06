@@ -181,6 +181,58 @@ def append_venv_to_envfile(plugin_root: Path) -> str:
         return f"could not write CLAUDE_ENV_FILE: {e}"
 
 
+def _ensure_ainl_native(plugin_root: Path) -> str:
+    """
+    Ensure ainl_native Rust extension is built and installed.
+    Returns a short status string for the banner.
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("ainl_native")
+        if spec is not None:
+            return "ok (already installed)"
+    except Exception:
+        pass
+
+    native_dir = plugin_root / "ainl_native"
+    if not native_dir.is_dir():
+        return "skipped (ainl_native/ directory not found)"
+
+    py = _venv_python(plugin_root)
+    if py is None:
+        return "skipped (no venv python)"
+
+    maturin = plugin_root / ".venv" / "bin" / "maturin"
+    if not maturin.is_file():
+        try:
+            r = subprocess.run(
+                [str(py), "-m", "pip", "install", "maturin", "--quiet"],
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception as e:
+            return f"could not install maturin: {e}"
+
+    try:
+        env = {**os.environ, "PYO3_USE_ABI3_FORWARD_COMPATIBILITY": "1"}
+        r = subprocess.run(
+            [str(maturin), "develop", "--manifest-path", str(native_dir / "Cargo.toml")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(plugin_root),
+        )
+        if r.returncode == 0:
+            return "built + installed"
+        else:
+            err = (r.stderr or r.stdout or "").strip()[-200:]
+            return f"build failed: {err}"
+    except subprocess.TimeoutExpired:
+        return "build timed out (>5 min)"
+    except Exception as e:
+        return f"build error: {e}"
+
+
 def main():
     try:
         root = _plugin_root()
@@ -196,6 +248,7 @@ def main():
             db_s = f"error: {e}"
 
         mcp_ok, mcp_detail = verify_mcp_imports(root)
+        native_status = _ensure_ainl_native(root)
         venv_file_status = append_venv_to_envfile(root)
 
         # ── A2A bridge ────────────────────────────────────────────────────────
@@ -238,6 +291,7 @@ def main():
             f"  • Project: {get_project_id(cwd)}  cwd: {cwd}\n"
             f"  • Compression: {status['mode']} ({'on' if status['enabled'] else 'off'})  ~savings {status['savings']}\n"
             f"  • AINL Python tools module: {'yes' if ainl else 'no (optional)'}\n"
+            f"  • ainl_native (Rust bindings): {native_status}\n"
             f"  • MCP stack (same venv as server): {'OK' if mcp_ok else 'FAIL – ' + mcp_detail}\n"
             f"  • venv on PATH (child processes): {venv_file_status}\n"
             f"  • A2A bridge: {bridge_line}\n"

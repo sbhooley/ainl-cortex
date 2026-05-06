@@ -61,6 +61,10 @@ a2a/self_inbox/
 a2a/openfang_url.json
 a2a/logs/
 
+# Rust build artifacts
+ainl_native/target/
+ainl_native/Cargo.lock
+
 # OS
 .DS_Store
 Thumbs.db
