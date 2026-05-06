@@ -455,6 +455,17 @@ def main():
             "memory_compression": memory_compression_metrics
         })
 
+        # Flush previous turn's captures to graph DB before processing new prompt.
+        # This ensures memory is persisted even if the session ends abruptly.
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+            from stop import flush_pending_captures
+            flushed = flush_pending_captures(project_id)
+            if flushed:
+                logger.info(f"Per-prompt flush: committed {flushed} captures")
+        except Exception:
+            pass
+
         # Record prompt summary for cross-session semantic mining
         try:
             record_prompt_summary(project_id, prompt)

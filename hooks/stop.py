@@ -446,6 +446,39 @@ def write_patterns(store, project_id: str) -> int:
     return count
 
 
+def flush_pending_captures(project_id: str) -> int:
+    """
+    Flush any buffered captures to the graph DB right now.
+    Called at the start of each UserPromptSubmit so every completed turn is
+    persisted even if the session ends abruptly before Stop fires.
+    Returns number of captures flushed (0 = nothing pending).
+    """
+    inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+    inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
+    if not inbox_file.exists():
+        return 0
+    try:
+        count = sum(1 for _ in open(inbox_file))
+    except Exception:
+        return 0
+    if count == 0:
+        return 0
+    try:
+        session_data = drain_session_inbox(project_id)
+        if session_data["tool_captures"]:
+            store, episode_data = write_episode(project_id, session_data)
+            write_failures(store, project_id, session_data)
+            if episode_data:
+                write_persona(store, project_id, episode_data)
+            write_patterns(store, project_id)
+            write_semantics(store, project_id)
+            logger.info(f"Per-prompt flush: wrote all node types for {count} captures")
+        return count
+    except Exception as e:
+        logger.warning(f"Per-prompt flush failed (non-fatal): {e}")
+        return 0
+
+
 def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> None:
     """Write all node types, self-note (if substantial), and log structured event."""
     task_summary = create_episode_summary(session_data)

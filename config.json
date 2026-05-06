@@ -36,7 +36,7 @@
     "inbox_max_message_chars": 2000,
     "self_inbox_urgency": "critical",
     "self_note_threshold": 5,
-    "mid_session_flush_threshold": 10,
+    "mid_session_flush_threshold": 5,
     "thread_recall_n": 5,
     "monitor_script": "agents/context_monitor.py"
   },
