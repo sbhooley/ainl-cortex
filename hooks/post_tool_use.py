@@ -123,14 +123,16 @@ def flush_episode_if_due(project_id: str, capture_count: int, plugin_root: Path)
         if capture_count < threshold or capture_count % threshold != 0:
             return
 
-        # Import stop.py helpers (same process, sys.path already set)
         sys.path.insert(0, str(plugin_root / "mcp_server"))
-        from stop import drain_session_inbox, write_episode
+        from stop import drain_session_inbox, write_episode, write_failures, write_persona, write_patterns
 
         session_data = drain_session_inbox(project_id)
         if session_data["tool_captures"]:
-            write_episode(project_id, session_data)
-            logger.info(f"Mid-session flush: wrote episode at {capture_count} captures")
+            store, episode_data = write_episode(project_id, session_data)
+            write_failures(store, project_id, session_data)
+            write_persona(store, project_id, episode_data)
+            write_patterns(store, project_id)
+            logger.info(f"Mid-session flush: all nodes written at {capture_count} captures")
 
     except Exception as e:
         logger.warning(f"Mid-session flush failed (non-fatal): {e}")

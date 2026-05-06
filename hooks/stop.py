@@ -78,8 +78,10 @@ def create_episode_summary(session_data: dict) -> str:
     return summary
 
 
-def write_episode(project_id: str, session_data: dict) -> None:
-    """Write episode node directly to SQLite graph store."""
+def write_episode(project_id: str, session_data: dict):
+    """
+    Write episode node. Returns (store, episode_data_dict) for downstream writers.
+    """
     from graph_store import SQLiteGraphStore
     from node_types import GraphNode, NodeType
 
@@ -92,6 +94,19 @@ def write_episode(project_id: str, session_data: dict) -> None:
 
     store = SQLiteGraphStore(db_path)
 
+    episode_data = {
+        "turn_id": str(uuid.uuid4()),
+        "task_description": task_summary,
+        "tool_calls": session_data["tools_used"],
+        "files_touched": session_data["files_touched"],
+        "outcome": outcome,
+        "duration_ms": 0,
+        "git_commit": None,
+        "test_results": None,
+        "session_id": None,
+        "error_message": None,
+    }
+
     node = GraphNode(
         id=str(uuid.uuid4()),
         node_type=NodeType.EPISODE,
@@ -100,35 +115,148 @@ def write_episode(project_id: str, session_data: dict) -> None:
         created_at=now,
         updated_at=now,
         confidence=1.0,
-        data={
-            "turn_id": str(uuid.uuid4()),
-            "task_description": task_summary,
-            "tool_calls": session_data["tools_used"],
-            "files_touched": session_data["files_touched"],
-            "outcome": outcome,
-            "duration_ms": 0,
-            "git_commit": None,
-            "test_results": None,
-            "session_id": None,
-            "error_message": None
-        },
+        data=episode_data,
         metadata={},
-        embedding_text=task_summary
+        embedding_text=task_summary,
     )
 
     store.write_node(node)
     logger.info(f"Created episode: project={project_id}, task={task_summary}, outcome={outcome}")
+    return store, episode_data
+
+
+def write_failures(store, project_id: str, session_data: dict) -> int:
+    """Write a failure node for every errored tool capture in the session."""
+    from node_types import create_failure_node
+
+    count = 0
+    for capture in session_data.get("tool_captures", []):
+        if capture.get("success", True):
+            continue
+        node = create_failure_node(
+            project_id=project_id,
+            error_type=capture.get("type", "tool_error"),
+            tool=capture.get("tool", "unknown"),
+            error_message=capture.get("error", "")[:500],
+        )
+        store.write_node(node)
+        count += 1
+
+    if count:
+        logger.info(f"Wrote {count} failure node(s)")
+    return count
+
+
+def write_persona(store, project_id: str, episode_data: dict) -> int:
+    """Evolve persona traits from episode signals and write persona nodes."""
+    from persona_engine import PersonaEvolutionEngine
+    from node_types import create_persona_node
+
+    engine = PersonaEvolutionEngine()
+    signals = engine.extract_signals_from_episode(episode_data)
+    if not signals:
+        return 0
+
+    engine.ingest_signals(signals)
+    traits = engine.get_active_traits(min_strength=0.1)
+
+    count = 0
+    for trait in traits:
+        node = create_persona_node(
+            project_id=project_id,
+            trait_name=trait["trait_name"],
+            strength=trait["strength"],
+            learned_from=[episode_data.get("turn_id", "")],
+        )
+        store.write_node(node)
+        count += 1
+
+    if count:
+        logger.info(f"Wrote {count} persona trait(s): {[t['trait_name'] for t in traits]}")
+    return count
+
+
+def write_patterns(store, project_id: str) -> int:
+    """
+    Scan recent successful episodes for repeated tool sequences.
+    Promote any new patterns that meet the fitness threshold.
+    """
+    from extractor import PatternExtractor
+    from node_types import create_procedural_node, NodeType
+
+    # Fetch recent episodes (need at least 2 to detect repetition)
+    try:
+        recent_nodes = store.query_episodes_since(since=0, limit=100, project_id=project_id)
+    except Exception:
+        return 0
+
+    if len(recent_nodes) < 2:
+        return 0
+
+    # Convert GraphNode objects to the dict shape PatternExtractor expects
+    episodes = [{"data": n.data} for n in recent_nodes]
+
+    # Fetch existing procedural patterns to avoid re-promoting
+    existing_patterns = []
+    try:
+        all_nodes = store.search_fts("", project_id, limit=200)
+        existing_patterns = [
+            {"data": n.data}
+            for n in all_nodes
+            if n.node_type == NodeType.PROCEDURAL
+        ]
+    except Exception:
+        pass
+
+    extractor = PatternExtractor()
+    new_patterns = extractor.extract_patterns(episodes, existing_patterns)
+
+    count = 0
+    for pat in new_patterns:
+        node = create_procedural_node(
+            project_id=project_id,
+            pattern_name=pat["pattern_name"],
+            trigger=pat["trigger"],
+            tool_sequence=pat["tool_sequence"],
+            success_count=pat["success_count"],
+            evidence_ids=pat["evidence_ids"],
+        )
+        store.write_node(node)
+        count += 1
+
+    if count:
+        logger.info(f"Promoted {count} new procedural pattern(s)")
+    return count
 
 
 def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> None:
-    """Write episode, self-note (if session was substantial), and log structured event."""
+    """Write all node types, self-note (if substantial), and log structured event."""
     task_summary = create_episode_summary(session_data)
     outcome = "partial" if session_data["had_errors"] else "success"
 
+    store = None
+    episode_data = None
     try:
-        write_episode(project_id, session_data)
+        store, episode_data = write_episode(project_id, session_data)
     except Exception as e:
         logger.warning(f"Episode write failed: {e}")
+
+    if store:
+        try:
+            write_failures(store, project_id, session_data)
+        except Exception as e:
+            logger.warning(f"Failure nodes write failed: {e}")
+
+        try:
+            if episode_data:
+                write_persona(store, project_id, episode_data)
+        except Exception as e:
+            logger.warning(f"Persona write failed: {e}")
+
+        try:
+            write_patterns(store, project_id)
+        except Exception as e:
+            logger.warning(f"Pattern write failed: {e}")
 
     # Write self-note if session was substantial (helps resume next session)
     try:
