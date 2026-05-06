@@ -32,18 +32,62 @@ def _read_daemon_json(daemon_json_path: Optional[str] = None) -> Optional[Dict]:
         return None
 
 
+def _scan_openfang_port() -> Optional[int]:
+    """Scan lsof output for a listening openfang process and return its port."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["lsof", "-iTCP", "-sTCP:LISTEN", "-n", "-P"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in r.stdout.splitlines():
+            if "openfang" in line.lower():
+                # e.g. "openfang-  1234 ...  TCP 127.0.0.1:63557 (LISTEN)"
+                parts = line.split()
+                for p in parts:
+                    if ":" in p and "(LISTEN)" not in p:
+                        try:
+                            return int(p.rsplit(":", 1)[1])
+                        except ValueError:
+                            pass
+    except Exception:
+        pass
+    return None
+
+
 def discover_daemon(daemon_json_path: Optional[str] = None) -> Tuple[Optional[str], Optional[int]]:
     """
-    Read ~/.armaraos/daemon.json and return (base_url, pid).
-    Returns (None, None) if daemon.json doesn't exist or is unreadable.
+    Discover the ArmaraOS daemon URL and PID.
+
+    Strategy:
+    1. Read daemon.json for listen_addr + pid
+    2. If that port is reachable → return it
+    3. Otherwise scan lsof for a live openfang process
     """
     d = _read_daemon_json(daemon_json_path)
-    if not d:
-        return None, None
-    listen = d.get("listen_addr", "")
-    if not listen:
-        return None, None
-    return f"http://{listen}", d.get("pid")
+    pid = d.get("pid") if d else None
+
+    if d:
+        listen = d.get("listen_addr", "")
+        if listen:
+            host, _, port_str = listen.rpartition(":")
+            try:
+                port = int(port_str)
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1.0)
+                reachable = s.connect_ex((host, port)) == 0
+                s.close()
+                if reachable:
+                    return f"http://{listen}", pid
+            except Exception:
+                pass
+
+    # Fallback: scan for live openfang process
+    live_port = _scan_openfang_port()
+    if live_port:
+        return f"http://127.0.0.1:{live_port}", pid
+
+    return None, pid
 
 
 def _get_json(url: str, timeout: float) -> Dict[str, Any]:
@@ -140,17 +184,29 @@ def send_to_agent(
     agent_id: str,
     message_text: str,
     daemon_json_path: Optional[str] = None,
-    timeout: float = 5.0,
+    timeout: float = 60.0,
 ) -> Dict[str, Any]:
-    """Send a message to a specific ArmaraOS agent by ID."""
+    """
+    Send a message to a specific ArmaraOS agent by UUID.
+    Uses POST /api/agents/{id}/message which returns {"response": "...", ...}.
+    """
     daemon_url, _ = discover_daemon(daemon_json_path)
     if not daemon_url:
-        return {"error": "ArmaraOS daemon not found", "reachable": False}
-    payload = {
-        "agent_id": agent_id,
-        "message": {"role": "user", "parts": [{"text": message_text}]},
-    }
-    return _post_json(f"{daemon_url}/a2a/tasks/send", payload, timeout)
+        return {"error": "ArmaraOS daemon not found — is openfang running?", "reachable": False}
+    result = _post_json(
+        f"{daemon_url}/api/agents/{agent_id}/message",
+        {"message": message_text},
+        timeout,
+    )
+    # Normalise: expose reply as top-level "response" field
+    if "response" not in result and "error" not in result:
+        # Fallback: extract from messages array if present
+        for msg in result.get("messages", []):
+            if msg.get("role") == "agent":
+                parts = msg.get("parts", [])
+                result["response"] = " ".join(p.get("text", "") for p in parts)
+                break
+    return result
 
 
 def get_task_status(

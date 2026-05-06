@@ -77,7 +77,11 @@ class A2ATools:
         self.monitors_path = plugin_root / "a2a" / "monitors" / "monitor_configs.json"
 
     def _registry(self) -> dict:
-        return _read_json(self.registry_path, {})
+        data = _read_json(self.registry_path, {})
+        # Migrate list format (old default) to dict keyed by name
+        if isinstance(data, list):
+            return {entry["name"]: entry for entry in data if "name" in entry}
+        return data
 
     def _save_registry(self, reg: dict) -> None:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,10 +138,19 @@ class A2ATools:
         store_message_node(self.store, self.project_id, "outbound", "claude-code", to, tid, urgency, message)
         _a2a_log()(self.plugin_root, "OUT", "claude-code", to, tid, urgency, message[:120])
 
+        # Store reply as inbound message node
+        reply = result.get("response", "")
+        if reply:
+            store_message_node(self.store, self.project_id, "inbound", to, "claude-code", tid, urgency, reply)
+            _a2a_log()(self.plugin_root, "IN", to, "claude-code", tid, urgency, reply[:120])
+
         reg[to]["last_seen_at"] = int(time.time())
         self._save_registry(reg)
 
-        return {"sent": True, "to": to, "thread_id": tid, "urgency": urgency, "task_id": result.get("task_id")}
+        out = {"sent": True, "to": to, "thread_id": tid, "urgency": urgency}
+        if reply:
+            out["reply"] = reply
+        return out
 
     # ── a2a_list_agents ───────────────────────────────────────────────────────
 
