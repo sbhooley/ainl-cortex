@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
 from shared.project_id import get_project_id, get_project_info
 from shared.logger import log_event, log_error, get_logger
+from shared.a2a_inbox import write_self_note
 
 logger = get_logger("stop")
 
@@ -119,8 +120,8 @@ def write_episode(project_id: str, session_data: dict) -> None:
     logger.info(f"Created episode: project={project_id}, task={task_summary}, outcome={outcome}")
 
 
-def finalize_session(project_id: str, session_data: dict) -> None:
-    """Write episode and log structured event."""
+def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> None:
+    """Write episode, self-note (if session was substantial), and log structured event."""
     task_summary = create_episode_summary(session_data)
     outcome = "partial" if session_data["had_errors"] else "success"
 
@@ -128,6 +129,35 @@ def finalize_session(project_id: str, session_data: dict) -> None:
         write_episode(project_id, session_data)
     except Exception as e:
         logger.warning(f"Episode write failed: {e}")
+
+    # Write self-note if session was substantial (helps resume next session)
+    try:
+        import json as _json
+        cfg_path = plugin_root / "config.json"
+        threshold = 5
+        if cfg_path.exists():
+            threshold = _json.loads(cfg_path.read_text()).get("a2a", {}).get("self_note_threshold", 5)
+
+        capture_count = len(session_data.get("tool_captures", []))
+        if capture_count >= threshold:
+            tools = session_data.get("tools_used", [])
+            files = session_data.get("files_touched", [])
+            message = (
+                f"Prior session summary: {task_summary}. "
+                f"Outcome: {outcome}. "
+                f"Tools: {', '.join(sorted(tools)[:8])}. "
+                f"Files: {', '.join(Path(f).name for f in files[:5])}."
+            )
+            note_id = write_self_note(
+                plugin_root,
+                message=message,
+                context=f"Session had {capture_count} tool calls.",
+                urgency="critical",
+                tool_count=capture_count,
+            )
+            logger.info(f"Self-note written: {note_id} ({capture_count} captures)")
+    except Exception as e:
+        logger.warning(f"Self-note write failed: {e}")
 
     log_event("session_finalized", {
         "project_id": project_id,
@@ -151,13 +181,14 @@ def main():
         cwd = Path(input_data.get('cwd', str(Path.cwd())))
         project_info = get_project_info(cwd)
         project_id = project_info["project_id"]
+        plugin_root = Path(__file__).parent.parent
 
         logger.info(f"Finalizing session for project {project_id}")
 
         session_data = drain_session_inbox(project_id)
 
         if session_data["tool_captures"]:
-            finalize_session(project_id, session_data)
+            finalize_session(project_id, session_data, plugin_root)
         else:
             logger.debug("No session data to finalize")
 

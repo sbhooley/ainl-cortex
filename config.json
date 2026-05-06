@@ -23,6 +23,21 @@
     "track_quality_scores": true,
     "track_adaptive_decisions": true
   },
+  "a2a": {
+    "enabled": true,
+    "bridge_port": 7860,
+    "bridge_host": "127.0.0.1",
+    "bridge_script": "/Users/clawdbot/.openclaw/workspace/AI_Native_Lang/skills/hermes/armaraos-a2a-bridge/armaraos_a2a_bridge.py",
+    "bridge_pidfile": "a2a/bridge.pid",
+    "bridge_logfile": "a2a/logs/bridge.log",
+    "inbox_max_messages": 50,
+    "inbox_max_age_seconds": 86400,
+    "inbox_max_message_chars": 2000,
+    "self_inbox_urgency": "critical",
+    "self_note_threshold": 5,
+    "thread_recall_n": 5,
+    "monitor_script": "agents/context_monitor.py"
+  },
   "compression": {
     "enabled": true,
     "mode": "balanced",

@@ -51,6 +51,7 @@ try:
     from .persona_engine import PersonaEvolutionEngine
     from .extractor import PatternExtractor, canonicalize_tool_sequence
     from .ainl_tools import AINLTools
+    from .a2a_tools import A2ATools
 except ImportError:
     # Fallback for when run as script
     sys.path.insert(0, str(Path(__file__).parent))
@@ -64,6 +65,7 @@ except ImportError:
     from persona_engine import PersonaEvolutionEngine
     from extractor import PatternExtractor, canonicalize_tool_sequence
     from ainl_tools import AINLTools
+    from a2a_tools import A2ATools
 
 
 class AINLGraphMemoryServer:
@@ -84,6 +86,17 @@ class AINLGraphMemoryServer:
             logger.warning(f"AINL tools not available: {e}")
             self.ainl_tools = None
 
+        # Initialize A2A tools
+        plugin_root = _plugin_root()
+        try:
+            import json as _json
+            config = _json.loads((plugin_root / "config.json").read_text())
+        except Exception:
+            config = {}
+        project_id = self._compute_project_hash(Path.cwd())
+        self.a2a_tools = A2ATools(plugin_root, self.store, project_id, config)
+        logger.info("A2A tools initialized successfully")
+
         logger.info(f"AINL Graph Memory Server initialized with DB: {self.db_path}")
 
     def _get_db_path(self) -> Path:
@@ -95,27 +108,10 @@ class AINLGraphMemoryServer:
         return memory_dir / "ainl_memory.db"
 
     def _compute_project_hash(self, cwd: Path) -> str:
-        """Compute stable project hash"""
+        """Compute stable global project hash (same bucket as hooks)."""
         import hashlib
-        import subprocess
-
-        try:
-            # Try git remote
-            result = subprocess.run(
-                ['git', 'config', '--get', 'remote.origin.url'],
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                remote = result.stdout.strip()
-                return hashlib.sha256(remote.encode()).hexdigest()[:16]
-        except:
-            pass
-
-        # Fallback: hash of cwd
-        return hashlib.sha256(str(cwd.resolve()).encode()).hexdigest()[:16]
+        claude_dir = Path.home() / ".claude"
+        return hashlib.sha256(str(claude_dir.resolve()).encode()).hexdigest()[:16]
 
 
 # Create server instance
@@ -297,6 +293,93 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["source_a", "source_b"]
             }
+        ),
+        # A2A Tools
+        Tool(
+            name="a2a_send",
+            description="Send a message to a registered A2A agent",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "Agent name (must be registered)"},
+                    "message": {"type": "string", "description": "Message text to send"},
+                    "thread_id": {"type": "string", "description": "Optional thread ID for continuity"},
+                    "urgency": {"type": "string", "enum": ["critical", "normal", "low"], "description": "Message urgency", "default": "normal"}
+                },
+                "required": ["to", "message"]
+            }
+        ),
+        Tool(
+            name="a2a_list_agents",
+            description="List all registered A2A agents and their reachability status",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
+            name="a2a_register_agent",
+            description="Register a new A2A agent by name and URL",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Unique agent name"},
+                    "url": {"type": "string", "description": "Agent base URL (http:// or https://)"},
+                    "description": {"type": "string", "description": "What this agent does"},
+                    "capabilities": {"type": "array", "items": {"type": "string"}, "description": "List of capability tags"}
+                },
+                "required": ["name", "url", "description"]
+            }
+        ),
+        Tool(
+            name="a2a_note_to_self",
+            description="Write a note to yourself that will appear in the next session's context",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Note content"},
+                    "context": {"type": "string", "description": "Optional context or reason for the note"}
+                },
+                "required": ["message"]
+            }
+        ),
+        Tool(
+            name="a2a_register_monitor",
+            description="Register a file/condition monitor that triggers A2A notifications",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "File paths or URL patterns to watch"},
+                    "conditions": {"type": "array", "items": {"type": "string"}, "description": "Conditions to watch for (e.g. 'file_changed', 'http_error')"},
+                    "notify_message": {"type": "string", "description": "Message template on trigger (use {condition} placeholder)", "default": "Monitor triggered: {condition}"}
+                },
+                "required": ["paths", "conditions"]
+            }
+        ),
+        Tool(
+            name="a2a_task_send",
+            description="Delegate an async task to an agent and receive a callback when complete",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "Agent name to delegate to"},
+                    "task_description": {"type": "string", "description": "Full task description"},
+                    "callback_urgency": {"type": "string", "enum": ["critical", "normal", "low"], "description": "Urgency of the result callback", "default": "normal"}
+                },
+                "required": ["to", "task_description"]
+            }
+        ),
+        Tool(
+            name="a2a_task_status",
+            description="Check the status of a previously delegated async task",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID returned by a2a_task_send"}
+                },
+                "required": ["task_id"]
+            }
         )
     ]
 
@@ -346,6 +429,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not memory_server.ainl_tools:
                 raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]")
             result = memory_server.ainl_tools.ir_diff(**arguments)
+        # A2A tools
+        elif name == "a2a_send":
+            result = memory_server.a2a_tools.a2a_send(**arguments)
+        elif name == "a2a_list_agents":
+            result = memory_server.a2a_tools.a2a_list_agents()
+        elif name == "a2a_register_agent":
+            result = memory_server.a2a_tools.a2a_register_agent(**arguments)
+        elif name == "a2a_note_to_self":
+            result = memory_server.a2a_tools.a2a_note_to_self(**arguments)
+        elif name == "a2a_register_monitor":
+            result = memory_server.a2a_tools.a2a_register_monitor(**arguments)
+        elif name == "a2a_task_send":
+            result = memory_server.a2a_tools.a2a_task_send(**arguments)
+        elif name == "a2a_task_status":
+            result = memory_server.a2a_tools.a2a_task_status(**arguments)
         else:
             raise ValueError(f"Unknown tool: {name}")
 

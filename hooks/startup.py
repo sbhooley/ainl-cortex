@@ -22,12 +22,14 @@ if _mcp_dir not in sys.path:
 
 from shared.logger import get_logger
 from shared.project_id import get_project_id
+from shared.a2a_inbox import read_self_inbox, clear_self_inbox
 
 logger = get_logger("startup")
 
 TOOL_COUNT_MEMORY = 7
 TOOL_COUNT_AINL = 6
-EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL
+TOOL_COUNT_A2A = 7
+EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL + TOOL_COUNT_A2A
 
 
 def _plugin_root() -> Path:
@@ -196,6 +198,37 @@ def main():
         mcp_ok, mcp_detail = verify_mcp_imports(root)
         venv_file_status = append_venv_to_envfile(root)
 
+        # ── A2A bridge ────────────────────────────────────────────────────────
+        bridge_status = {"running": False, "reason": "not attempted"}
+        try:
+            import json as _json
+            _cfg = _json.loads((root / "config.json").read_text())
+            from a2a_bridge_daemon import ensure_bridge_running
+            bridge_status = ensure_bridge_running(root, _cfg)
+        except Exception as _e:
+            bridge_status = {"running": False, "reason": str(_e)}
+
+        bridge_line = (
+            f"running (pid {bridge_status.get('pid')}, port {bridge_status.get('port')})"
+            if bridge_status.get("running")
+            else f"not running — {bridge_status.get('reason', 'unknown')}"
+        )
+
+        # ── Self-inbox injection ──────────────────────────────────────────────
+        self_notes = read_self_inbox(root)
+        clear_self_inbox(root)
+
+        # ── Monitor trigger injection ─────────────────────────────────────────
+        monitor_triggers = []
+        try:
+            import json as _json
+            triggers_file = root / "a2a" / "monitors" / "recent_triggers.json"
+            if triggers_file.exists():
+                monitor_triggers = _json.loads(triggers_file.read_text()) or []
+                triggers_file.write_text("[]")
+        except Exception:
+            pass
+
         banner = (
             f"[AINL Graph Memory]  Plugin root: {root}\n"
             f"  • Graph DB: {db_s}\n"
@@ -204,19 +237,43 @@ def main():
             f"  • AINL Python tools module: {'yes' if ainl else 'no (optional)'}\n"
             f"  • MCP stack (same venv as server): {'OK' if mcp_ok else 'FAIL – ' + mcp_detail}\n"
             f"  • venv on PATH (child processes): {venv_file_status}\n"
-            f"  • When Claude spawns MCP, expect ~{EXPECTED_MCP_TOOLS} tools (ainl + memory); "
+            f"  • A2A bridge: {bridge_line}\n"
+            f"  • When Claude spawns MCP, expect ~{EXPECTED_MCP_TOOLS} tools (ainl + memory + a2a); "
             f"if missing, /plugin -> Installed -> ainl-graph-memory and /mcp, or /reload-plugins.\n"
         )
 
+        system_blocks = [banner]
+
+        if self_notes:
+            note_lines = ["\n━━━ SELF-NOTE FROM PRIOR SESSION ━━━"]
+            for note in self_notes:
+                import time as _t
+                ts = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(note.get("created_at", 0)))
+                note_lines.append(f"[{ts}] {note.get('message', '')}")
+                if note.get("context"):
+                    note_lines.append(f"  Context: {note['context']}")
+            note_lines.append("━━━ END SELF-NOTE ━━━\n")
+            system_blocks.append("\n".join(note_lines))
+
+        if monitor_triggers:
+            trig_lines = ["\n━━━ PRE-SESSION MONITOR ALERTS ━━━"]
+            for t in monitor_triggers:
+                trig_lines.append(f"  • {t.get('message', str(t))}")
+            trig_lines.append("━━━ END ALERTS ━━━\n")
+            system_blocks.append("\n".join(trig_lines))
+
+        system_message = "\n".join(system_blocks)
+
         additional = (
             f"Session initialized with AINL graph memory. SQLite at {db_path}. "
-            f"MCP preflight: {mcp_detail}."
+            f"MCP preflight: {mcp_detail}. "
+            f"A2A bridge: {'running' if bridge_status.get('running') else 'offline'}."
         )
 
         out = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": banner,
+            "systemMessage": system_message,
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": additional,

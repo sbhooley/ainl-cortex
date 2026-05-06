@@ -37,6 +37,7 @@ class EdgeType(str, Enum):
     EMIT_TO = "EMIT_TO"              # Episode → Output target
     LEARNED_FROM = "LEARNED_FROM"    # Persona → Evidence episodes
     REFERENCES = "REFERENCES"        # Semantic → Referenced entity
+    A2A_THREAD = "A2A_THREAD"        # A2A message → thread (links messages in same thread)
 
 
 @dataclass

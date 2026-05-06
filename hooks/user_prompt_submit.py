@@ -13,8 +13,11 @@ from pathlib import Path
 # Add shared module to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared.project_id import get_project_id
+from shared.project_id import get_project_id, GLOBAL_PROJECT_ID
 from shared.logger import log_event, log_error, get_logger
+from shared.a2a_inbox import read_inbox, clear_inbox
+from shared.a2a_log import append_log
+from shared.a2a_graph import store_message_node, query_thread_history
 
 logger = get_logger("user_prompt_submit")
 
@@ -300,6 +303,87 @@ def main():
             compress=use_memory_compression
         )
 
+        # ── A2A inbox injection ───────────────────────────────────────────────
+        plugin_root = Path(__file__).parent.parent
+        a2a_blocks = {"critical": [], "normal": [], "low": []}
+        a2a_cfg = {}
+        try:
+            import json as _json
+            a2a_cfg = _json.loads((plugin_root / "config.json").read_text()).get("a2a", {})
+        except Exception:
+            pass
+
+        if a2a_cfg.get("enabled", True):
+            inbox_dir = plugin_root / "a2a" / "inbox"
+            db_path = Path.home() / ".claude" / "projects" / GLOBAL_PROJECT_ID / "graph_memory" / "ainl_memory.db"
+            messages = read_inbox(
+                inbox_dir,
+                max_messages=a2a_cfg.get("inbox_max_messages", 50),
+                max_age_seconds=a2a_cfg.get("inbox_max_age_seconds", 86400),
+                max_message_chars=a2a_cfg.get("inbox_max_message_chars", 2000),
+            )
+
+            if messages:
+                seen_threads = {}
+                for msg in messages:
+                    urgency = msg.get("urgency", "normal")
+                    from_agent = msg.get("from_agent", "unknown")
+                    thread_id = msg.get("thread_id")
+                    msg_text = msg.get("message", "")
+                    msg_type = msg.get("type", "message")
+
+                    # Graph write
+                    store_message_node(
+                        db_path, GLOBAL_PROJECT_ID,
+                        "inbound", from_agent, "claude-code",
+                        thread_id, urgency, msg_text,
+                    )
+                    # Log write
+                    append_log(
+                        plugin_root, "IN", from_agent, "claude-code",
+                        thread_id or "none", urgency, msg_text[:120],
+                    )
+
+                    # Thread history (recall once per unique thread)
+                    thread_context = ""
+                    if thread_id and thread_id not in seen_threads:
+                        history = query_thread_history(db_path, GLOBAL_PROJECT_ID, thread_id, n=a2a_cfg.get("thread_recall_n", 5))
+                        if history:
+                            lines = [f"  Prior context with {from_agent} (thread {thread_id[:8]}):"]
+                            for h in history[:3]:
+                                lines.append(f"    - {h.data.get('fact', '')[:100]}")
+                            thread_context = "\n".join(lines)
+                            seen_threads[thread_id] = thread_context
+
+                    type_label = "TASK RESULT" if msg_type == "task_result" else "MESSAGE"
+                    entry = f"[A2A {type_label} from {from_agent}]"
+                    if thread_id:
+                        entry += f" (thread:{thread_id[:8]})"
+                    entry += f"\n{msg_text}"
+                    if thread_context:
+                        entry += f"\n{thread_context}"
+
+                    tier = urgency if urgency in a2a_blocks else "normal"
+                    a2a_blocks[tier].append(entry)
+
+                clear_inbox(inbox_dir)
+                logger.info(f"Injected {len(messages)} A2A messages (critical:{len(a2a_blocks['critical'])} normal:{len(a2a_blocks['normal'])} low:{len(a2a_blocks['low'])})")
+
+        # ── Assemble system message ───────────────────────────────────────────
+        system_parts = []
+
+        if a2a_blocks["critical"]:
+            block = "\n\n".join(a2a_blocks["critical"])
+            system_parts.append(f"━━━ CRITICAL A2A MESSAGES ━━━\n{block}\n━━━ END CRITICAL ━━━")
+
+        if brief.strip() and len(brief) > len("## Relevant Graph Memory\n\n"):
+            system_parts.append(brief)
+
+        other_a2a = a2a_blocks["normal"] or a2a_blocks["low"]
+        if other_a2a:
+            block = "\n\n".join(a2a_blocks["normal"] + a2a_blocks["low"])
+            system_parts.append(f"── A2A Inbox ──\n{block}\n── End Inbox ──")
+
         # Prepare result
         result = {}
 
@@ -308,17 +392,14 @@ def main():
             result["prompt"] = compressed_prompt
             logger.info(f"✅ User prompt compressed: {prompt_compression_metrics['tokens_saved']} tokens saved ({prompt_compression_metrics['savings_pct']:.0f}%)")
 
-        # Only inject memory context if we have meaningful content
-        if brief.strip() and len(brief) > len("## Relevant Graph Memory\n\n"):
-            result["systemMessage"] = brief
-            logger.info(f"Injected {len(brief)} chars of memory context")
+        # Inject system message if we have anything
+        assembled = "\n\n".join(system_parts)
+        if assembled.strip():
+            result["systemMessage"] = assembled
+            logger.info(f"Injected {len(assembled)} chars of context")
 
-            # Add compression badge if memory compression was used
-            if memory_compression_metrics and memory_compression_metrics['tokens_saved'] > 0:
-                savings_pct = memory_compression_metrics['savings_pct']
-                logger.info(f"⚡ eco: {savings_pct:.0f}% token savings on memory context")
-        else:
-            logger.debug("No memory context to inject")
+        if memory_compression_metrics and memory_compression_metrics.get('tokens_saved', 0) > 0:
+            logger.info(f"⚡ eco: {memory_compression_metrics['savings_pct']:.0f}% savings on memory context")
 
         # Log event with both compression metrics
         log_event("user_prompt_submit", {
