@@ -51,6 +51,10 @@ def _a2a_client():
     )
     return send_to_agent, list_a2a_agents, get_agent_card, is_bridge_alive, get_task_status, discover_daemon
 
+def _send(agent_id: str, text: str, daemon_json: str, cache: str, timeout: float = 60.0):
+    send_to_agent, *_ = _a2a_client()
+    return send_to_agent(agent_id, text, daemon_json_path=daemon_json, cache_file=cache, timeout=timeout)
+
 
 def _atomic_write(path: Path, data) -> None:
     tmp = path.with_suffix(".tmp")
@@ -72,6 +76,7 @@ class A2ATools:
         self.project_id = project_id
         self.cfg = config.get("a2a", {})
         self.daemon_json = self.cfg.get("daemon_json", "~/.armaraos/daemon.json")
+        self.daemon_cache = str(plugin_root / "a2a" / "openfang_url.json")
         self.registry_path = plugin_root / "a2a" / "agents" / "registry.json"
         self.tasks_dir = plugin_root / "a2a" / "tasks"
         self.monitors_path = plugin_root / "a2a" / "monitors" / "monitor_configs.json"
@@ -93,7 +98,7 @@ class A2ATools:
 
     def _daemon_url(self) -> Optional[str]:
         _, _, _, _, _, discover_daemon = _a2a_client()
-        base_url, _ = discover_daemon(self.daemon_json)
+        base_url, _ = discover_daemon(self.daemon_json, cache_file=self.daemon_cache)
         return base_url
 
     # ── a2a_send ──────────────────────────────────────────────────────────────
@@ -123,13 +128,7 @@ class A2ATools:
             f"{message}"
         )
 
-        send_to_agent_fn, _, _, _, _, _ = _a2a_client()
-        result = send_to_agent_fn(
-            agent_id=agent_id or to,
-            message_text=full_text,
-            daemon_json_path=self.daemon_json,
-            timeout=8.0,
-        )
+        result = _send(agent_id or to, full_text, self.daemon_json, self.daemon_cache, timeout=60.0)
 
         if result.get("error"):
             _a2a_log()(self.plugin_root, "OUT", "claude-code", to, tid, urgency, message[:120], status="fail")
@@ -159,12 +158,12 @@ class A2ATools:
         _, list_armaraos_agents, _, _, _, _ = _a2a_client()
 
         daemon_url = self._daemon_url()
-        daemon_running = daemon_url is not None and self._daemon_alive()
+        daemon_running = daemon_url is not None
 
         # Fetch live agent list from ArmaraOS
         armaraos_agents = {}
         if daemon_running:
-            result = list_armaraos_agents(daemon_json_path=self.daemon_json, timeout=3.0)
+            result = list_armaraos_agents(daemon_json_path=self.daemon_json, cache_file=self.daemon_cache, timeout=3.0)
             for ag in result.get("agents", []):
                 armaraos_agents[ag.get("name", ag.get("id", ""))] = ag
 
@@ -307,14 +306,7 @@ class A2ATools:
             f"{task_description}"
         )
 
-        send_to_agent_fn, _, _, _, _, _ = _a2a_client()
-        result = send_to_agent_fn(
-            agent_id=agent_id,
-            message_text=full_text,
-            daemon_json_path=self.daemon_json,
-            timeout=8.0,
-        )
-
+        result = _send(agent_id, full_text, self.daemon_json, self.daemon_cache, timeout=60.0)
         send_ok = "error" not in result
         armaraos_task_id = result.get("task_id")
 

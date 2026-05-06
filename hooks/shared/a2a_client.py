@@ -15,6 +15,7 @@ ArmaraOS native endpoints used:
 import json
 import os
 import socket
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -55,34 +56,63 @@ def _scan_openfang_port() -> Optional[int]:
     return None
 
 
-def discover_daemon(daemon_json_path: Optional[str] = None) -> Tuple[Optional[str], Optional[int]]:
+_URL_CACHE_TTL = 1800  # 30 minutes
+
+
+def discover_daemon(
+    daemon_json_path: Optional[str] = None,
+    cache_file: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[int]]:
     """
     Discover the ArmaraOS daemon URL and PID.
 
-    Strategy:
-    1. Read daemon.json for listen_addr + pid
-    2. If that port is reachable → return it
-    3. Otherwise scan lsof for a live openfang process
+    Strategy (fastest first):
+    1. Plugin-local cache (a2a/openfang_url.json) written by startup hook — valid 30 min
+    2. daemon.json recorded listen_addr — check if port is still open
+    3. lsof scan for live openfang process (dynamic port on restart)
     """
+    # ── 1. Plugin-local cache ─────────────────────────────────────────────────
+    if cache_file:
+        try:
+            cache = json.loads(Path(cache_file).read_text())
+            age = time.time() - cache.get("discovered_at", 0)
+            if age < _URL_CACHE_TTL:
+                base_url = cache.get("base_url", "")
+                pid = cache.get("pid")
+                if base_url:
+                    # Quick TCP probe to confirm still alive
+                    host, _, port_str = base_url.rstrip("/").rpartition(":")
+                    host = host.replace("http://", "")
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.settimeout(0.5)
+                        if s.connect_ex((host, int(port_str))) == 0:
+                            s.close()
+                            return base_url, pid
+                        s.close()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # ── 2. daemon.json ────────────────────────────────────────────────────────
     d = _read_daemon_json(daemon_json_path)
     pid = d.get("pid") if d else None
-
     if d:
         listen = d.get("listen_addr", "")
         if listen:
             host, _, port_str = listen.rpartition(":")
             try:
-                port = int(port_str)
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(1.0)
-                reachable = s.connect_ex((host, port)) == 0
+                reachable = s.connect_ex((host, int(port_str))) == 0
                 s.close()
                 if reachable:
                     return f"http://{listen}", pid
             except Exception:
                 pass
 
-    # Fallback: scan for live openfang process
+    # ── 3. lsof scan ─────────────────────────────────────────────────────────
     live_port = _scan_openfang_port()
     if live_port:
         return f"http://127.0.0.1:{live_port}", pid
@@ -184,13 +214,14 @@ def send_to_agent(
     agent_id: str,
     message_text: str,
     daemon_json_path: Optional[str] = None,
+    cache_file: Optional[str] = None,
     timeout: float = 60.0,
 ) -> Dict[str, Any]:
     """
     Send a message to a specific ArmaraOS agent by UUID.
     Uses POST /api/agents/{id}/message which returns {"response": "...", ...}.
     """
-    daemon_url, _ = discover_daemon(daemon_json_path)
+    daemon_url, _ = discover_daemon(daemon_json_path, cache_file=cache_file)
     if not daemon_url:
         return {"error": "ArmaraOS daemon not found — is openfang running?", "reachable": False}
     result = _post_json(
@@ -223,10 +254,11 @@ def get_task_status(
 
 def list_a2a_agents(
     daemon_json_path: Optional[str] = None,
+    cache_file: Optional[str] = None,
     timeout: float = 3.0,
 ) -> Dict[str, Any]:
     """List agents available via the ArmaraOS A2A protocol."""
-    daemon_url, _ = discover_daemon(daemon_json_path)
+    daemon_url, _ = discover_daemon(daemon_json_path, cache_file=cache_file)
     if not daemon_url:
         return {"error": "ArmaraOS daemon not found", "reachable": False}
     return _get_json(f"{daemon_url}/a2a/agents", timeout=timeout)
