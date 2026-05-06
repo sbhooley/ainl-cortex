@@ -8,6 +8,7 @@ Follows AINL retrieval pattern: compact, ranked, project-scoped.
 
 import sys
 import json
+import time
 from pathlib import Path
 
 # Add shared module to path
@@ -261,6 +262,49 @@ def compress_user_prompt(prompt: str, project_id: str, config) -> tuple:
         return prompt, None
 
 
+def record_prompt_summary(project_id: str, prompt: str) -> None:
+    """
+    Append a condensed prompt record to the project's prompt history file.
+
+    Captures: timestamp, first 300 chars, file names mentioned, and
+    technical identifiers (snake_case names, dot-extensions) for later
+    semantic mining by write_semantics() in stop.py.
+
+    Rotates automatically — keeps the last 300 entries.
+    """
+    import re as _re
+
+    inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    hist_file = inbox_dir / f"{project_id}_prompts.jsonl"
+
+    # High-signal extractions
+    file_refs = list(set(_re.findall(r'\b[\w./-]+\.\w{2,6}\b', prompt)))[:15]
+    tech_ids  = list(set(_re.findall(r'\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}\b', prompt)))[:15]
+    action    = _re.search(
+        r'\b(fix|debug|add|create|update|remove|refactor|implement|optimize|test|deploy|send|register)\b',
+        prompt.lower()
+    )
+
+    record = {
+        "ts": int(time.time()),
+        "text": prompt[:300],
+        "files": file_refs,
+        "tech_ids": tech_ids,
+        "action": action.group(1) if action else None,
+        "length": len(prompt),
+    }
+
+    try:
+        lines = hist_file.read_text().strip().splitlines() if hist_file.exists() else []
+        lines.append(json.dumps(record))
+        if len(lines) > 300:
+            lines = lines[-300:]
+        hist_file.write_text('\n'.join(lines) + '\n')
+    except Exception as e:
+        logger.debug(f"Prompt history write failed (non-fatal): {e}")
+
+
 def main():
     """Main hook entry point"""
     try:
@@ -410,6 +454,12 @@ def main():
             "prompt_compression": prompt_compression_metrics,
             "memory_compression": memory_compression_metrics
         })
+
+        # Record prompt summary for cross-session semantic mining
+        try:
+            record_prompt_summary(project_id, prompt)
+        except Exception:
+            pass
 
         # Output result as JSON
         print(json.dumps(result), file=sys.stdout)

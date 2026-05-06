@@ -194,6 +194,7 @@ def write_semantics(store, project_id: str) -> int:
     """
     from collections import Counter
     from node_types import create_semantic_node, NodeType
+    # Counter is also used in prompt mining section below (imported as _Counter there)
 
     MIN_EP = 3    # minimum episode occurrences for a file/tool fact
     MIN_FAIL = 2  # minimum failure occurrences for a failure fact
@@ -287,6 +288,83 @@ def write_semantics(store, project_id: str) -> int:
             f"({partial_count}/{n_ep} sessions ended partial/error)",
             partial_count / n_ep,
         ))
+
+    # ── Prompt history mining ─────────────────────────────────────────────────
+    import re as _re
+    hist_file = (
+        Path.home() / ".claude" / "plugins" / "ainl-graph-memory"
+        / "inbox" / f"{project_id}_prompts.jsonl"
+    )
+    if hist_file.exists():
+        try:
+            prompt_records = []
+            for line in hist_file.read_text().strip().splitlines():
+                try:
+                    prompt_records.append(json.loads(line))
+                except Exception:
+                    pass
+
+            n_p = len(prompt_records)
+            if n_p >= 5:
+                _Counter = Counter
+
+                STOPWORDS = {
+                    'which', 'there', 'their', 'about', 'would', 'could', 'should',
+                    'make', 'into', 'also', 'just', 'like', 'then', 'than', 'some',
+                    'your', 'been', 'were', 'they', 'them', 'does', 'dont', 'cant',
+                    'that', 'this', 'with', 'from', 'have', 'what', 'when', 'will',
+                    'plugin', 'claude', 'using', 'right', 'going', 'need', 'want',
+                    'think', 'know', 'understand', 'something', 'anything', 'everything',
+                }
+
+                # File names mentioned in prompts
+                pfile_counts: Counter = _Counter()
+                for rec in prompt_records:
+                    for f in rec.get("files", []):
+                        pfile_counts[Path(f).name] += 1
+
+                # Technical identifiers (snake_case names)
+                tech_counts: Counter = _Counter()
+                for rec in prompt_records:
+                    for t in rec.get("tech_ids", []):
+                        if len(t) >= 6 and t not in STOPWORDS:
+                            tech_counts[t] += 1
+
+                # Action verbs — what the user most often requests
+                action_counts: Counter = _Counter()
+                for rec in prompt_records:
+                    if rec.get("action"):
+                        action_counts[rec["action"]] += 1
+
+                # Promote prompt-derived facts
+                for fname, count in pfile_counts.most_common(10):
+                    if count >= MIN_EP:
+                        conf = min(count / n_p, 1.0)
+                        candidates.append((
+                            f"File '{fname}' is frequently referenced in user prompts "
+                            f"({count}/{n_p} prompts)",
+                            conf,
+                        ))
+
+                for tid, count in tech_counts.most_common(8):
+                    if count >= MIN_EP:
+                        conf = min(count / n_p, 1.0)
+                        candidates.append((
+                            f"'{tid}' is a frequently discussed technical concept "
+                            f"({count}/{n_p} prompts)",
+                            conf,
+                        ))
+
+                top_actions = [a for a, _ in action_counts.most_common(3) if action_counts[a] >= MIN_EP]
+                if top_actions:
+                    candidates.append((
+                        f"Most requested operations in this project: "
+                        f"{', '.join(top_actions)} "
+                        f"(across {n_p} prompts)",
+                        0.8,
+                    ))
+        except Exception as e:
+            logger.debug(f"Prompt history mining failed (non-fatal): {e}")
 
     # ── Dedup against existing semantic nodes ─────────────────────────────────
     # Use first 50 chars of existing facts as fingerprints

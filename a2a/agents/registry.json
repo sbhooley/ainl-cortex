@@ -1,1 +1,11 @@
-[]
+{
+  "ELF": {
+    "name": "ELF",
+    "agent_id": null,
+    "url": "",
+    "description": "ArmaraOS ELF agent",
+    "capabilities": [],
+    "registered_at": 1778072775,
+    "last_seen_at": 1778072778
+  }
+}
