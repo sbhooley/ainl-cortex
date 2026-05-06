@@ -145,39 +145,36 @@ class MemoryRetrieval:
         - persona_traits: Active persona axes
         """
 
-        # Recent episodes (last 7 days)
-        week_ago = int(time.time()) - (7 * 86400)
-        episodes = self.store.query_episodes_since(week_ago, limit=20, project_id=context.project_id)
+        # Recent episodes (last 30 days; include partial outcomes)
+        month_ago = int(time.time()) - (30 * 86400)
+        episodes = self.store.query_episodes_since(month_ago, limit=20, project_id=context.project_id)
         ranked_episodes = self.rank_nodes(episodes, context)
-        recent_episodes = [
-            node.to_dict() for node, score in ranked_episodes[:5]
-            if node.data.get('outcome') == 'success'
-        ]
+        recent_episodes = [node.to_dict() for node, score in ranked_episodes[:5]]
 
-        # Semantic facts (high confidence, topic-ranked)
+        # Semantic facts — lower confidence floor so new nodes aren't filtered out
         semantics = self.store.query_by_type(
             NodeType.SEMANTIC,
             context.project_id,
             limit=100,
-            min_confidence=0.5
+            min_confidence=0.3
         )
         ranked_semantics = self.rank_nodes(semantics, context)
         relevant_facts = [node.to_dict() for node, score in ranked_semantics[:10]]
 
-        # Procedural patterns (high fitness)
+        # Procedural patterns — lower thresholds so early patterns are usable
         procedurals = self.store.query_by_type(
             NodeType.PROCEDURAL,
             context.project_id,
             limit=50,
-            min_confidence=0.7
+            min_confidence=0.3
         )
         ranked_procedurals = self.rank_nodes(procedurals, context)
         applicable_patterns = [
             node.to_dict() for node, score in ranked_procedurals[:5]
-            if node.data.get('fitness', 0) > 0.7
+            if node.data.get('fitness', 0) > 0.2
         ]
 
-        # Failures (unresolved, matching files)
+        # Failures — show all unresolved for this project (don't gate on files_mentioned)
         failures = self.store.query_by_type(
             NodeType.FAILURE,
             context.project_id,
@@ -186,7 +183,6 @@ class MemoryRetrieval:
         known_failures = [
             node.to_dict() for node in failures
             if not node.data.get('resolved_at')
-            and node.data.get('file') in context.files_mentioned
         ][:5]
 
         # Persona traits (active, high strength)

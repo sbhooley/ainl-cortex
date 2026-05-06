@@ -2,16 +2,17 @@
 """
 Stop Hook - Session Finalization
 
-Finalizes session, creates episode node, runs extraction.
-Follows AINL pattern: episode write + extraction + persona evolution.
+Finalizes session, writes episode node to SQLite graph store.
 """
 
 import sys
 import json
-from pathlib import Path
+import uuid
 import time
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
 from shared.project_id import get_project_id, get_project_info
 from shared.logger import log_event, log_error, get_logger
@@ -20,11 +21,7 @@ logger = get_logger("stop")
 
 
 def drain_session_inbox(project_id: str) -> dict:
-    """
-    Drain buffered captures from inbox.
-
-    Returns session data aggregated from all captures.
-    """
+    """Drain buffered captures from inbox, return aggregated session data."""
     inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
     inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
 
@@ -45,65 +42,93 @@ def drain_session_inbox(project_id: str) -> dict:
                 if line.strip():
                     capture = json.loads(line)
                     session_data["tool_captures"].append(capture)
-
-                    # Aggregate data
                     session_data["tools_used"].add(capture.get("tool", "unknown"))
-
                     file = capture.get("file")
                     if file:
                         session_data["files_touched"].add(file)
-
                     if not capture.get("success", True):
                         session_data["had_errors"] = True
 
-        # Clear inbox after reading
         inbox_file.unlink()
-
         logger.info(f"Drained {len(session_data['tool_captures'])} captures")
 
     except Exception as e:
         logger.warning(f"Failed to drain inbox: {e}")
 
-    # Convert sets to lists for JSON serialization
     session_data["files_touched"] = list(session_data["files_touched"])
     session_data["tools_used"] = list(session_data["tools_used"])
-
     return session_data
 
 
 def create_episode_summary(session_data: dict) -> str:
-    """Generate task description summary from session"""
-    tools_count = len(session_data["tools_used"])
-    files_count = len(session_data["files_touched"])
+    """Generate human-readable task description from session data."""
+    tools = [t for t in session_data["tools_used"] if t]
+    files = session_data["files_touched"]
 
-    # Basic summary
-    summary = f"Coding session: {tools_count} tools, {files_count} files"
+    parts = []
+    if tools:
+        parts.append(f"tools: {', '.join(sorted(tools)[:5])}")
+    if files:
+        parts.append(f"files: {', '.join(Path(f).name for f in files[:3])}")
 
-    # Add specific details
+    summary = "Session — " + "; ".join(parts) if parts else "Session"
     if session_data["had_errors"]:
-        summary += " (encountered errors)"
-
+        summary += " (with errors)"
     return summary
 
 
-def finalize_session(project_id: str, session_data: dict) -> None:
-    """
-    Finalize session by creating episode and triggering extraction.
-
-    This would call MCP server in production.
-    For now, we just log the intent.
-    """
-    # TODO: Implement MCP client call when integrated
+def write_episode(project_id: str, session_data: dict) -> None:
+    """Write episode node directly to SQLite graph store."""
+    from graph_store import SQLiteGraphStore
+    from node_types import GraphNode, NodeType
 
     task_summary = create_episode_summary(session_data)
     outcome = "partial" if session_data["had_errors"] else "success"
+    now = int(time.time())
 
-    logger.info(
-        f"Would create episode: project={project_id}, "
-        f"task={task_summary}, outcome={outcome}"
+    db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    store = SQLiteGraphStore(db_path)
+
+    node = GraphNode(
+        id=str(uuid.uuid4()),
+        node_type=NodeType.EPISODE,
+        project_id=project_id,
+        agent_id="claude-code",
+        created_at=now,
+        updated_at=now,
+        confidence=1.0,
+        data={
+            "turn_id": str(uuid.uuid4()),
+            "task_description": task_summary,
+            "tool_calls": session_data["tools_used"],
+            "files_touched": session_data["files_touched"],
+            "outcome": outcome,
+            "duration_ms": 0,
+            "git_commit": None,
+            "test_results": None,
+            "session_id": None,
+            "error_message": None
+        },
+        metadata={},
+        embedding_text=task_summary
     )
 
-    # Log structured data for later processing
+    store.write_node(node)
+    logger.info(f"Created episode: project={project_id}, task={task_summary}, outcome={outcome}")
+
+
+def finalize_session(project_id: str, session_data: dict) -> None:
+    """Write episode and log structured event."""
+    task_summary = create_episode_summary(session_data)
+    outcome = "partial" if session_data["had_errors"] else "success"
+
+    try:
+        write_episode(project_id, session_data)
+    except Exception as e:
+        logger.warning(f"Episode write failed: {e}")
+
     log_event("session_finalized", {
         "project_id": project_id,
         "task_summary": task_summary,
@@ -117,39 +142,34 @@ def finalize_session(project_id: str, session_data: dict) -> None:
 def main():
     """Main hook entry point"""
     try:
-        # Read input (may be empty for Stop hook)
         try:
             input_data = json.load(sys.stdin)
         except json.JSONDecodeError:
             input_data = {}
 
-        # Get project info
-        project_info = get_project_info()
+        # Use cwd from payload — hooks run with cd to plugin root
+        cwd = Path(input_data.get('cwd', str(Path.cwd())))
+        project_info = get_project_info(cwd)
         project_id = project_info["project_id"]
 
         logger.info(f"Finalizing session for project {project_id}")
 
-        # Drain session inbox
         session_data = drain_session_inbox(project_id)
 
-        # Finalize if we have meaningful data
         if session_data["tool_captures"]:
             finalize_session(project_id, session_data)
         else:
             logger.debug("No session data to finalize")
 
-        # No output needed
         print(json.dumps({}), file=sys.stdout)
 
     except Exception as e:
-        # Fail gracefully
         log_error("stop_error", e, {
             "project_id": project_id if 'project_id' in locals() else None
         })
         print(json.dumps({}), file=sys.stdout)
 
     finally:
-        # Always exit 0
         sys.exit(0)
 
 

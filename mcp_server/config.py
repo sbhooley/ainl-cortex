@@ -19,6 +19,87 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge override into base (override wins for scalars/lists)."""
+    out = dict(base)
+    for key, val in override.items():
+        if (
+            key in out
+            and isinstance(out[key], dict)
+            and isinstance(val, dict)
+        ):
+            out[key] = _deep_merge(out[key], val)
+        else:
+            out[key] = val
+    return out
+
+
+# Full defaults used when config.json is missing or partial (nested keys merge).
+DEFAULT_PLUGIN_CONFIG: dict = {
+    "features": {
+        "graph_memory": True,
+        "context_injection": True,
+        "trajectory_capture": True,
+        "session_hooks": True,
+        "pattern_learning": True,
+        "failure_learning": True,
+        "persona_evolution": True,
+        "semantic_facts": True,
+        "user_prompt_compression": True,
+        "memory_context_compression": True,
+    },
+    "compression": {
+        "enabled": True,
+        "mode": "balanced",
+        "compress_memory_context": True,
+        "compress_user_prompt": True,
+        "compress_output": False,
+        "min_tokens_for_compression": 80,
+        "adaptive_eco": {
+            "enabled": True,
+            "min_confidence": 0.7,
+            "hysteresis_count": 2,
+        },
+        "semantic_scoring": {
+            "enabled": True,
+            "min_overall_score": 0.70,
+            "min_key_term_retention": 0.80,
+            "track_quality": True,
+        },
+        "project_profiles": {
+            "enabled": True,
+            "auto_detect_mode": True,
+            "min_compressions_for_detection": 5,
+        },
+        "cache_awareness": {
+            "enabled": True,
+            "cache_ttl": 300,
+            "hysteresis_duration": 120,
+            "preserve_warm_cache": True,
+            "prefer_cache_hits": True,
+        },
+        "output": {
+            "enabled": False,
+            "mode": "balanced",
+            "min_length_tokens": 200,
+            "show_badge": False,
+        },
+    },
+    "memory": {
+        "max_context_tokens": 800,
+        "project_isolation": True,
+        "enable_persona_evolution": True,
+        "enable_pattern_extraction": True,
+    },
+    "telemetry": {
+        "track_compression_savings": True,
+        "log_compression_details": False,
+        "track_quality_scores": True,
+        "track_adaptive_decisions": True,
+    },
+}
+
+
 class PluginConfig:
     """Plugin configuration singleton"""
 
@@ -43,75 +124,17 @@ class PluginConfig:
         self.config = self._load_config()
 
     def _load_config(self) -> dict:
-        """Load configuration from file"""
+        """Load configuration from file and deep-merge with DEFAULT_PLUGIN_CONFIG."""
         if self.config_path.exists():
             try:
                 with open(self.config_path, 'r') as f:
-                    return json.load(f)
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    return _deep_merge(DEFAULT_PLUGIN_CONFIG, loaded)
             except Exception as e:
                 logger.warning(f"Failed to load config: {e}, using defaults")
 
-        # Default configuration
-        return {
-            "compression": {
-                "enabled": True,
-                "mode": "aggressive",  # off, balanced, aggressive
-                "compress_memory_context": True,
-                "compress_user_prompt": False,  # Optional: compress user input
-                "compress_output": False,  # Compress Claude's responses
-                "min_tokens_for_compression": 80,
-
-                # Adaptive eco mode
-                "adaptive_eco": {
-                    "enabled": True,
-                    "min_confidence": 0.7,  # Min confidence to override manual mode
-                    "hysteresis_count": 2  # Consistent recommendations before switching
-                },
-
-                # Semantic preservation scoring
-                "semantic_scoring": {
-                    "enabled": True,
-                    "min_overall_score": 0.70,  # Fallback if score too low
-                    "min_key_term_retention": 0.80,  # Min key term preservation
-                    "track_quality": True
-                },
-
-                # Per-project profiles
-                "project_profiles": {
-                    "enabled": True,
-                    "auto_detect_mode": True,  # Auto-detect best mode per project
-                    "min_compressions_for_detection": 5
-                },
-
-                # Cache awareness
-                "cache_awareness": {
-                    "enabled": True,
-                    "cache_ttl": 300,  # 5 minutes (Anthropic/OpenAI default)
-                    "hysteresis_duration": 120,  # 2 minutes before mode switch
-                    "preserve_warm_cache": True
-                },
-
-                # Output compression
-                "output": {
-                    "enabled": False,
-                    "mode": "balanced",
-                    "min_length_tokens": 200,
-                    "show_badge": False  # Show compression savings badge
-                }
-            },
-            "memory": {
-                "max_context_tokens": 800,
-                "project_isolation": True,
-                "enable_persona_evolution": True,
-                "enable_pattern_extraction": True
-            },
-            "telemetry": {
-                "track_compression_savings": True,
-                "log_compression_details": False,
-                "track_quality_scores": True,
-                "track_adaptive_decisions": True
-            }
-        }
+        return _deep_merge({}, DEFAULT_PLUGIN_CONFIG)
 
     def save_config(self) -> None:
         """Save configuration to file"""
@@ -124,10 +147,10 @@ class PluginConfig:
             logger.error(f"Failed to save config: {e}")
 
     def get_compression_mode(self) -> EfficientMode:
-        """Get current compression mode (default: aggressive)"""
-        mode_str = self._compression().get("mode", "aggressive")
+        """Get current compression mode (default: balanced)."""
+        mode_str = self._compression().get("mode", "balanced")
         if not isinstance(mode_str, str):
-            mode_str = "aggressive"
+            mode_str = "balanced"
         return EfficientMode.parse_config(mode_str)
 
     def set_compression_mode(self, mode: str) -> None:

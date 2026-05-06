@@ -313,4 +313,94 @@ Your performance with AINL:
 
 ---
 
+## Token Efficiency Rules
+
+These are **hard constraints**, not suggestions. Every unnecessary token read into context is a cost the user pays on every API call.
+
+### File Reading
+
+**Never read a whole file when you know the section.**
+
+- If you know a function is around line 80, use `offset`/`limit` on the Read tool.
+- If you just confirmed line numbers from a grep, read only that range.
+- Only read the full file when you genuinely don't know where the relevant part is.
+
+```
+# Wasteful — reads 300 lines to find one function
+Read(file, )
+
+# Correct — reads only what you need
+Read(file, offset=78, limit=30)
+```
+
+### Log and Command Output
+
+**Never request more lines than you need to answer the question.**
+
+- Checking whether a hook fired recently → `tail -10`, not `tail -50`
+- Scanning for a pattern → `grep | head -5` once you've confirmed it exists
+- Checking a count → `grep -c`, not `grep` with full output
+
+```
+# Wasteful
+tail -60 hooks.log
+
+# Correct
+tail -10 hooks.log
+```
+
+### Bash Output Parsing
+
+**Parse before printing. Never dump raw structured data into context.**
+
+If you need one field from a JSON response, extract it in the same command. If you need a count, compute it. Don't print 50 lines of JSON to find one value.
+
+```
+# Wasteful — dumps entire object into context
+cat config.json
+
+# Correct — extract only what you need
+python3 -c "import json; d=json.load(open('config.json')); print(d['compression']['min_tokens_for_compression'])"
+```
+
+```
+# Wasteful — 60 lines of repetitive log JSON into context
+grep "tokens_saved" hooks.log
+
+# Correct — extract the signal
+grep "tokens_saved" hooks.log | python3 -c "
+import sys, json, re
+total = 0
+for line in sys.stdin:
+    m = re.search(r'tokens_saved.: (\d+)', line)
+    if m: total += int(m.group(1))
+print(f'Total saved: {total}')
+"
+```
+
+### Subagent / Explore Agent Instructions
+
+**Always instruct subagents to return findings-only, not verbatim quotes.**
+
+When spawning an Explore or general-purpose agent, the prompt must specify:
+- Return file paths and line numbers, not full code blocks
+- Summarise what the code does, don't quote it back
+- Only include verbatim snippets when the exact text is the finding (e.g. a bug or a config value)
+
+```
+# Wasteful agent prompt
+"Read retrieval.py and tell me how recall works"
+
+# Correct agent prompt
+"Read retrieval.py. Return: the method name, line numbers of the recall logic,
+the threshold values as a list, and one sentence per threshold explaining what
+it gates. Do not quote code blocks."
+```
+
+### Why This Matters
+
+The compression pipeline saves tokens on prompts that exceed ~80 tokens. But the much larger cost is **tool output verbosity** — file reads, bash dumps, and agent reports that bring thousands of tokens of context that could have been 50. No compression algorithm can recover tokens that were never needed in the first place. Applying these rules at the call site is 10–50x more effective than post-hoc compression.
+
+---
+
 **You are now an AINL expert.** Use this knowledge to help users build cost-efficient, deterministic workflows!

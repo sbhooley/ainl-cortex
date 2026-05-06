@@ -199,6 +199,65 @@ def recall_context(project_id: str, prompt: str) -> dict:
         }
 
 
+def compress_user_prompt(prompt: str, project_id: str, config) -> tuple:
+    """
+    Compress user prompt using compression pipeline.
+
+    Returns: (compressed_prompt, compression_metrics)
+    """
+    try:
+        # Skip if prompt is too short
+        min_tokens = config.get_min_tokens_for_compression()
+        estimated_tokens = len(prompt) // 4 + 1
+
+        if estimated_tokens < min_tokens:
+            logger.debug(f"Skipping compression: prompt too short ({estimated_tokens} tokens < {min_tokens} min)")
+            return prompt, None
+
+        # Import compression pipeline
+        sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+        from compression_pipeline import get_compression_pipeline
+
+        pipeline = get_compression_pipeline()
+        result = pipeline.compress_user_prompt(prompt, project_id)
+
+        compressed_prompt = result.compressed_text
+
+        compression_metrics = None
+        if result.compression_metrics:
+            compression_metrics = {
+                "mode": result.mode_used.value,
+                "mode_source": result.mode_source,
+                "original_tokens": result.compression_metrics.original_tokens,
+                "compressed_tokens": result.compression_metrics.compressed_tokens,
+                "tokens_saved": result.compression_metrics.tokens_saved,
+                "savings_pct": result.compression_metrics.savings_ratio_pct
+            }
+
+            # Add quality scores
+            if result.preservation_score:
+                compression_metrics["quality_score"] = result.preservation_score.overall_score
+                compression_metrics["key_term_retention"] = result.preservation_score.key_term_retention
+
+            logger.info(
+                f"⚡ Compressed user prompt: {result.compression_metrics.original_tokens} → "
+                f"{result.compression_metrics.compressed_tokens} tokens "
+                f"({result.compression_metrics.savings_ratio_pct:.1f}% savings, "
+                f"mode: {result.mode_used.value}, source: {result.mode_source})"
+            )
+
+            # Log quality warnings
+            if result.warnings:
+                for warning in result.warnings:
+                    logger.warning(f"Prompt compression: {warning}")
+
+        return compressed_prompt, compression_metrics
+
+    except Exception as e:
+        logger.warning(f"User prompt compression failed, using original: {e}")
+        return prompt, None
+
+
 def main():
     """Main hook entry point"""
     try:
@@ -206,50 +265,69 @@ def main():
         input_data = json.load(sys.stdin)
         prompt = input_data.get('prompt', '')
 
-        # Get project ID
-        cwd = Path.cwd()
+        # Use cwd from payload — hooks cd to plugin root so Path.cwd() is wrong
+        cwd = Path(input_data.get('cwd', str(Path.cwd())))
         project_id = get_project_id(cwd)
 
         logger.info(f"Processing prompt for project {project_id}")
 
-        # Recall context from graph memory
-        context = recall_context(project_id, prompt)
-
-        # Check if compression should be used (load from config)
+        # Load config for compression settings
         sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
         from config import get_config
         config = get_config()
-        use_compression = config.should_compress_memory_context()
+
+        # Compress user prompt if enabled
+        prompt_compression_metrics = None
+        if config.should_compress_user_prompt():
+            logger.info("User prompt compression enabled")
+            compressed_prompt, prompt_compression_metrics = compress_user_prompt(prompt, project_id, config)
+            # Use compressed prompt for memory recall and further processing
+            prompt_for_recall = compressed_prompt
+        else:
+            logger.debug("User prompt compression disabled")
+            prompt_for_recall = prompt
+
+        # Recall context from graph memory (using potentially compressed prompt)
+        context = recall_context(project_id, prompt_for_recall)
+
+        # Check if memory context compression should be used
+        use_memory_compression = config.should_compress_memory_context()
 
         # Format compact brief (with unified compression pipeline)
-        brief, compression_metrics, pipeline_stats = format_memory_brief(
+        brief, memory_compression_metrics, pipeline_stats = format_memory_brief(
             context,
             project_id,
-            compress=use_compression
+            compress=use_memory_compression
         )
 
         # Prepare result
         result = {}
 
-        # Only inject if we have meaningful content
+        # If prompt was compressed, use the compressed version
+        if prompt_compression_metrics and prompt_compression_metrics['tokens_saved'] > 0:
+            result["prompt"] = compressed_prompt
+            logger.info(f"✅ User prompt compressed: {prompt_compression_metrics['tokens_saved']} tokens saved ({prompt_compression_metrics['savings_pct']:.0f}%)")
+
+        # Only inject memory context if we have meaningful content
         if brief.strip() and len(brief) > len("## Relevant Graph Memory\n\n"):
             result["systemMessage"] = brief
             logger.info(f"Injected {len(brief)} chars of memory context")
 
-            # Add compression badge if compression was used
-            if compression_metrics and compression_metrics['tokens_saved'] > 0:
-                savings_pct = compression_metrics['savings_pct']
+            # Add compression badge if memory compression was used
+            if memory_compression_metrics and memory_compression_metrics['tokens_saved'] > 0:
+                savings_pct = memory_compression_metrics['savings_pct']
                 logger.info(f"⚡ eco: {savings_pct:.0f}% token savings on memory context")
         else:
             logger.debug("No memory context to inject")
 
-        # Log event
+        # Log event with both compression metrics
         log_event("user_prompt_submit", {
             "project_id": project_id,
             "prompt_length": len(prompt),
             "brief_length": len(brief),
             "injected": bool(result),
-            "compression": compression_metrics
+            "prompt_compression": prompt_compression_metrics,
+            "memory_compression": memory_compression_metrics
         })
 
         # Output result as JSON

@@ -60,10 +60,10 @@ def get_compression_status():
         enabled = config.is_compression_enabled()
         savings_map = {
             "OFF": "0%",
-            "BALANCED": "~63%",
-            "AGGRESSIVE": "~78%",
+            "BALANCED": "~40–60%",
+            "AGGRESSIVE": "~60–70%",
         }
-        savings = savings_map.get(mode) or savings_map.get(m.value.upper(), "~78%")
+        savings = savings_map.get(mode) or savings_map.get(m.value.upper(), "~60–70%")
         return {
             "enabled": enabled,
             "mode": mode,
@@ -74,7 +74,7 @@ def get_compression_status():
         return {
             "enabled": True,
             "mode": "AGGRESSIVE",
-            "savings": "~78%",
+            "savings": "~60–70%",
         }
 
 

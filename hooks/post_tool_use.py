@@ -52,12 +52,12 @@ def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
     if tool == 'edit':
         capture['type'] = 'file_edit'
         capture['file'] = tool_input.get('file_path')
-        capture['success'] = 'error' not in result
+        capture['success'] = result.get('type') != 'tool_error'
 
     elif tool == 'write':
         capture['type'] = 'file_write'
         capture['file'] = tool_input.get('file_path')
-        capture['success'] = 'error' not in result
+        capture['success'] = result.get('type') != 'tool_error'
 
     elif tool == 'read':
         capture['type'] = 'file_read'
@@ -67,13 +67,13 @@ def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
     elif tool == 'bash':
         capture['type'] = 'command'
         capture['command'] = tool_input.get('command', '')[:200]  # Limit length
-        capture['success'] = 'error' not in result
+        capture['success'] = result.get('type') != 'tool_error'
 
-        # Extract error if present
+        # Extract error text if present
         if not capture['success']:
-            error_text = result.get('error', '')
+            error_text = result.get('text', '') or result.get('error', '')
             if error_text:
-                capture['error'] = error_text[:500]  # Limit error text
+                capture['error'] = error_text[:500]
 
     elif tool == 'grep':
         capture['type'] = 'search'
@@ -83,7 +83,7 @@ def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
     else:
         # Generic capture
         capture['type'] = 'generic'
-        capture['success'] = 'error' not in result
+        capture['success'] = result.get('type') != 'tool_error'
 
     return capture
 
@@ -118,13 +118,14 @@ def main():
         # Read input from stdin
         input_data = json.load(sys.stdin)
 
-        tool_info = input_data.get('tool', {})
-        tool_name = tool_info.get('name', '')
-        tool_input = tool_info.get('input', {})
-        tool_result = input_data.get('result', {})
+        # Claude Code PostToolUse payload: tool_name / tool_input / tool_result (top-level)
+        tool_name = input_data.get('tool_name', '')
+        tool_input = input_data.get('tool_input', {}) or {}
+        tool_result = input_data.get('tool_result', {}) or {}
 
-        # Get project ID
-        project_id = get_project_id()
+        # Use cwd from payload — hooks cd to plugin root so Path.cwd() is wrong
+        cwd = Path(input_data.get('cwd', str(Path.cwd())))
+        project_id = get_project_id(cwd)
 
         # Canonicalize tool name
         canonical_tool = canonicalize_tool(tool_name)

@@ -4,9 +4,9 @@ AINL Prompt Compression
 Python port of ainl-compression crate from ArmaraOS.
 Embedding-free input/output compression for token/cost savings.
 
-Implements the "Ultra Cost-Efficient Mode" algorithms:
-- Balanced: ~55% retention (~40-50% savings)
-- Aggressive: ~35% retention (~55-70% savings)
+Target bands (token savings vs estimated original):
+- Balanced: ~40–60% savings (retention ~0.50, floor ~0.40 of original)
+- Aggressive: ~60–70% savings (retention ~0.33, floor ~0.30 of original)
 """
 
 from dataclasses import dataclass
@@ -73,15 +73,13 @@ class EfficientMode(str, Enum):
 
     def retention_ratio(self) -> float:
         """
-        Token retention ratio.
-
-        Balanced: ~55% retention (40-50% reduction)
-        Aggressive: ~35% retention (55-70% reduction)
+        Target fraction of original tokens to retain after compression
+        (before per-pass budgeting; floors clamp max savings).
         """
         if self == EfficientMode.BALANCED:
-            return 0.55
+            return 0.50  # ~50% savings (center of 40–60% band)
         elif self == EfficientMode.AGGRESSIVE:
-            return 0.35
+            return 0.33  # ~67% savings (center of 60–70% band)
         else:
             return 1.0
 
@@ -176,7 +174,21 @@ HARD_PRESERVE = [
     "Read",
     "Edit",
     "Bash",
+    "src/",
+    "crates/",
 ]
+
+# URLs, paths, inline code, IPs — always keep the whole sentence in every mode
+_CRITICAL_SNIPPETS = re.compile(
+    r"(https?://[^\s]+|s3://[^\s]+|file://[^\s]+|"
+    r"www\.[^\s]+|"
+    r"git@[^\s]+|"
+    r"`[^`\n]{1,400}`|"
+    r"(?:/[\w.-]+){2,}[\w.-]*|"  # unix-ish absolute/relative paths
+    r"Traceback|File \"[^\"]+\"|"
+    r"\b(?:\d{1,3}\.){3}\d{1,3}\b)",
+    re.IGNORECASE,
+)
 
 # Soft-preserve: force-keep in Balanced; score-boost only in Aggressive
 SOFT_PRESERVE = [
@@ -188,9 +200,11 @@ SOFT_PRESERVE = [
 
 
 def hard_keep(s: str) -> bool:
-    """Check if sentence contains hard-preserve terms"""
+    """Check if sentence contains hard-preserve terms or critical structured content."""
     lo = s.lower()
-    return any(p.lower() in lo for p in HARD_PRESERVE)
+    if any(p.lower() in lo for p in HARD_PRESERVE):
+        return True
+    return bool(_CRITICAL_SNIPPETS.search(s))
 
 
 def soft_match(s: str) -> bool:
@@ -355,6 +369,43 @@ def extract_code_blocks(text: str) -> List[Tuple[bool, str]]:
     return blocks
 
 
+def _max_savings_ratio(mode: EfficientMode) -> float:
+    """Upper bound on fractional token savings for the mode (heuristic estimates)."""
+    if mode == EfficientMode.BALANCED:
+        return 0.60
+    if mode == EfficientMode.AGGRESSIVE:
+        return 0.70
+    return 0.0
+
+
+def _assemble_compressed(
+    text: str,
+    mode: EfficientMode,
+    original_tokens: int,
+    budget: int,
+) -> tuple[str, int]:
+    """Rebuild compressed text for a given total token budget."""
+    blocks = extract_code_blocks(text)
+    code_tokens = sum(
+        estimate_tokens(content)
+        for is_code, content in blocks
+        if is_code
+    )
+    prose_budget = max(0, budget - code_tokens)
+    result_blocks = []
+    pb = prose_budget
+    for is_code, content in blocks:
+        if is_code:
+            result_blocks.append(content)
+        else:
+            compressed_prose = compress_prose(content, pb, mode)
+            pb = max(0, pb - estimate_tokens(compressed_prose))
+            if compressed_prose.strip():
+                result_blocks.append(compressed_prose)
+    result = "\n\n".join(result_blocks).strip()
+    return result, estimate_tokens(result)
+
+
 def compress(text: str, mode: EfficientMode) -> Compressed:
     """
     Compress text toward mode.retention_ratio() of original token budget.
@@ -372,39 +423,38 @@ def compress(text: str, mode: EfficientMode) -> Compressed:
             compressed_tokens=original_tokens
         )
 
-    # Calculate budget with floor (never below 25% of original)
-    budget = max(
-        int(original_tokens * mode.retention_ratio()),
-        original_tokens // 4
+    # Calculate budget (mode-specific floor to prevent over-compression)
+    target_budget = int(original_tokens * mode.retention_ratio())
+
+    # Floors cap maximum savings so modes stay in intended bands.
+    if mode == EfficientMode.AGGRESSIVE:
+        # Floor ~30% of original → at most ~70% token savings
+        min_budget = max(int(original_tokens * 0.30), 12)
+    else:  # BALANCED
+        # Floor ~40% of original → at most ~60% token savings
+        min_budget = max(int(original_tokens * 0.40), 15)
+
+    budget = max(target_budget, min_budget)
+
+    result, compressed_tokens = _assemble_compressed(
+        text, mode, original_tokens, budget
     )
 
-    # Extract code blocks
-    blocks = extract_code_blocks(text)
-
-    # Calculate code token count (code is preserved verbatim)
-    code_tokens = sum(
-        estimate_tokens(content)
-        for is_code, content in blocks
-        if is_code
-    )
-
-    # Remaining budget for prose
-    prose_budget = max(0, budget - code_tokens)
-
-    # Compress each prose block
-    result_blocks = []
-    for is_code, content in blocks:
-        if is_code:
-            result_blocks.append(content)
-        else:
-            compressed_prose = compress_prose(content, prose_budget, mode)
-            prose_budget = max(0, prose_budget - estimate_tokens(compressed_prose))
-            if compressed_prose.strip():
-                result_blocks.append(compressed_prose)
-
-    # Reassemble
-    result = "\n\n".join(result_blocks).strip()
-    compressed_tokens = estimate_tokens(result)
+    # Widen budget if sentence packing removed more than the policy cap allows
+    cap = _max_savings_ratio(mode)
+    widen_rounds = 0
+    while (
+        cap > 0
+        and original_tokens > 0
+        and compressed_tokens < original_tokens
+        and (original_tokens - compressed_tokens) / original_tokens > cap
+        and widen_rounds < 14
+    ):
+        budget = min(original_tokens, int(budget * 1.07) + 12)
+        result, compressed_tokens = _assemble_compressed(
+            text, mode, original_tokens, budget
+        )
+        widen_rounds += 1
 
     # Safety: never return longer than original
     if compressed_tokens >= original_tokens:
