@@ -56,6 +56,11 @@ logs/*.log
 inbox/
 *.jsonl
 
+# A2A runtime data
+a2a/self_inbox/
+a2a/openfang_url.json
+a2a/logs/
+
 # OS
 .DS_Store
 Thumbs.db
