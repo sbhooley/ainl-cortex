@@ -1,20 +1,15 @@
 """
-A2A bridge daemon lifecycle management.
+ArmaraOS daemon discovery for the A2A subsystem.
 
-Ensures armaraos_a2a_bridge.py is running as a background process.
-Called from startup.py — must complete within 5 seconds.
+Replaces the old "launch a Python bridge" approach.
+ArmaraOS is the A2A bridge — we just discover it via ~/.armaraos/daemon.json.
 """
 
 import json
 import os
 import socket
-import subprocess
-import sys
-import time
 from pathlib import Path
 from typing import Dict, Any
-
-sys.path.insert(0, str(Path(__file__).parent))
 
 
 def _pid_alive(pid: int) -> bool:
@@ -36,76 +31,68 @@ def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def _wait_for_port(host: str, port: int, timeout: float = 2.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _port_open(host, port, timeout=0.3):
-            return True
-        time.sleep(0.2)
-    return False
-
-
 def ensure_bridge_running(plugin_root: Path, config: dict) -> Dict[str, Any]:
     """
-    Start the A2A bridge if not already running.
-    Returns status dict consumed by startup.py banner.
+    Discover the ArmaraOS daemon and return its status.
+    No bridge process is launched — ArmaraOS IS the bridge.
     """
     a2a_cfg = config.get("a2a", {})
     if not a2a_cfg.get("enabled", True):
         return {"running": False, "reason": "disabled"}
 
-    host = a2a_cfg.get("bridge_host", "127.0.0.1")
-    port = int(a2a_cfg.get("bridge_port", 7860))
-    bridge_script = a2a_cfg.get("bridge_script", "")
-    pidfile = plugin_root / a2a_cfg.get("bridge_pidfile", "a2a/bridge.pid")
-    logfile = plugin_root / a2a_cfg.get("bridge_logfile", "a2a/logs/bridge.log")
+    daemon_json_path = Path(
+        a2a_cfg.get("daemon_json", "~/.armaraos/daemon.json")
+    ).expanduser()
 
-    if not bridge_script or not Path(bridge_script).exists():
-        return {"running": False, "reason": f"bridge_script not found: {bridge_script}"}
+    if not daemon_json_path.exists():
+        return {
+            "running": False,
+            "reason": f"daemon.json not found at {daemon_json_path} — is ArmaraOS installed?",
+        }
 
-    # Check if already running
-    if pidfile.exists():
-        try:
-            pid = int(pidfile.read_text().strip())
-            if _pid_alive(pid) and _port_open(host, port):
-                return {"running": True, "pid": pid, "port": port}
-        except Exception:
-            pass
-
-    # Launch bridge
     try:
-        inbox_writer = plugin_root / "hooks" / "a2a_inbox_writer.py"
-        python_bin = plugin_root / ".venv" / "bin" / "python"
-        if not python_bin.exists():
-            python_bin = Path(sys.executable)
-
-        bridge_cmd = f"{python_bin} {inbox_writer}"
-
-        env = os.environ.copy()
-        env["HERMES_AINL_BRIDGE_PORT"] = str(port)
-        env["HERMES_AINL_BRIDGE_HOST"] = host
-        env["HERMES_AINL_BRIDGE_QUIET"] = "1"
-        env["HERMES_AINL_BRIDGE_CMD"] = bridge_cmd
-        env["AINL_PLUGIN_ROOT"] = str(plugin_root)
-
-        logfile.parent.mkdir(parents=True, exist_ok=True)
-        log_fd = open(logfile, "a")
-
-        proc = subprocess.Popen(
-            [sys.executable, bridge_script],
-            stdout=log_fd,
-            stderr=log_fd,
-            env=env,
-            start_new_session=True,
-        )
-
-        pidfile.parent.mkdir(parents=True, exist_ok=True)
-        pidfile.write_text(str(proc.pid))
-
-        if _wait_for_port(host, port, timeout=2.0):
-            return {"running": True, "pid": proc.pid, "port": port, "started": True}
-        else:
-            return {"running": False, "pid": proc.pid, "reason": "port not open after 2s"}
-
+        daemon = json.loads(daemon_json_path.read_text())
     except Exception as e:
-        return {"running": False, "reason": str(e)}
+        return {"running": False, "reason": f"could not read daemon.json: {e}"}
+
+    listen_addr = daemon.get("listen_addr", "")
+    pid = daemon.get("pid")
+    version = daemon.get("version", "unknown")
+
+    if not listen_addr:
+        return {"running": False, "reason": "daemon.json has no listen_addr"}
+
+    host, _, port_str = listen_addr.rpartition(":")
+    try:
+        port = int(port_str)
+    except ValueError:
+        return {"running": False, "reason": f"invalid listen_addr: {listen_addr}"}
+
+    pid_alive = _pid_alive(pid) if pid else False
+    port_ok = _port_open(host, port, timeout=1.0)
+
+    if pid_alive and port_ok:
+        return {
+            "running": True,
+            "pid": pid,
+            "port": port,
+            "host": host,
+            "base_url": f"http://{listen_addr}",
+            "version": version,
+        }
+
+    reason_parts = []
+    if not pid_alive:
+        reason_parts.append(f"pid {pid} not alive")
+    if not port_ok:
+        reason_parts.append(f"port {port} not open")
+
+    return {
+        "running": False,
+        "pid": pid,
+        "port": port,
+        "host": host,
+        "base_url": f"http://{listen_addr}",
+        "version": version,
+        "reason": "; ".join(reason_parts) + " — start ArmaraOS to enable A2A",
+    }

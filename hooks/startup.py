@@ -208,11 +208,14 @@ def main():
         except Exception as _e:
             bridge_status = {"running": False, "reason": str(_e)}
 
-        bridge_line = (
-            f"running (pid {bridge_status.get('pid')}, port {bridge_status.get('port')})"
-            if bridge_status.get("running")
-            else f"not running — {bridge_status.get('reason', 'unknown')}"
-        )
+        if bridge_status.get("running"):
+            bridge_line = (
+                f"running (pid {bridge_status.get('pid')}, "
+                f"{bridge_status.get('base_url')}, "
+                f"v{bridge_status.get('version', '?')})"
+            )
+        else:
+            bridge_line = f"not running — {bridge_status.get('reason', 'unknown')}"
 
         # ── Self-inbox injection ──────────────────────────────────────────────
         self_notes = read_self_inbox(root)

@@ -25,11 +25,7 @@
   },
   "a2a": {
     "enabled": true,
-    "bridge_port": 7860,
-    "bridge_host": "127.0.0.1",
-    "bridge_script": "/Users/clawdbot/.openclaw/workspace/AI_Native_Lang/skills/hermes/armaraos-a2a-bridge/armaraos_a2a_bridge.py",
-    "bridge_pidfile": "a2a/bridge.pid",
-    "bridge_logfile": "a2a/logs/bridge.log",
+    "daemon_json": "~/.armaraos/daemon.json",
     "inbox_max_messages": 50,
     "inbox_max_age_seconds": 86400,
     "inbox_max_message_chars": 2000,
