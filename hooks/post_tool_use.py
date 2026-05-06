@@ -88,28 +88,52 @@ def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
     return capture
 
 
-def buffer_capture(project_id: str, capture: dict) -> None:
+def buffer_capture(project_id: str, capture: dict) -> int:
     """
-    Buffer capture for later consolidation.
-
-    Writes to session inbox file (AINL inbox pattern).
+    Buffer capture to session inbox. Returns current capture count.
     """
-    # Create inbox directory
     inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
-
     inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
 
-    # Append capture as JSON line
     try:
         with open(inbox_file, 'a') as f:
             f.write(json.dumps(capture) + '\n')
-
-        logger.debug(f"Buffered capture: {capture['type']} - {capture['tool']}")
-
+        # Count lines efficiently
+        count = sum(1 for _ in open(inbox_file))
+        logger.debug(f"Buffered capture: {capture['type']} - {capture['tool']} ({count} total)")
+        return count
     except Exception as e:
         logger.warning(f"Failed to buffer capture: {e}")
-        # Non-fatal - continue
+        return 0
+
+
+def flush_episode_if_due(project_id: str, capture_count: int, plugin_root: Path) -> None:
+    """
+    If capture_count has hit the flush threshold, write an episode to the
+    graph DB immediately and truncate the inbox — same logic as stop.py but
+    without the self-note (that's reserved for true session end).
+    """
+    try:
+        cfg_path = plugin_root / "config.json"
+        threshold = 10
+        if cfg_path.exists():
+            threshold = json.loads(cfg_path.read_text()).get("a2a", {}).get("mid_session_flush_threshold", 10)
+
+        if capture_count < threshold or capture_count % threshold != 0:
+            return
+
+        # Import stop.py helpers (same process, sys.path already set)
+        sys.path.insert(0, str(plugin_root / "mcp_server"))
+        from stop import drain_session_inbox, write_episode
+
+        session_data = drain_session_inbox(project_id)
+        if session_data["tool_captures"]:
+            write_episode(project_id, session_data)
+            logger.info(f"Mid-session flush: wrote episode at {capture_count} captures")
+
+    except Exception as e:
+        logger.warning(f"Mid-session flush failed (non-fatal): {e}")
 
 
 def main():
@@ -138,8 +162,10 @@ def main():
         # Add project context
         capture['project_id'] = project_id
 
-        # Buffer for consolidation
-        buffer_capture(project_id, capture)
+        # Buffer for consolidation, then flush if threshold reached
+        plugin_root = Path(__file__).parent.parent
+        count = buffer_capture(project_id, capture)
+        flush_episode_if_due(project_id, count, plugin_root)
 
         # Log event
         log_event("post_tool_use", {
