@@ -934,6 +934,74 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
     })
 
 
+def _update_claude_memory(cwd: Path, session_data: dict, plugin_root: Path) -> None:
+    """
+    Write/update a per-project markdown memory file so Claude always has
+    last-session context without relying on manual memory updates.
+
+    Writes to ~/.claude/projects/-Users-clawdbot/memory/ and updates MEMORY.md.
+    Only fires when the session had tool captures (i.e. real work happened).
+    """
+    try:
+        import re
+        import time as _t
+
+        memory_dir = Path.home() / ".claude" / "projects" / "-Users-clawdbot" / "memory"
+        if not memory_dir.exists():
+            return
+
+        # Project slug from the actual working directory name
+        slug = re.sub(r'[^\w-]', '-', cwd.name.lower())[:40].strip('-') or "global"
+        memory_file = memory_dir / f"project_session_{slug}.md"
+        memory_index = memory_dir / "MEMORY.md"
+
+        task_summary = create_episode_summary(session_data)
+        outcome = "partial" if session_data.get("had_errors") else "success"
+        tools = sorted(session_data.get("tools_used", []))[:10]
+        files = [Path(f).name for f in session_data.get("files_touched", [])[:8]]
+        capture_count = len(session_data.get("tool_captures", []))
+        date_str = _t.strftime("%Y-%m-%d", _t.localtime())
+
+        content = (
+            f"---\n"
+            f"name: Recent session — {slug}\n"
+            f"description: Last session context for {slug} — task, outcome, files touched\n"
+            f"type: project\n"
+            f"auto_generated: true\n"
+            f"---\n"
+            f"**Last session:** {date_str}  |  **Outcome:** {outcome}  |  **Captures:** {capture_count}\n\n"
+            f"**Task:** {task_summary}\n\n"
+            f"**Why:** Auto-captured by Stop hook — future sessions resume with context without manual memory updates.\n\n"
+            f"**How to apply:** Read when starting work on `{cwd}` to know where things were left off.\n\n"
+            f"**Tools:** {', '.join(tools) if tools else 'none'}\n\n"
+            f"**Files:** {', '.join(files) if files else 'none'}\n"
+        )
+        memory_file.write_text(content)
+
+        # Upsert the index entry in MEMORY.md
+        index_entry = (
+            f"- [Recent session — {slug}](project_session_{slug}.md)"
+            f" — {date_str}: {task_summary[:70]}"
+        )
+        marker = f"project_session_{slug}.md"
+        if memory_index.exists():
+            lines = memory_index.read_text().splitlines()
+            new_lines, updated = [], False
+            for line in lines:
+                if marker in line:
+                    new_lines.append(index_entry)
+                    updated = True
+                else:
+                    new_lines.append(line)
+            if not updated:
+                new_lines.append(index_entry)
+            memory_index.write_text("\n".join(new_lines) + "\n")
+
+        logger.info(f"Claude memory updated: {memory_file.name}")
+    except Exception as e:
+        logger.debug(f"Claude memory update failed (non-fatal): {e}")
+
+
 def main():
     """Main hook entry point"""
     try:
@@ -954,6 +1022,7 @@ def main():
 
         if session_data["tool_captures"]:
             finalize_session(project_id, session_data, plugin_root)
+            _update_claude_memory(cwd, session_data, plugin_root)
         else:
             logger.debug("No session data to finalize")
 
