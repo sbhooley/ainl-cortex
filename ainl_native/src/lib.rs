@@ -32,6 +32,7 @@ fn ainl_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(procedure::distill_procedure, m)?)?;
     m.add_function(wrap_pyfunction!(procedure::score_reuse, m)?)?;
     m.add_function(wrap_pyfunction!(procedure::cluster_experiences, m)?)?;
+    m.add_function(wrap_pyfunction!(procedure::build_experience_bundle, m)?)?;
 
     m.add_function(wrap_pyfunction!(freshness::check_freshness, m)?)?;
     m.add_function(wrap_pyfunction!(freshness::can_execute, m)?)?;

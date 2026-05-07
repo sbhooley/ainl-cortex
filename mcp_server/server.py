@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Import our modules
 try:
-    from .graph_store import SQLiteGraphStore
+    from .graph_store import get_graph_store
     from .node_types import (
         create_episode_node, create_semantic_node, create_procedural_node,
         create_persona_node, create_failure_node, create_edge,
@@ -56,7 +56,7 @@ try:
 except ImportError:
     # Fallback for when run as script
     sys.path.insert(0, str(Path(__file__).parent))
-    from graph_store import SQLiteGraphStore
+    from graph_store import get_graph_store
     from node_types import (
         create_episode_node, create_semantic_node, create_procedural_node,
         create_persona_node, create_failure_node, create_edge,
@@ -75,7 +75,7 @@ class AINLGraphMemoryServer:
 
     def __init__(self):
         self.db_path = self._get_db_path()
-        self.store = SQLiteGraphStore(self.db_path)
+        self.store = get_graph_store(self.db_path)
         self.retrieval = MemoryRetrieval(self.store, cache_dir=self.db_path.parent)
         self.persona_engine = PersonaEvolutionEngine()
         self.extractor = PatternExtractor()

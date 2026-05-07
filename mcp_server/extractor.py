@@ -125,7 +125,7 @@ class PatternExtractor:
             pattern_name = self._generate_pattern_name(sig, trigger)
 
             # Extract evidence IDs
-            evidence_ids = [ep['data']['turn_id'] for ep in eps]
+            evidence_ids = [ep['data'].get('turn_id', ep['data'].get('id', '')) for ep in eps]
 
             new_patterns.append({
                 'pattern_name': pattern_name,

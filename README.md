@@ -197,6 +197,124 @@ Memory accumulates and improves with every interaction.
 
 ---
 
+## ⚙️ Backend Selection: Python vs Native (Rust)
+
+The plugin ships with two storage backends. You choose via a single line in `config.json`.
+
+### Python Backend (default for new installs)
+
+- Works immediately after `pip install -r requirements.txt` — no extra tools required
+- Pure Python + SQLite (`ainl_memory.db`)
+- Full feature set: episodes, failures, persona evolution, pattern promotion, prompt compression
+
+```json
+// config.json
+{
+  "memory": {
+    "store_backend": "python"
+  }
+}
+```
+
+### Native Backend (Rust — higher fidelity)
+
+- Wraps the [`ainl-memory`](https://crates.io/crates/ainl-memory) and related armaraos crates via PyO3 bindings compiled into `ainl_native.so`
+- Unlocks the full Rust ainl-\* learning stack:
+  - `AinlTrajectoryBuilder` — properly-typed `TrajectoryStep` records
+  - `cluster_experiences` → `build_experience_bundle` → `distill_procedure` — Rust procedure learning pipeline
+  - `AinlPersonaEngine` — Rust persona evolution (vs Python EMA fallback)
+  - `tag_turn` — semantic tagging at 0.04ms/call
+  - `check_freshness` / `can_execute` — context freshness gating at SessionStart
+  - `score_reuse` — ranks procedural patterns against the current prompt
+  - `upsert_anchored_summary` / `fetch_anchored_summary` — cross-session prompt compression
+- Data stored in `ainl_native.db` (Rust schema) alongside `ainl_memory.db`
+
+```json
+// config.json
+{
+  "memory": {
+    "store_backend": "native"
+  }
+}
+```
+
+#### Prerequisites for the Native Backend
+
+1. **Rust toolchain** (1.75+):
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   source ~/.cargo/env
+   ```
+
+2. **maturin** — auto-installed by the plugin on first session, or manually:
+   ```bash
+   .venv/bin/pip install maturin
+   ```
+
+3. **armaraos source** at `~/.openclaw/workspace/armaraos/` — provides the `ainl-memory`, `ainl-trajectory`, `ainl-persona`, `ainl-procedure-learning`, and `ainl-contracts` crates that `ainl_native` depends on. The `ainl_native/Cargo.toml` has a `[patch.crates-io]` table pointing there.
+
+   If you have ArmaraOS checked out elsewhere, update the patch paths in `ainl_native/Cargo.toml` to match.
+
+#### Auto-Build at SessionStart
+
+When `store_backend = "native"`, the plugin auto-builds `ainl_native` at every SessionStart via `_ensure_ainl_native()` in `hooks/startup.py`. This runs:
+
+```bash
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release \
+  --manifest-path ainl_native/Cargo.toml
+```
+
+If the build fails (missing Rust, missing armaraos, etc.), the plugin **silently falls back to the Python backend** — Claude Code continues working normally. The SessionStart banner shows the build status:
+
+```
+• ainl_native (Rust bindings): ok (already installed)   ← native active
+• ainl_native (Rust bindings): build failed: ...        ← fell back to python
+• ainl_native (Rust bindings): skipped (no venv python) ← fell back to python
+```
+
+To force a rebuild manually:
+```bash
+cd ~/.claude/plugins/ainl-graph-memory
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+  .venv/bin/maturin develop --release \
+  --manifest-path ainl_native/Cargo.toml
+```
+
+#### Feature Comparison
+
+| Feature | Python Backend | Native Backend |
+|---|---|---|
+| Episode, Semantic, Procedural, Failure nodes | ✅ | ✅ |
+| Persona evolution | Python EMA | Rust `AinlPersonaEngine` |
+| Trajectory capture | JSONL buffer → dict | `AinlTrajectoryBuilder` → typed `TrajectoryStep` |
+| Pattern promotion | Python `PatternExtractor` | `cluster_experiences` → `distill_procedure` |
+| Procedure ranking | — | `score_reuse()` vs current prompt |
+| Semantic tagging | — | `tag_turn()` 0.04ms/call |
+| Context freshness | — | `check_freshness` / `can_execute` at SessionStart |
+| Prompt compression (anchored summary) | ✅ | ✅ (stored in `ainl_native.db`) |
+| Graph traversal (reverse edges) | ✅ | ✅ (`walk_edges_to`) |
+
+#### Migrating Existing Data from Python to Native
+
+If you have existing memories in the Python backend and want to switch to native:
+
+```bash
+cd ~/.claude/plugins/ainl-graph-memory
+
+# Dry run first — shows what would be migrated
+python3 migrate_to_native.py --dry-run
+
+# Migrate a specific project
+python3 migrate_to_native.py --project-hash <hash>
+
+# Migrate all projects and flip config to native
+python3 migrate_to_native.py --flip-config
+```
+
+Project hashes are the directory names under `~/.claude/projects/`.
+
+---
+
 ## 🎓 How It Works
 
 ### 1. Trajectory Capture
@@ -696,16 +814,23 @@ Copyright 2026 AINL Graph Memory Plugin Contributors
 - ✅ Context compilation
 - ✅ Closed-loop validation
 
-### 📋 v0.3 (Planned)
+### ✅ v0.3 (COMPLETE)
+- ✅ Native Rust backend (`ainl_native` PyO3 extension wrapping armaraos crates)
+- ✅ Full `ainl-*` crate integration: trajectory, persona, procedure learning, semantic tagger
+- ✅ Python ↔ Native backend switch via `config.json` (auto-fallback if build fails)
+- ✅ Cross-session prompt compression via anchored summary
+- ✅ Context freshness gating (`check_freshness` / `can_execute`) at SessionStart
+- ✅ Procedure scoring (`score_reuse`) at UserPromptSubmit
+- ✅ Reverse-edge graph traversal (`walk_edges_to`)
+- ✅ Migration tooling (`migrate_to_native.py`) for existing Python-backend data
+- ✅ PreCompact / PostCompact hooks for zero-data-loss at context compaction
+
+### 📋 v0.4 (Planned)
 - [ ] Semantic embeddings for vector search (local model)
 - [ ] Cross-project pattern library
 - [ ] Web-based memory explorer UI
 - [ ] Export/import graph snapshots
 - [ ] Multi-modal trajectory visualization
-
-### 📋 v0.4 (Future)
-- [ ] Rust MCP server (performance boost)
-- [ ] Integration with ainl-runtime as library
 - [ ] Collaborative team memory
 - [ ] Advanced persona axes (domain-specific)
 - [ ] Real-time learning metrics dashboard

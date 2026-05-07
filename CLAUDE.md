@@ -301,6 +301,39 @@ Would you like me to test it?
 - Hooks auto-validate .ainl files on save
 - Detection hook suggests AINL for appropriate requests
 
+## Backend Selection (Python vs Native Rust)
+
+The plugin has two storage backends, switched via `config.json`:
+
+```json
+{ "memory": { "store_backend": "python" } }   // default, zero extra deps
+{ "memory": { "store_backend": "native" } }   // Rust ainl-* crates via PyO3
+```
+
+**Python backend** — works immediately, no Rust toolchain required. Full feature set except Rust-specific bindings.
+
+**Native backend** — wraps armaraos `ainl-memory`, `ainl-trajectory`, `ainl-persona`, `ainl-procedure-learning` crates via `ainl_native.so` (PyO3). Adds: `AinlTrajectoryBuilder`, `cluster_experiences → distill_procedure` pipeline, `AinlPersonaEngine`, `tag_turn`, `check_freshness/can_execute`, `score_reuse`, anchored summary compression.
+
+**Auto-build**: `hooks/startup.py:_ensure_ainl_native()` builds `ainl_native` at every SessionStart using maturin. Falls back silently to Python if build fails. Build command (run manually if needed):
+```bash
+cd ~/.claude/plugins/ainl-graph-memory
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+  .venv/bin/maturin develop --release \
+  --manifest-path ainl_native/Cargo.toml
+```
+
+**Prerequisites for native**: Rust toolchain 1.75+, armaraos source at `~/.openclaw/workspace/armaraos/` (provides ainl-* crates). See README.md § Backend Selection for full details.
+
+**Migrating Python → Native**: `python3 migrate_to_native.py --flip-config` migrates existing data and flips the config in one step.
+
+**Factory**: `mcp_server/graph_store.py:get_graph_store(db_path)` — always use this, never instantiate `SQLiteGraphStore` or `NativeGraphStore` directly. It reads `config.json` and returns the right store with fallback.
+
+**Two DBs** (native mode only):
+- `ainl_memory.db` — Python schema (legacy; no longer written after migration)
+- `ainl_native.db` — Rust ainl-memory schema (active; single source of truth)
+
+**SessionStart banner** shows backend status: `ainl_native (Rust bindings): ok (already installed)` means native is active.
+
 ## Success Metrics
 
 Your performance with AINL:

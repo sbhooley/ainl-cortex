@@ -56,3 +56,15 @@ pub fn cluster_experiences(
     let clusters = ainl_trajectory::cluster_experiences(&records);
     to_py(py, &clusters)
 }
+
+/// Convert an ExperienceCluster dict into an ExperienceBundle dict.
+/// Bridges cluster_experiences() output to distill_procedure() input.
+#[pyfunction]
+pub fn build_experience_bundle(
+    py: Python<'_>,
+    cluster_dict: &Bound<'_, pyo3::PyAny>,
+) -> PyResult<PyObject> {
+    let cluster: ainl_trajectory::ExperienceCluster = from_py(cluster_dict)?;
+    let bundle = ainl_trajectory::build_experience_bundle(&cluster);
+    to_py(py, &bundle)
+}

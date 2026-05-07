@@ -155,7 +155,7 @@ def recall_context(project_id: str, prompt: str) -> dict:
     try:
         # Import graph store components
         sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
-        from graph_store import SQLiteGraphStore
+        from graph_store import get_graph_store
         from retrieval import MemoryRetrieval, RetrievalContext
 
         # Get database path
@@ -174,7 +174,7 @@ def recall_context(project_id: str, prompt: str) -> dict:
             }
 
         # Initialize store and retrieval
-        store = SQLiteGraphStore(db_path)
+        store = get_graph_store(db_path)
         retrieval = MemoryRetrieval(store)
 
         # Create retrieval context
@@ -186,6 +186,41 @@ def recall_context(project_id: str, prompt: str) -> dict:
 
         # Retrieve memory context
         memory_context = retrieval.compile_memory_context(context, max_nodes=20)
+
+        # Score applicable procedural patterns against current prompt via Rust score_reuse
+        try:
+            import ainl_native as _ainl_native
+            raw_patterns = memory_context.get('applicable_patterns', [])
+            if raw_patterns and prompt:
+                available_tools = list({
+                    t for ep in memory_context.get('recent_episodes', [])
+                    for t in (ep.get('data', {}).get('tool_calls') or [])
+                })
+                scored = []
+                for pat in raw_patterns:
+                    d = pat.data if hasattr(pat, 'data') else (pat if isinstance(pat, dict) else {})
+                    artifact = {
+                        "schema_version": 1,
+                        "id": str(getattr(pat, 'id', d.get('id', ''))),
+                        "title": d.get('pattern_name', ''),
+                        "intent": d.get('trigger', ''),
+                        "summary": d.get('pattern_name', ''),
+                        "required_tools": d.get('tool_sequence', []),
+                        "steps": [],
+                        "fitness": d.get('fitness', 0.5),
+                        "observation_count": d.get('success_count', 1),
+                        "lifecycle": "candidate",
+                        "verification": {"criteria": [], "automated": False},
+                    }
+                    result = _ainl_native.score_reuse(artifact, prompt[:200], available_tools)
+                    scored.append((result.get('score', 0.0), pat, result.get('reasons', [])))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                memory_context['applicable_patterns'] = [p for _, p, _ in scored]
+                top = [(s, r) for s, _, r in scored[:3] if s > 0.3]
+                if top:
+                    logger.info(f"score_reuse: top pattern scores {[round(s,2) for s,_ in top]}")
+        except Exception as _se:
+            logger.debug(f"score_reuse failed (non-fatal): {_se}")
 
         logger.info(f"Recalled memory context: {sum(len(v) for v in memory_context.values() if isinstance(v, list))} nodes")
 
@@ -420,13 +455,13 @@ def main():
             mcp_path = str(Path(__file__).parent.parent / "mcp_server")
             if mcp_path not in sys.path:
                 sys.path.insert(0, mcp_path)
-            from graph_store import SQLiteGraphStore
+            from graph_store import get_graph_store
             from goal_tracker import GoalTracker
             from failure_advisor import FailureAdvisor
 
             db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
             if db_path.exists():
-                _store = SQLiteGraphStore(db_path)
+                _store = get_graph_store(db_path)
 
                 # Active goals
                 _tracker = GoalTracker(_store, project_id)

@@ -47,7 +47,10 @@ class AINLTools:
         self.compiler = AICodeCompiler()
 
         # Initialize trajectory store
-        from .trajectory_capture import TrajectoryStore
+        try:
+            from .trajectory_capture import TrajectoryStore
+        except ImportError:
+            from trajectory_capture import TrajectoryStore
         if memory_db_path:
             self.trajectory_store = TrajectoryStore(
                 memory_db_path.parent / "ainl_trajectories.db"

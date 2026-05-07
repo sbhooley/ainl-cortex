@@ -7,6 +7,8 @@
 
 use crate::convert::{from_py, to_py};
 use ainl_memory::{
+    anchored_summary::{anchored_summary_id, ANCHORED_SUMMARY_TAG},
+    node::{AinlNodeType, MemoryCategory, SemanticNode},
     query::walk_from,
     store::{GraphStore, SqliteGraphStore},
     AinlMemoryNode,
@@ -102,6 +104,24 @@ impl AinlNativeStore {
             .lock()
             .unwrap()
             .walk_edges(id, label)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        to_py(py, &nodes)
+    }
+
+    /// Walk edges TO a node (reverse traversal). Returns list of source node dicts.
+    fn walk_edges_to(
+        &self,
+        py: Python<'_>,
+        to_id: &str,
+        label: &str,
+    ) -> PyResult<PyObject> {
+        let id = Uuid::parse_str(to_id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let nodes = self
+            .inner
+            .lock()
+            .unwrap()
+            .walk_edges_to(id, label)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &nodes)
     }
@@ -255,5 +275,269 @@ impl AinlNativeStore {
             .export_graph(agent_id)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &snapshot)
+    }
+
+    // ── High-level plugin node writers ──────────────────────────────────────
+
+    /// Write a Semantic node. Returns the node UUID string.
+    /// plugin_data: arbitrary Python dict stored in plugin_data field (for Python-specific extras).
+    #[pyo3(signature = (agent_id, fact, confidence, source_turn_id=None, topic_cluster=None, tags=None, plugin_data=None))]
+    fn write_semantic(
+        &self,
+        agent_id: &str,
+        fact: &str,
+        confidence: f32,
+        source_turn_id: Option<&str>,
+        topic_cluster: Option<&str>,
+        tags: Option<Vec<String>>,
+        plugin_data: Option<&Bound<'_, pyo3::PyAny>>,
+    ) -> PyResult<String> {
+        use ainl_memory::node::{AinlNodeType, SemanticNode};
+        let src = source_turn_id
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .unwrap_or_else(Uuid::new_v4);
+        let semantic = SemanticNode {
+            fact: fact.to_string(),
+            confidence: confidence.clamp(0.0, 1.0),
+            source_turn_id: src,
+            topic_cluster: topic_cluster.map(str::to_string),
+            source_episode_id: String::new(),
+            contradiction_ids: Vec::new(),
+            last_referenced_at: 0,
+            reference_count: 0,
+            decay_eligible: true,
+            tags: tags.unwrap_or_default(),
+            recurrence_count: 0,
+            last_ref_snapshot: 0,
+        };
+        let pd = plugin_data.map(|d| from_py::<serde_json::Value>(d)).transpose()?;
+        let node = ainl_memory::AinlMemoryNode {
+            id: Uuid::new_v4(),
+            memory_category: ainl_memory::MemoryCategory::Semantic,
+            importance_score: confidence,
+            agent_id: agent_id.to_string(),
+            project_id: None,
+            node_type: AinlNodeType::Semantic { semantic },
+            edges: Vec::new(),
+            plugin_data: pd,
+        };
+        let id = node.id;
+        self.inner.lock().unwrap().write_node(&node)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        Ok(id.to_string())
+    }
+
+    /// Write a Failure node. Returns the node UUID string.
+    #[pyo3(signature = (agent_id, message, source="plugin", tool_name=None, plugin_data=None))]
+    fn write_failure(
+        &self,
+        agent_id: &str,
+        message: &str,
+        source: &str,
+        tool_name: Option<&str>,
+        plugin_data: Option<&Bound<'_, pyo3::PyAny>>,
+    ) -> PyResult<String> {
+        use ainl_memory::node::{AinlNodeType, FailureNode};
+        let failure = FailureNode {
+            recorded_at: chrono::Utc::now().timestamp(),
+            source: source.to_string(),
+            tool_name: tool_name.map(str::to_string),
+            source_namespace: Some("plugin".to_string()),
+            source_tool: tool_name.map(str::to_string),
+            message: message.to_string(),
+            session_id: None,
+        };
+        let pd = plugin_data.map(|d| from_py::<serde_json::Value>(d)).transpose()?;
+        let node = ainl_memory::AinlMemoryNode {
+            id: Uuid::new_v4(),
+            memory_category: ainl_memory::MemoryCategory::Episodic,
+            importance_score: 0.8,
+            agent_id: agent_id.to_string(),
+            project_id: None,
+            node_type: AinlNodeType::Failure { failure },
+            edges: Vec::new(),
+            plugin_data: pd,
+        };
+        let id = node.id;
+        self.inner.lock().unwrap().write_node(&node)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        Ok(id.to_string())
+    }
+
+    /// Write a Persona node. Returns the node UUID string.
+    #[pyo3(signature = (agent_id, trait_name, strength, plugin_data=None))]
+    fn write_persona(
+        &self,
+        agent_id: &str,
+        trait_name: &str,
+        strength: f32,
+        plugin_data: Option<&Bound<'_, pyo3::PyAny>>,
+    ) -> PyResult<String> {
+        use ainl_memory::node::{AinlNodeType, PersonaLayer, PersonaNode, PersonaSource};
+        let persona = PersonaNode {
+            trait_name: trait_name.to_string(),
+            strength: strength.clamp(0.0, 1.0),
+            learned_from: Vec::new(),
+            layer: PersonaLayer::Base,
+            source: PersonaSource::Evolved,
+            strength_floor: 0.0,
+            locked: false,
+            relevance_score: strength,
+            provenance_episode_ids: Vec::new(),
+            evolution_log: Vec::new(),
+            axis_scores: std::collections::HashMap::new(),
+            evolution_cycle: 0,
+            last_evolved: String::new(),
+            agent_id: agent_id.to_string(),
+            dominant_axes: Vec::new(),
+        };
+        let pd = plugin_data.map(|d| from_py::<serde_json::Value>(d)).transpose()?;
+        let node = ainl_memory::AinlMemoryNode {
+            id: Uuid::new_v4(),
+            memory_category: ainl_memory::MemoryCategory::Persona,
+            importance_score: strength,
+            agent_id: agent_id.to_string(),
+            project_id: None,
+            node_type: AinlNodeType::Persona { persona },
+            edges: Vec::new(),
+            plugin_data: pd,
+        };
+        let id = node.id;
+        self.inner.lock().unwrap().write_node(&node)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        Ok(id.to_string())
+    }
+
+    /// Write a Procedural (pattern) node. Returns the node UUID string.
+    #[pyo3(signature = (agent_id, pattern_name, tool_sequence=None, success_count=0, plugin_data=None))]
+    fn write_procedural(
+        &self,
+        agent_id: &str,
+        pattern_name: &str,
+        tool_sequence: Option<Vec<String>>,
+        success_count: u32,
+        plugin_data: Option<&Bound<'_, pyo3::PyAny>>,
+    ) -> PyResult<String> {
+        use ainl_memory::node::{AinlNodeType, ProceduralNode, ProcedureType};
+        let procedural = ProceduralNode {
+            pattern_name: pattern_name.to_string(),
+            compiled_graph: Vec::new(),
+            tool_sequence: tool_sequence.unwrap_or_default(),
+            confidence: None,
+            procedure_type: ProcedureType::ToolSequence,
+            trigger_conditions: Vec::new(),
+            success_count,
+            failure_count: 0,
+            success_rate: if success_count > 0 { 1.0 } else { 0.0 },
+            last_invoked_at: 0,
+            reinforcement_episode_ids: Vec::new(),
+            suppression_episode_ids: Vec::new(),
+            patch_version: 0,
+            fitness: Some(success_count as f32 / (success_count as f32 + 1.0)),
+            declared_reads: Vec::new(),
+            retired: false,
+            label: pattern_name.to_string(),
+            trace_id: None,
+            pattern_observation_count: 0,
+            prompt_eligible: true,
+        };
+        let pd = plugin_data.map(|d| from_py::<serde_json::Value>(d)).transpose()?;
+        let node = ainl_memory::AinlMemoryNode {
+            id: Uuid::new_v4(),
+            memory_category: ainl_memory::MemoryCategory::Procedural,
+            importance_score: success_count as f32 / (success_count as f32 + 1.0),
+            agent_id: agent_id.to_string(),
+            project_id: None,
+            node_type: AinlNodeType::Procedural { procedural },
+            edges: Vec::new(),
+            plugin_data: pd,
+        };
+        let id = node.id;
+        self.inner.lock().unwrap().write_node(&node)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        Ok(id.to_string())
+    }
+
+    // ── Anchored summary (prompt compression) ──────────────────────────────
+
+    /// Upsert a compressed context summary for `agent_id`.
+    /// Returns the stable node UUID string (same for repeated calls with same agent_id).
+    fn upsert_anchored_summary(&self, agent_id: &str, summary_payload: &str) -> PyResult<String> {
+        let id = anchored_summary_id(agent_id);
+        let semantic = SemanticNode {
+            fact: summary_payload.to_string(),
+            confidence: 1.0,
+            source_turn_id: id,
+            topic_cluster: None,
+            source_episode_id: String::new(),
+            contradiction_ids: Vec::new(),
+            last_referenced_at: chrono::Utc::now().timestamp() as u64,
+            reference_count: 0,
+            decay_eligible: false,
+            tags: vec![ANCHORED_SUMMARY_TAG.to_string()],
+            recurrence_count: 0,
+            last_ref_snapshot: 0,
+        };
+        let node = AinlMemoryNode {
+            id,
+            memory_category: MemoryCategory::Semantic,
+            importance_score: 1.0,
+            agent_id: agent_id.to_string(),
+            project_id: None,
+            node_type: AinlNodeType::Semantic { semantic },
+            edges: Vec::new(),
+            plugin_data: None,
+        };
+        self.inner
+            .lock()
+            .unwrap()
+            .write_node(&node)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        Ok(id.to_string())
+    }
+
+    /// Fetch the latest anchored-summary payload for `agent_id`. Returns None if absent.
+    fn fetch_anchored_summary(&self, agent_id: &str) -> PyResult<Option<String>> {
+        let id = anchored_summary_id(agent_id);
+        let node = self
+            .inner
+            .lock()
+            .unwrap()
+            .read_node(id)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        Ok(node.and_then(|n| match n.node_type {
+            AinlNodeType::Semantic { semantic } => Some(semantic.fact),
+            _ => None,
+        }))
+    }
+
+    /// Patch the plugin_data field of an existing node. Merges with existing plugin_data.
+    fn patch_plugin_data(
+        &self,
+        node_id: &str,
+        updates: &Bound<'_, pyo3::PyAny>,
+    ) -> PyResult<()> {
+        let id = Uuid::parse_str(node_id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let updates_val: serde_json::Value = from_py(updates)?;
+
+        let guard = self.inner.lock().unwrap();
+        let existing = guard.read_node(id)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        if let Some(mut node) = existing {
+            let merged = match node.plugin_data.take() {
+                Some(serde_json::Value::Object(mut m)) => {
+                    if let serde_json::Value::Object(u) = updates_val {
+                        m.extend(u);
+                    }
+                    serde_json::Value::Object(m)
+                }
+                _ => updates_val,
+            };
+            node.plugin_data = Some(merged);
+            guard.write_node(&node)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        }
+        Ok(())
     }
 }

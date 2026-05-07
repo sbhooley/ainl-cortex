@@ -90,7 +90,7 @@ def write_episode(project_id: str, session_data: dict):
     """
     Write episode node. Returns (store, episode_data_dict) for downstream writers.
     """
-    from graph_store import SQLiteGraphStore
+    from graph_store import get_graph_store
     from node_types import GraphNode, NodeType
 
     task_summary = create_episode_summary(session_data)
@@ -100,7 +100,7 @@ def write_episode(project_id: str, session_data: dict):
     db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    store = SQLiteGraphStore(db_path)
+    store = get_graph_store(db_path)
 
     episode_data = {
         "turn_id": str(uuid.uuid4()),
@@ -640,6 +640,8 @@ def flush_pending_captures(project_id: str) -> int:
             write_patterns(store, project_id)
             write_semantics(store, project_id)
             write_goals(store, project_id, episode_data)
+            if _NATIVE_OK:
+                _run_rust_procedure_learning(project_id)
             logger.info(f"Per-prompt flush: wrote all node types for {count} captures")
         return count
     except Exception as e:
@@ -649,8 +651,8 @@ def flush_pending_captures(project_id: str) -> int:
 
 def _flush_native_trajectories(project_id: str, episode_data: dict) -> None:
     """
-    Read buffered traj step records, build a TrajectoryDetailRecord,
-    and write it to the native DB using ainl_native.AinlNativeStore.
+    Read buffered traj step records, assemble via AinlTrajectoryBuilder,
+    and write to the native DB as a TrajectoryDetailRecord.
     """
     if not _NATIVE_OK:
         return
@@ -678,15 +680,10 @@ def _flush_native_trajectories(project_id: str, episode_data: dict) -> None:
         db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
         db_path.mkdir(parents=True, exist_ok=True)
         native_db = str(db_path / "ainl_native.db")
-
         store = _ainl_native.AinlNativeStore.open(native_db)
 
-        # Register a matching episode in the native DB so FK constraints pass.
-        # We use the tool list from the Python episode_data.
         native_ep_id = store.record_episode(
-            list(episode_data.get("tool_calls", [])),
-            None,
-            None,
+            list(episode_data.get("tool_calls", [])), None, None,
         )
 
         outcome = episode_data.get("outcome", "partial")
@@ -694,25 +691,142 @@ def _flush_native_trajectories(project_id: str, episode_data: dict) -> None:
                        "error": "failure", "aborted": "aborted"}
         traj_outcome = outcome_map.get(outcome, "partial_success")
 
-        # Compute total duration from steps
-        total_duration = sum(s.get("duration_ms", 0) for s in steps)
+        # Use AinlTrajectoryBuilder to produce properly typed TrajectoryStep records
+        builder = _ainl_native.AinlTrajectoryBuilder(native_ep_id, traj_outcome)
+        builder.set_project(project_id)
+        builder.set_session(project_id)
+        for s in steps:
+            builder.push_step(
+                s.get("adapter", s.get("tool", "unknown")),
+                s.get("operation", "run"),
+                s.get("success", True),
+                s.get("error"),
+                s.get("duration_ms", 0),
+            )
+        draft = builder.build()
 
         record = {
             "id": str(uuid.uuid4()),
-            "episode_id": native_ep_id,
+            "episode_id": draft["episode_id"],
             "agent_id": "claude-code",
             "session_id": project_id,
             "project_id": project_id,
             "recorded_at": int(time.time()),
-            "outcome": traj_outcome,
-            "duration_ms": total_duration,
-            "steps": steps,
+            "outcome": draft["outcome"],
+            "duration_ms": draft.get("duration_ms", 0),
+            "steps": draft["steps"],
         }
-
         store.insert_trajectory(record)
-        logger.info(f"Native trajectory flushed: {len(steps)} steps for episode {episode_id[:8]}")
+        logger.info(f"Native trajectory flushed via builder: {len(steps)} steps for episode {native_ep_id[:8]}")
     except Exception as e:
         logger.debug(f"Native trajectory write failed: {e}")
+
+
+def _run_rust_procedure_learning(project_id: str) -> None:
+    """
+    Run the Rust procedure learning pipeline:
+      list_trajectories → cluster_experiences → build_experience_bundle
+      → distill_procedure → store as procedural node.
+
+    Fires automatically at session end and on per-prompt flush.
+    """
+    if not _NATIVE_OK:
+        return
+    try:
+        db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+        native_db = str(db_path / "ainl_native.db")
+        store = _ainl_native.AinlNativeStore.open(native_db)
+
+        # Load recent trajectory records (last 30 days)
+        since_ts = int(time.time()) - 30 * 86400
+        raw_records = store.list_trajectories("claude-code", 100, since_ts)
+
+        if len(raw_records) < 2:
+            return
+
+        # Convert TrajectoryDetailRecord → TrajectoryDraft format
+        drafts = []
+        for r in raw_records:
+            drafts.append({
+                "episode_id": r["episode_id"],
+                "session_id": r.get("session_id", project_id),
+                "project_id": r.get("project_id") or project_id,
+                "ainl_source_hash": None,
+                "outcome": r["outcome"],
+                "steps": r.get("steps", []),
+                "duration_ms": r.get("duration_ms", 0),
+            })
+
+        clusters = _ainl_native.cluster_experiences(drafts)
+        if not clusters:
+            return
+
+        promoted = 0
+        from node_types import create_procedural_node
+        from graph_store import get_graph_store
+        py_store = get_graph_store(
+            Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
+        )
+
+        for cluster in clusters:
+            try:
+                bundle = _ainl_native.build_experience_bundle(cluster)
+                artifact = _ainl_native.distill_procedure(bundle, min_observations=2, min_fitness=0.5)
+                node = create_procedural_node(
+                    project_id=project_id,
+                    pattern_name=artifact.get("title", artifact.get("id", "procedure")),
+                    trigger=artifact.get("intent", ""),
+                    tool_sequence=artifact.get("required_tools", []),
+                    success_count=artifact.get("observation_count", 0),
+                    failure_count=0,
+                    fitness=artifact.get("fitness", 0.0),
+                    evidence_ids=artifact.get("source_trajectory_ids", []),
+                )
+                py_store.write_node(node)
+                promoted += 1
+            except Exception as e:
+                logger.debug(f"Rust procedure distillation skipped for cluster: {e}")
+
+        if promoted:
+            logger.info(f"Rust procedure learning: promoted {promoted} procedure(s)")
+    except Exception as e:
+        logger.debug(f"Rust procedure learning failed (non-fatal): {e}")
+
+
+def _save_anchored_summary(
+    project_id: str,
+    task_summary: str,
+    outcome: str,
+    session_data: dict,
+    episode_data: Optional[dict],
+) -> None:
+    """Upsert a compact cross-session summary into the native DB for next-session injection."""
+    db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+    db_path.mkdir(parents=True, exist_ok=True)
+    native_db = str(db_path / "ainl_native.db")
+    store = _ainl_native.AinlNativeStore.open(native_db)
+
+    tools = sorted(session_data.get("tools_used", []))[:12]
+    files = [Path(f).name for f in session_data.get("files_touched", [])[:8]]
+    semantic_tags = []
+    if episode_data:
+        for t in episode_data.get("semantic_tags", [])[:6]:
+            semantic_tags.append(t.get("value", str(t)))
+
+    payload = json.dumps({
+        "schema_version": 1,
+        "task_summary": task_summary,
+        "outcome": outcome,
+        "tools_used": tools,
+        "files_touched": files,
+        "semantic_tags": semantic_tags,
+        "capture_count": len(session_data.get("tool_captures", [])),
+        "session_ts": int(time.time()),
+        "project_id": project_id,
+    }, separators=(",", ":"))
+
+    node_id = store.upsert_anchored_summary("claude-code", payload)
+    logger.info(f"Anchored summary saved: {node_id} ({len(payload)} bytes)")
 
 
 def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> None:
@@ -795,6 +909,20 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             _flush_native_trajectories(project_id, episode_data)
         except Exception as e:
             logger.debug(f"Native trajectory flush failed (non-fatal): {e}")
+
+    # Run Rust procedure learning pipeline on accumulated trajectories
+    if _NATIVE_OK:
+        try:
+            _run_rust_procedure_learning(project_id)
+        except Exception as e:
+            logger.debug(f"Rust procedure learning failed (non-fatal): {e}")
+
+    # Save anchored summary for next-session context continuity
+    if _NATIVE_OK:
+        try:
+            _save_anchored_summary(project_id, task_summary, outcome, session_data, episode_data)
+        except Exception as e:
+            logger.debug(f"Anchored summary save failed (non-fatal): {e}")
 
     log_event("session_finalized", {
         "project_id": project_id,

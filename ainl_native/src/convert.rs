@@ -1,7 +1,6 @@
 //! JSON bridge helpers — convert Rust structs ↔ Python dicts via serde_json.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
 
 /// Serialize any serde-serializable value to a Python dict/list/scalar.
 pub fn to_py<T: serde::Serialize>(py: Python<'_>, value: &T) -> PyResult<PyObject> {

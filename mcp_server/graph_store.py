@@ -614,3 +614,31 @@ class SQLiteGraphStore(GraphStore):
         """Close database connection"""
         self.conn.close()
         logger.info("Closed graph store connection")
+
+
+def get_graph_store(db_path: Path, agent_id: str = "claude-code") -> GraphStore:
+    """
+    Factory that returns either NativeGraphStore (Rust) or SQLiteGraphStore (Python)
+    based on config.json `memory.store_backend` ("native" | "python").
+    Default is "python" until migration is executed and validated.
+    """
+    try:
+        import json as _json
+        cfg_path = Path(__file__).parent.parent / "config.json"
+        backend = _json.loads(cfg_path.read_text()).get("memory", {}).get("store_backend", "python")
+    except Exception:
+        backend = "python"
+
+    if backend == "native":
+        try:
+            from native_graph_store import NativeGraphStore
+            # Native store uses ainl_native.db (Rust schema) alongside ainl_memory.db (Python schema)
+            native_path = db_path.parent / "ainl_native.db"
+            return NativeGraphStore(native_path, agent_id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "native backend requested but failed (%s) — falling back to python", e
+            )
+
+    return SQLiteGraphStore(db_path)
