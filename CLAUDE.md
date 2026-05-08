@@ -1,5 +1,31 @@
 # AINL Plugin Instructions for Claude Code
 
+## Plugin Setup (for new users)
+
+If a user says they just cloned or downloaded this plugin and needs help activating it:
+
+**The one-command install:**
+```bash
+cd ~/.claude/plugins/ainl-graph-memory
+bash setup.sh
+# then restart Claude Code
+```
+
+`setup.sh` handles: venv creation, dep install, marketplace registration, settings.json update, and config defaults.
+
+**To verify it worked** after restarting: `/mcp` should list ~20 tools starting with `ainl-graph-memory__`.
+
+**Common issues:**
+- `python3 not found` → install Python 3.10+ from python.org
+- `pip install fails` → run `bash setup.sh` again with internet connection
+- No banner at startup → check `~/.claude/settings.json` has `"enabledPlugins": {"ainl-graph-memory@ainl-local": true}`; if missing, re-run setup.sh
+- Only ~13 tools (no ainl_ tools) → run `pip install ainativelang[mcp]>=1.7.0` inside `.venv`
+
+**Native Rust backend (optional, higher fidelity):**
+Requires armaraos source at `~/.openclaw/workspace/armaraos/` and Rust toolchain 1.75+. setup.sh detects this automatically and sets `store_backend: native` in config.json. The Rust extension (`ainl_native`) builds automatically at the next SessionStart.
+
+---
+
 You have the **AINL Graph Memory** plugin with **full AINL language integration**.
 
 ## Your Capabilities

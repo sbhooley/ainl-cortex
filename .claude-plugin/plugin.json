@@ -1,10 +1,10 @@
 {
   "name": "ainl-graph-memory",
   "displayName": "AINL Graph Memory",
-  "version": "0.1.4",
-  "description": "Production-grade graph-native memory system inspired by AINL unified graph execution engine. Execution becomes memory through typed graph nodes.",
-  "author": { "name": "Claude Code Community" },
-  "repository": "https://github.com/claude-code/ainl-graph-memory",
+  "version": "0.2.0",
+  "description": "Graph-native memory and self-learning for Claude Code. Every session is captured, indexed, and recalled — your assistant gets smarter over time.",
+  "author": { "name": "Steven Hooley" },
+  "repository": "https://github.com/sbhooley/ainativelang-claudecode",
   "keywords": ["memory", "graph", "ainl", "persistence", "agent", "coding-assistant"],
   "license": "MIT OR Apache-2.0",
   "compatibility": {

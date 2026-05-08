@@ -263,8 +263,11 @@ def main():
         try:
             import json as _json
             _cfg = _json.loads((root / "config.json").read_text())
-            from a2a_bridge_daemon import ensure_bridge_running
-            bridge_status = ensure_bridge_running(root, _cfg)
+            if _cfg.get("a2a", {}).get("enabled", False):
+                from a2a_bridge_daemon import ensure_bridge_running
+                bridge_status = ensure_bridge_running(root, _cfg)
+            else:
+                bridge_status = {"running": False, "reason": "disabled in config"}
         except Exception as _e:
             bridge_status = {"running": False, "reason": str(_e)}
 

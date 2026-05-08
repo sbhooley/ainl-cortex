@@ -168,32 +168,33 @@ AINL Graph Memory is a **Claude Code plugin** that transforms your AI coding ass
 ### Installation
 
 ```bash
-# Clone to Claude Code plugins directory
-cd ~/.claude/plugins
-git clone https://github.com/sbhooley/ainativelang-claudecode.git ainl-graph-memory
-
-# Install dependencies
-cd ainl-graph-memory
-pip install -r requirements.txt
-
-# Optional: Install AINL support
-pip install -r requirements-ainl.txt
-
-# Verify installation
-python3 mcp_server/server.py --help
+git clone https://github.com/sbhooley/ainativelang-claudecode.git ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-graph-memory
+bash setup.sh
 ```
 
-### Activation
+Then **restart Claude Code**. That's it.
 
-**That's it!** The plugin activates automatically when Claude Code starts. It will:
+`setup.sh` handles everything:
+- Creates a Python venv and installs all dependencies
+- Registers the plugin with Claude Code (marketplace + settings)
+- Detects your environment and selects the right backend automatically
 
-1. ✅ **Capture** your tool usage via hooks (Read, Edit, Bash, etc.)
-2. ✅ **Store** typed graph nodes in project-isolated SQLite databases
-3. ✅ **Learn** patterns, personas, and preferences automatically
-4. ✅ **Retrieve** relevant context and inject it before Claude responds
-5. ✅ **Evolve** understanding based on your coding style
+### What you'll see
 
-Memory accumulates and improves with every interaction.
+On your next session start, the `[AINL Graph Memory]` banner appears:
+
+```
+[AINL Graph Memory]  Plugin root: ~/.claude/plugins/ainl-graph-memory
+  • Graph DB: ready (ainl_memory.db)
+  • Compression: BALANCED (on)  ~savings ~40–60%
+  • MCP stack: OK
+  ...
+```
+
+And `/mcp` shows ~20 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, etc.).
+
+From that point on, memory accumulates automatically — no prompts, no configuration needed.
 
 ---
 

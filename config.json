@@ -25,9 +25,8 @@
     "track_adaptive_decisions": true
   },
   "a2a": {
-    "enabled": true,
+    "enabled": false,
     "daemon_json": "~/.armaraos/daemon.json",
-    "bridge_script": "/Users/clawdbot/.openclaw/workspace/AI_Native_Lang/skills/hermes/armaraos-a2a-bridge/armaraos_a2a_bridge.py",
     "bridge_port": 7860,
     "bridge_host": "127.0.0.1",
     "bridge_pidfile": "a2a/bridge.pid",
