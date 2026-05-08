@@ -223,7 +223,6 @@ def recall_context(project_id: str, prompt: str) -> dict:
 
         # Score applicable procedural patterns against current prompt via Rust score_reuse
         try:
-            import ainl_native as _ainl_native
             raw_patterns = memory_context.get('applicable_patterns', [])
             if raw_patterns and prompt:
                 available_tools = list({

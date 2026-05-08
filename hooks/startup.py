@@ -222,7 +222,7 @@ def _ensure_ainl_native(plugin_root: Path) -> str:
     try:
         env = {**os.environ, "PYO3_USE_ABI3_FORWARD_COMPATIBILITY": "1"}
         r = subprocess.run(
-            [str(maturin), "develop", "--manifest-path", str(native_dir / "Cargo.toml")],
+            [str(maturin), "develop", "--release", "--manifest-path", str(native_dir / "Cargo.toml")],
             env=env,
             capture_output=True,
             text=True,

@@ -608,7 +608,8 @@ def flush_pending_captures(project_id: str) -> int:
             store, episode_data = write_episode(project_id, session_data)
             write_failures(store, project_id, session_data)
             if episode_data:
-                write_persona(store, project_id, episode_data)
+                if not _NATIVE_OK:
+                    write_persona(store, project_id, episode_data)
                 link_resolutions(store, project_id, episode_data)
             write_patterns(store, project_id)
             write_semantics(store, project_id)
