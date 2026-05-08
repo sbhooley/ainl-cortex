@@ -22,8 +22,15 @@ from shared.a2a_graph import store_message_node, query_thread_history
 
 logger = get_logger("user_prompt_submit")
 
+try:
+    import ainl_native as _ainl_native
+    _NATIVE_OK = True
+except ImportError:
+    _ainl_native = None
+    _NATIVE_OK = False
 
-def format_memory_brief(context: dict, project_id: str, compress: bool = False) -> tuple:
+
+def format_memory_brief(context: dict, project_id: str, compress: bool = False, prebuilt_brief: str = None) -> tuple:
     """
     Format memory context into compact text brief.
 
@@ -31,6 +38,33 @@ def format_memory_brief(context: dict, project_id: str, compress: bool = False) 
 
     Returns: (brief_text, compression_metrics, pipeline_stats)
     """
+    if prebuilt_brief is not None:
+        brief = prebuilt_brief
+        compression_metrics = None
+        pipeline_stats = None
+        if compress:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+                from compression_pipeline import get_compression_pipeline
+                pipeline = get_compression_pipeline()
+                result = pipeline.compress_memory_context(brief, project_id)
+                brief = result.compressed_text
+                if result.compression_metrics:
+                    compression_metrics = {
+                        "mode": result.mode_used.value,
+                        "mode_source": result.mode_source,
+                        "original_tokens": result.compression_metrics.original_tokens,
+                        "compressed_tokens": result.compression_metrics.compressed_tokens,
+                        "tokens_saved": result.compression_metrics.tokens_saved,
+                        "savings_pct": result.compression_metrics.savings_ratio_pct,
+                    }
+            except Exception as e:
+                logger.warning(f"Compression pipeline failed, using original: {e}")
+        max_chars = 800 * 4
+        if len(brief) > max_chars:
+            brief = brief[:max_chars] + "\n\n[... truncated for context budget]"
+        return brief, compression_metrics, pipeline_stats
+
     lines = ["## Relevant Graph Memory", ""]
 
     # Recent episodes
@@ -369,18 +403,39 @@ def main():
             logger.debug("User prompt compression disabled")
             prompt_for_recall = prompt
 
-        # Recall context from graph memory (using potentially compressed prompt)
-        context = recall_context(project_id, prompt_for_recall)
-
         # Check if memory context compression should be used
         use_memory_compression = config.should_compress_memory_context()
 
-        # Format compact brief (with unified compression pipeline)
-        brief, memory_compression_metrics, pipeline_stats = format_memory_brief(
-            context,
-            project_id,
-            compress=use_memory_compression
-        )
+        # Recall + format: try native Rust path first
+        brief = ""
+        memory_compression_metrics = None
+        pipeline_stats = None
+        _used_native_recall = False
+        if _NATIVE_OK:
+            try:
+                _native_db = str(
+                    Path.home() / ".claude" / "projects" / project_id
+                    / "graph_memory" / "ainl_native.db"
+                )
+                _recall = _ainl_native.recall_context(_native_db, project_id, prompt_for_recall)
+                brief = _recall.get("brief", "")
+                logger.info(
+                    f"Native recall: {_recall.get('episode_count', 0)} episodes, "
+                    f"{_recall.get('fact_count', 0)} facts, "
+                    f"{_recall.get('pattern_count', 0)} patterns"
+                )
+                _used_native_recall = True
+                brief, memory_compression_metrics, pipeline_stats = format_memory_brief(
+                    {}, project_id, compress=use_memory_compression, prebuilt_brief=brief
+                )
+            except Exception as _re:
+                logger.debug(f"Native recall failed, falling back to Python: {_re}")
+
+        if not _used_native_recall:
+            context = recall_context(project_id, prompt_for_recall)
+            brief, memory_compression_metrics, pipeline_stats = format_memory_brief(
+                context, project_id, compress=use_memory_compression
+            )
 
         # ── A2A inbox injection ───────────────────────────────────────────────
         plugin_root = Path(__file__).parent.parent

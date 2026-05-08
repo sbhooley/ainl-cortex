@@ -658,7 +658,8 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             logger.warning(f"Failure nodes write failed: {e}")
 
         try:
-            if episode_data:
+            # Native mode: persona is handled by finalize_session (Rust) — skip Python path
+            if episode_data and not _NATIVE_OK:
                 write_persona(store, project_id, episode_data)
         except Exception as e:
             logger.warning(f"Persona write failed: {e}")

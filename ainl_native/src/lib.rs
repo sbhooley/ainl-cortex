@@ -41,6 +41,7 @@ fn ainl_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Session lifecycle (consolidated entry points for hooks)
     m.add_function(wrap_pyfunction!(session::finalize_session, m)?)?;
     m.add_function(wrap_pyfunction!(session::session_context, m)?)?;
+    m.add_function(wrap_pyfunction!(session::recall_context, m)?)?;
 
     Ok(())
 }

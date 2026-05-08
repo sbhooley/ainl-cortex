@@ -1,7 +1,8 @@
 //! Consolidated session lifecycle entry points — one call per hook instead of N calls.
 //!
-//! finalize_session: Stop hook — episode, trajectory, persona, procedure learning, summary.
-//! session_context:  SessionStart hook — anchored summary + freshness gate.
+//! finalize_session:  Stop hook — episode, trajectory, persona, procedure learning, summary.
+//! session_context:   SessionStart hook — anchored summary + freshness gate.
+//! recall_context:    UserPromptSubmit hook — retrieve + score relevant nodes, return brief string.
 
 use ainl_context_freshness::{can_execute_with_context, evaluate_freshness, FreshnessInputs};
 use ainl_contracts::{ContextFreshness, TrajectoryOutcome};
@@ -162,13 +163,16 @@ pub fn finalize_session(
     // 5. Persona evolution (opens second connection — EvolutionEngine needs its own store)
     let persona_snapshot = run_persona_evolution(db_path);
 
-    // 6. Anchored summary
+    // 6. Anchored summary — includes this session's metrics for next-session banner
     let summary_saved = save_anchored_summary(
         &store,
         &input,
         &tag_values,
         project_id,
         timestamp,
+        traj_steps,
+        procedures_promoted,
+        episode_id,
     );
 
     result.set_item("episode_id", episode_id.to_string())?;
@@ -460,6 +464,9 @@ fn save_anchored_summary(
     tag_values: &[String],
     project_id: &str,
     timestamp: i64,
+    traj_steps: usize,
+    procedures_promoted: usize,
+    episode_id: Uuid,
 ) -> bool {
     let file_names: Vec<String> = input
         .files_touched
@@ -484,6 +491,11 @@ fn save_anchored_summary(
         "capture_count": input.capture_count,
         "session_ts": timestamp,
         "project_id": project_id,
+        "last_finalize": {
+            "episode_id": episode_id.to_string(),
+            "trajectory_steps": traj_steps,
+            "procedures_promoted": procedures_promoted,
+        },
     })) {
         Ok(p) => p,
         Err(_) => return false,
@@ -537,4 +549,344 @@ fn compute_age_hours(payload: &str) -> f64 {
     };
     let now = Utc::now().timestamp();
     ((now - session_ts).max(0) as f64) / 3600.0
+}
+
+// ── recall_context — UserPromptSubmit ─────────────────────────────────────────
+
+/// Retrieve and score relevant memory for the current prompt.
+///
+/// Returns dict: {brief, episode_count, fact_count, pattern_count, top_pattern_scores}
+///
+/// `brief` is a pre-formatted Markdown string ready to inject into system prompt.
+/// Python hook applies compression on top; structured counts let it log stats.
+#[pyfunction]
+#[pyo3(signature = (db_path, project_id, prompt, max_nodes=20))]
+pub fn recall_context(
+    py: Python<'_>,
+    db_path: &str,
+    project_id: &str,
+    prompt: &str,
+    max_nodes: usize,
+) -> PyResult<PyObject> {
+    let empty = |result: &Bound<'_, PyDict>| -> PyResult<()> {
+        result.set_item("brief", "")?;
+        result.set_item("episode_count", 0usize)?;
+        result.set_item("fact_count", 0usize)?;
+        result.set_item("pattern_count", 0usize)?;
+        result.set_item("top_pattern_scores", Vec::<f64>::new())?;
+        Ok(())
+    };
+
+    let result = PyDict::new(py);
+
+    if !Path::new(db_path).exists() {
+        empty(&result)?;
+        return Ok(result.into());
+    }
+
+    let store = match SqliteGraphStore::open(Path::new(db_path)) {
+        Ok(s) => s,
+        Err(_) => {
+            empty(&result)?;
+            return Ok(result.into());
+        }
+    };
+
+    let now = Utc::now().timestamp();
+
+    // 1. Recent episodes (last 30 days)
+    let episodes = store
+        .query_episodes_since(now - 30 * 86400, max_nodes.min(10))
+        .unwrap_or_default();
+
+    // 2. FTS search for semantic + failure nodes
+    let fts_nodes = if !prompt.is_empty() {
+        store
+            .search_all_nodes_fts_for_agent("claude-code", prompt, Some(project_id), max_nodes.min(15))
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    // 3. All procedural patterns + persona traits
+    let all_procs = store.find_by_type("Procedural").unwrap_or_default();
+    let persona_nodes = store.find_by_type("Persona").unwrap_or_default();
+
+    // 4. Collect known tool names from recent episodes for score_reuse
+    let available_tools = collect_episode_tools(&episodes);
+
+    // 5. Score every procedural against the prompt
+    let mut scored_procs: Vec<(f32, &AinlMemoryNode)> = all_procs
+        .iter()
+        .map(|n| (score_proc_node(n, prompt, &available_tools), n))
+        .collect();
+    scored_procs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // 6. Partition FTS results by type
+    let fts_semantics: Vec<&AinlMemoryNode> = fts_nodes
+        .iter()
+        .filter(|n| node_type_tag(n) == "Semantic")
+        .take(10)
+        .collect();
+    let fts_failures: Vec<&AinlMemoryNode> = fts_nodes
+        .iter()
+        .filter(|n| node_type_tag(n) == "Failure")
+        .take(5)
+        .collect();
+
+    // 7. Build formatted brief
+    let brief = build_recall_brief(
+        &episodes,
+        &fts_semantics,
+        &scored_procs,
+        &persona_nodes,
+        &fts_failures,
+    );
+
+    let top_scores: Vec<f64> = scored_procs
+        .iter()
+        .take(3)
+        .filter(|(s, _)| *s > 0.1)
+        .map(|(s, _)| *s as f64)
+        .collect();
+
+    result.set_item("brief", brief)?;
+    result.set_item("episode_count", episodes.len())?;
+    result.set_item("fact_count", fts_semantics.len())?;
+    result.set_item(
+        "pattern_count",
+        scored_procs.iter().filter(|(s, _)| *s > 0.2).count(),
+    )?;
+    result.set_item("top_pattern_scores", top_scores)?;
+    Ok(result.into())
+}
+
+// ── recall helpers ────────────────────────────────────────────────────────────
+
+fn node_type_tag(node: &AinlMemoryNode) -> &'static str {
+    match &node.node_type {
+        AinlNodeType::Semantic { .. } => "Semantic",
+        AinlNodeType::Episode { .. } => "Episode",
+        AinlNodeType::Failure { .. } => "Failure",
+        AinlNodeType::Procedural { .. } => "Procedural",
+        AinlNodeType::Persona { .. } => "Persona",
+        _ => "Other",
+    }
+}
+
+fn collect_episode_tools(episodes: &[AinlMemoryNode]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    for node in episodes {
+        if let AinlNodeType::Episode { episodic } = &node.node_type {
+            for t in episodic.effective_tools() {
+                seen.insert(t.clone());
+            }
+        }
+        // Also try plugin_data for Python-path episodes (tool_calls stored there)
+        if let Some(pd) = &node.plugin_data {
+            if let Some(arr) = pd.get("tool_calls").and_then(|v| v.as_array()) {
+                for t in arr {
+                    if let Some(s) = t.as_str() {
+                        seen.insert(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    seen.into_iter().collect()
+}
+
+fn score_proc_node(node: &AinlMemoryNode, prompt: &str, tools: &[String]) -> f32 {
+    let (title, required_tools, fitness, obs_count) = match &node.node_type {
+        AinlNodeType::Procedural { procedural } => (
+            procedural.pattern_name.clone(),
+            procedural.tool_sequence.clone(),
+            procedural.fitness.unwrap_or(0.5),
+            procedural.success_count,
+        ),
+        _ => return 0.0,
+    };
+
+    let artifact_val = serde_json::json!({
+        "schema_version": 1,
+        "id": node.id.to_string(),
+        "title": title,
+        "intent": "",
+        "summary": title,
+        "required_tools": required_tools,
+        "steps": [],
+        "fitness": fitness,
+        "observation_count": obs_count,
+        "lifecycle": "candidate",
+        "verification": {"criteria": [], "automated": false},
+    });
+
+    if let Ok(artifact) =
+        serde_json::from_value::<ainl_contracts::ProcedureArtifact>(artifact_val)
+    {
+        ainl_procedure_learning::score_reuse(&artifact, prompt, tools).score
+    } else {
+        0.0
+    }
+}
+
+fn build_recall_brief(
+    episodes: &[AinlMemoryNode],
+    semantics: &[&AinlMemoryNode],
+    scored_procs: &[(f32, &AinlMemoryNode)],
+    personas: &[AinlMemoryNode],
+    failures: &[&AinlMemoryNode],
+) -> String {
+    let mut lines: Vec<String> = vec!["## Relevant Graph Memory".into(), String::new()];
+
+    // Recent episodes
+    let ep_lines: Vec<String> = episodes
+        .iter()
+        .take(3)
+        .filter_map(|node| {
+            let (task, outcome, ts) = episode_display(node);
+            let date = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "?".to_string());
+            Some(format!("- [{}] {} → {}", date, truncate(&task, 60), outcome))
+        })
+        .collect();
+    if !ep_lines.is_empty() {
+        lines.push("**Recent Work:**".into());
+        lines.extend(ep_lines);
+        lines.push(String::new());
+    }
+
+    // Semantic facts
+    let fact_lines: Vec<String> = semantics
+        .iter()
+        .take(5)
+        .filter_map(|node| match &node.node_type {
+            AinlNodeType::Semantic { semantic } => Some(format!(
+                "- {} (conf: {:.2})",
+                truncate(&semantic.fact, 80),
+                semantic.confidence
+            )),
+            _ => None,
+        })
+        .collect();
+    if !fact_lines.is_empty() {
+        lines.push("**Known Facts:**".into());
+        lines.extend(fact_lines);
+        lines.push(String::new());
+    }
+
+    // Applicable patterns (only those with meaningful match score)
+    let pat_lines: Vec<String> = scored_procs
+        .iter()
+        .filter(|(s, _)| *s > 0.2)
+        .take(2)
+        .filter_map(|(score, node)| match &node.node_type {
+            AinlNodeType::Procedural { procedural } => {
+                let seq = procedural
+                    .tool_sequence
+                    .iter()
+                    .take(4)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" → ");
+                let fitness = procedural.fitness.unwrap_or(0.0);
+                Some(format!(
+                    "- \"{}\": {} (fitness: {:.2}, match: {:.2})",
+                    truncate(&procedural.pattern_name, 40),
+                    seq,
+                    fitness,
+                    score
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    if !pat_lines.is_empty() {
+        lines.push("**Reusable Patterns:**".into());
+        lines.extend(pat_lines);
+        lines.push(String::new());
+    }
+
+    // Known failures
+    let fail_lines: Vec<String> = failures
+        .iter()
+        .take(3)
+        .filter_map(|node| match &node.node_type {
+            AinlNodeType::Failure { failure } => {
+                let tool = failure.tool_name.as_deref().unwrap_or("?");
+                Some(format!("- {}: {}", tool, truncate(&failure.message, 80)))
+            }
+            _ => None,
+        })
+        .collect();
+    if !fail_lines.is_empty() {
+        lines.push("**Known Issues:**".into());
+        lines.extend(fail_lines);
+        lines.push(String::new());
+    }
+
+    // Persona traits
+    let trait_strs: Vec<String> = personas
+        .iter()
+        .filter_map(|node| match &node.node_type {
+            AinlNodeType::Persona { persona } if persona.strength > 0.1 => Some(format!(
+                "{} ({:.2})",
+                persona.trait_name, persona.strength
+            )),
+            _ => None,
+        })
+        .take(3)
+        .collect();
+    if !trait_strs.is_empty() {
+        lines.push(format!("**Project Style:** {}", trait_strs.join(", ")));
+        lines.push(String::new());
+    }
+
+    lines.join("\n").trim_end().to_string()
+}
+
+fn episode_display(node: &AinlMemoryNode) -> (String, String, i64) {
+    // Try plugin_data first (Python-path episodes carry task_description there)
+    if let Some(pd) = &node.plugin_data {
+        let task = pd
+            .get("task_description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let outcome = pd
+            .get("outcome")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed")
+            .to_string();
+        if !task.is_empty() {
+            let ts = pd.get("session_ts").and_then(|v| v.as_i64()).unwrap_or(0);
+            return (task, outcome, ts);
+        }
+    }
+    // Rust-path episode: build description from tools list
+    if let AinlNodeType::Episode { episodic } = &node.node_type {
+        let tools = episodic.effective_tools().iter().take(3).map(|s| s.to_string()).collect::<Vec<_>>();
+        let task = if tools.is_empty() {
+            "Session".to_string()
+        } else {
+            format!("Tools: {}", tools.join(", "))
+        };
+        return (task, "completed".to_string(), episodic.timestamp);
+    }
+    ("Session".to_string(), "completed".to_string(), 0)
+}
+
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        s
+    } else {
+        // Truncate at char boundary
+        &s[..s
+            .char_indices()
+            .take_while(|(i, _)| *i < max)
+            .last()
+            .map(|(i, _)| i + 1)
+            .unwrap_or(max)]
+    }
 }

@@ -349,6 +349,12 @@ def main():
                     if _s.get("semantic_tags"):
                         _lines.append(f"  Tags: {', '.join(_s['semantic_tags'][:5])}")
                     _lines.append(f"  Context freshness: {_freshness} (execute: {'yes' if _ok else 'refresh recommended'})")
+                    _lf = _s.get("last_finalize", {})
+                    if _lf:
+                        _lines.append(
+                            f"  Persisted: {_lf.get('trajectory_steps', 0)} traj steps, "
+                            f"{_lf.get('procedures_promoted', 0)} procedures promoted"
+                        )
                     _lines.append("━━━ END PRIOR SESSION ━━━\n")
                     system_blocks.append("\n".join(_lines))
                     logger.info("Injected anchored summary from prior session")
