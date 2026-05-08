@@ -326,40 +326,32 @@ def main():
             trig_lines.append("━━━ END ALERTS ━━━\n")
             system_blocks.append("\n".join(trig_lines))
 
-        # ── Anchored summary (prior-session context) ──────────────────────────
+        # ── Anchored summary + freshness gate (prior-session context) ─────────
         if _NATIVE_OK:
             try:
                 _project_id = get_project_id(cwd)
-                _native_db = Path.home() / ".claude" / "projects" / _project_id / "graph_memory" / "ainl_native.db"
-                if _native_db.exists():
-                    _store = _ainl_native.AinlNativeStore.open(str(_native_db))
-                    _raw = _store.fetch_anchored_summary("claude-code")
-                    if _raw:
-                        _s = json.loads(_raw)
-                        import time as _time
-                        _age_h = (_time.time() - _s.get("session_ts", 0)) / 3600
-                        _age_str = f"{_age_h:.0f}h ago" if _age_h < 48 else f"{_age_h/24:.0f}d ago"
-                        _lines = [f"\n━━━ PRIOR SESSION CONTEXT ({_age_str}) ━━━"]
-                        _lines.append(f"  Summary: {_s.get('task_summary', '—')}")
-                        _lines.append(f"  Outcome: {_s.get('outcome', '?')}  |  Captures: {_s.get('capture_count', 0)}")
-                        if _s.get("tools_used"):
-                            _lines.append(f"  Tools: {', '.join(_s['tools_used'][:8])}")
-                        if _s.get("files_touched"):
-                            _lines.append(f"  Files: {', '.join(_s['files_touched'][:6])}")
-                        if _s.get("semantic_tags"):
-                            _lines.append(f"  Tags: {', '.join(_s['semantic_tags'][:5])}")
-                        # ── Freshness gate ───────────────────────────────────
-                        try:
-                            _stale = _age_h > 24  # stale if last session > 24h ago
-                            _freshness = _ainl_native.check_freshness(index_stale=_stale)
-                            _ok = _ainl_native.can_execute(_freshness, strict=False)
-                            _lines.append(f"  Context freshness: {_freshness} (execute: {'yes' if _ok else 'refresh recommended'})")
-                        except Exception:
-                            pass
-                        # ─────────────────────────────────────────────────────
-                        _lines.append("━━━ END PRIOR SESSION ━━━\n")
-                        system_blocks.append("\n".join(_lines))
-                        logger.info("Injected anchored summary from prior session")
+                _native_db = str(Path.home() / ".claude" / "projects" / _project_id / "graph_memory" / "ainl_native.db")
+                _ctx = _ainl_native.session_context(_native_db, _project_id)
+                _raw = _ctx.get("summary_json")
+                if _raw:
+                    _s = json.loads(_raw)
+                    _age_h = _ctx.get("age_hours", 0.0)
+                    _age_str = f"{_age_h:.0f}h ago" if _age_h < 48 else f"{_age_h/24:.0f}d ago"
+                    _freshness = _ctx.get("freshness", "Unknown")
+                    _ok = _ctx.get("can_execute", True)
+                    _lines = [f"\n━━━ PRIOR SESSION CONTEXT ({_age_str}) ━━━"]
+                    _lines.append(f"  Summary: {_s.get('task_summary', '—')}")
+                    _lines.append(f"  Outcome: {_s.get('outcome', '?')}  |  Captures: {_s.get('capture_count', 0)}")
+                    if _s.get("tools_used"):
+                        _lines.append(f"  Tools: {', '.join(_s['tools_used'][:8])}")
+                    if _s.get("files_touched"):
+                        _lines.append(f"  Files: {', '.join(_s['files_touched'][:6])}")
+                    if _s.get("semantic_tags"):
+                        _lines.append(f"  Tags: {', '.join(_s['semantic_tags'][:5])}")
+                    _lines.append(f"  Context freshness: {_freshness} (execute: {'yes' if _ok else 'refresh recommended'})")
+                    _lines.append("━━━ END PRIOR SESSION ━━━\n")
+                    system_blocks.append("\n".join(_lines))
+                    logger.info("Injected anchored summary from prior session")
             except Exception as _ae:
                 logger.debug(f"Anchored summary load failed (non-fatal): {_ae}")
 

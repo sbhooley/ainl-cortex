@@ -7,6 +7,7 @@ mod convert;
 mod freshness;
 mod persona;
 mod procedure;
+mod session;
 mod store;
 mod tagger;
 mod trajectory;
@@ -36,6 +37,10 @@ fn ainl_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(freshness::check_freshness, m)?)?;
     m.add_function(wrap_pyfunction!(freshness::can_execute, m)?)?;
+
+    // Session lifecycle (consolidated entry points for hooks)
+    m.add_function(wrap_pyfunction!(session::finalize_session, m)?)?;
+    m.add_function(wrap_pyfunction!(session::session_context, m)?)?;
 
     Ok(())
 }
