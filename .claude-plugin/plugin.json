@@ -1,11 +1,11 @@
 {
   "name": "ainl-graph-memory",
-  "displayName": "AINL Graph Memory",
+  "displayName": "AINL Cortex",
   "version": "0.2.0",
-  "description": "Graph-native memory and self-learning for Claude Code. Every session is captured, indexed, and recalled — your assistant gets smarter over time.",
+  "description": "Graph-native memory, self-learning, and multi-agent coordination for Claude Code. Every session is captured, every pattern learned, every agent connected.",
   "author": { "name": "Steven Hooley" },
-  "repository": "https://github.com/sbhooley/ainativelang-claudecode",
-  "keywords": ["memory", "graph", "ainl", "persistence", "agent", "coding-assistant"],
+  "repository": "https://github.com/sbhooley/ainl-cortex",
+  "keywords": ["memory", "graph", "ainl", "persistence", "agent", "coding-assistant", "a2a", "multi-agent", "goals"],
   "license": "MIT OR Apache-2.0",
   "compatibility": {
     "minClaudeCodeVersion": "0.1.0"
