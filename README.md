@@ -1,6 +1,6 @@
-# AINL Graph Memory for Claude Code
+# AINL Cortex for Claude Code
 
-**Production-grade graph-native memory system with self-learning capabilities and first-class AINL language integration.**
+**Graph-native memory and learning for Claude Code — every interaction remembered, every pattern learned, every agent connected.**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -11,7 +11,7 @@
 
 ## 🌟 What is This?
 
-AINL Graph Memory is a **Claude Code plugin** that transforms your AI coding assistant into a **self-learning system** that gets smarter with every interaction. It combines:
+AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant into a **self-learning system** that gets smarter with every interaction. It combines:
 
 1. **Graph-Native Memory** - Persistent, queryable knowledge graph where execution history becomes searchable knowledge
 2. **Zero-LLM Learning** - Learns your preferences and patterns without expensive LLM introspection
@@ -52,6 +52,30 @@ AINL Graph Memory is a **Claude Code plugin** that transforms your AI coding ass
 - 🔍 **Pattern Memory** - Stores and recalls successful AINL workflows
 - ⚡ **Eco Mode** - 40-70% token savings on memory context
 - 🎯 **Smart Detection** - Automatically suggests AINL for recurring tasks
+- 🔒 **Security Analysis** - Pre-run risk assessment for every workflow
+- 📐 **IR Diff** - Compare two AINL workflow versions at the graph IR level
+- 📚 **Template Library** - 6 ready-to-use workflows (API, monitor, pipeline, blockchain, LLM, multi-step)
+
+### A2A Multi-Agent Coordination
+- 🤝 **Agent Messaging** - Send messages and tasks to any registered A2A agent
+- 📝 **Note to Self** - Write a note that auto-surfaces in the *next* session's context
+- 👁️ **Condition Monitors** - Register file/URL watchers that push A2A notifications on trigger
+- ⏳ **Async Task Delegation** - Delegate work with `a2a_task_send`; poll status with `a2a_task_status`
+- 🔍 **Agent Discovery** - List and register agents in the ArmaraOS daemon network
+- 💾 **Graph-Backed History** - Every message and task is stored as a typed node for replay and audit
+
+### Goal Tracking
+- 🎯 **Multi-Session Goals** - Persistent objectives that survive session restarts and compaction
+- 🔮 **Auto-Inference** - Goals auto-derived from episode clusters without manual setup
+- 🔗 **Episode Linking** - New episodes automatically scored and linked to active goals
+- ✅ **Completion Tracking** - Clear done states with achievement summaries
+- 📋 **Status Lifecycle** - `active → blocked → completed / abandoned` with timestamped progress notes
+
+### Zero-Loss Context Compaction
+- 🔐 **PreCompact Flush** - All buffered captures written to the graph DB before Claude compacts
+- 📸 **Anchored Summary** - In-progress session state snapshotted so post-compaction context is accurate
+- 🔄 **PostCompact Sync** - Anchored summary updated after compaction; next session sees correct state
+- 🚫 **No Silent Data Loss** - Compaction can no longer silently discard unwritten memory
 
 ---
 
@@ -168,7 +192,7 @@ AINL Graph Memory is a **Claude Code plugin** that transforms your AI coding ass
 ### Installation
 
 ```bash
-git clone https://github.com/sbhooley/ainativelang-claudecode.git ~/.claude/plugins/ainl-graph-memory
+git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-graph-memory
 cd ~/.claude/plugins/ainl-graph-memory
 bash setup.sh
 ```
@@ -182,10 +206,10 @@ Then **restart Claude Code**. That's it.
 
 ### What you'll see
 
-On your next session start, the `[AINL Graph Memory]` banner appears:
+On your next session start, the `[AINL Cortex]` banner appears:
 
 ```
-[AINL Graph Memory]  Plugin root: ~/.claude/plugins/ainl-graph-memory
+[AINL Cortex]  Plugin root: ~/.claude/plugins/ainl-graph-memory
   • Graph DB: ready (ainl_memory.db)
   • Compression: BALANCED (on)  ~savings ~40–60%
   • MCP stack: OK
@@ -460,6 +484,66 @@ Before each AINL-related turn, the system assembles relevant context:
 Total: 480 tokens (under 500 budget) ✅
 ```
 
+### 6. Goal Tracking
+
+Goals are persistent, multi-session GOAL nodes that tie together clusters of episodes into named objectives. They survive session restarts, context compaction, and backend switches.
+
+```
+Episode cluster detected (3+ episodes touching auth.py + middleware.py)
+  → Dominant action: "implement"
+  → Proposed goal: "Implement auth middleware rewrite"
+  → Auto-created as GOAL node (status: active)
+
+  Session 1: episodes 1–4 linked (progress: "refactored token validation")
+  Session 2: episodes 5–7 linked (progress: "added compliance headers")
+  Session 3: goal marked completed with summary
+```
+
+**Goal lifecycle:**
+```
+memory_set_goal        → Create with title, description, completion criteria
+memory_update_goal     → Append progress note or change status (blocked / abandoned)
+memory_complete_goal   → Mark done with achievement summary
+memory_list_goals      → Review active goals at session start for orientation
+```
+
+**Auto-scoring:** After every episode write, the goal tracker computes keyword overlap between the new episode and each active goal. Above threshold → the episode is appended to `contributing_episodes` automatically.
+
+### 7. A2A Multi-Agent Coordination
+
+The plugin registers Claude as a first-class participant in the **ArmaraOS Agent-to-Agent (A2A)** network. Every message and delegated task is stored as a typed graph node so thread history and task outcomes are queryable.
+
+```
+# Send a message to another agent
+a2a_send(to="ELF", message="Review the new auth middleware PR")
+  → ArmaraOS daemon discovered from ~/.armaraos/daemon.json
+  → Message delivered; stored as MessageNode in graph DB
+  → Response returned to Claude
+
+# Delegate an async task with callback
+a2a_task_send(to="ELF", task_description="Run full test suite and report failures")
+  → Returns task_id immediately
+  → poll: a2a_task_status(task_id=...)
+  → Outcome stored as TaskEpisode node on completion
+
+# Cross-session note to yourself
+a2a_note_to_self(message="Remember: migration is half done, resume at step 3")
+  → Written to self_inbox
+  → Surfaced automatically at next SessionStart
+```
+
+**A2A tools summary:**
+
+| Tool | What it does |
+|---|---|
+| `a2a_send` | Deliver a message to a named agent; returns response |
+| `a2a_list_agents` | Discover registered agents and reachability |
+| `a2a_register_agent` | Add a new agent by name, URL, and capability tags |
+| `a2a_note_to_self` | Write a note that appears in the next session's context |
+| `a2a_register_monitor` | Watch files/URLs; push A2A notification on trigger |
+| `a2a_task_send` | Delegate an async task; get a task_id for polling |
+| `a2a_task_status` | Check status of a delegated task |
+
 ---
 
 ## 🛠️ Usage & CLI Tools
@@ -548,6 +632,44 @@ python3 cli/trajectory_cli.py analyze --pattern api_workflow
 python3 cli/trajectory_cli.py export --id traj_abc123
 ```
 
+### Managing Goals (via MCP tools)
+
+Goals are managed through MCP tools during a session — there is no separate CLI. Ask Claude directly:
+
+```
+"List my active goals"              → memory_list_goals
+"Mark goal g_abc123 complete"       → memory_complete_goal
+"Set a goal: implement OAuth2"      → memory_set_goal
+"Update goal g_abc123: step 2 done" → memory_update_goal
+```
+
+### A2A (via MCP tools)
+
+A2A coordination also uses MCP tools:
+
+```
+"Send ELF a message: check the API logs"   → a2a_send
+"What agents are available?"               → a2a_list_agents
+"Delegate the test run to ELF"             → a2a_task_send
+"What's the status of task t_xyz?"         → a2a_task_status
+"Note to self: resume migration at step 3" → a2a_note_to_self
+```
+
+### AINL Template Library
+
+Six production-ready templates in `templates/ainl/`:
+
+| Template | Purpose |
+|---|---|
+| `monitor_workflow.ainl` | Health check with alert webhook |
+| `api_endpoint.ainl` | Multi-step REST API orchestration |
+| `data_pipeline.ainl` | Daily ETL export to data warehouse |
+| `blockchain_monitor.ainl` | Solana balance watcher with alerts |
+| `llm_workflow.ainl` | AI-powered processing pipeline |
+| `multi_step_automation.ainl` | Approval flow with conditional branching |
+
+Use them as starting points: ask Claude to customize any template for your specific use case.
+
 ### Memory Location
 
 Your graph memory lives at:
@@ -560,6 +682,20 @@ Your graph memory lives at:
 ```
 
 Each project gets its own isolated graph.
+
+### Hook System Reference
+
+Six Claude Code hooks fire automatically — no configuration needed:
+
+| Hook | When | What it does |
+|---|---|---|
+| `SessionStart` | Session opens | Banner, backend init, `a2a_note_to_self` injection, freshness gating |
+| `UserPromptSubmit` | Before each prompt | Context injection, trajectory start, procedure scoring |
+| `UserPromptExpansion` | Before each prompt | Semantic compression (40–70% token savings on long prompts) |
+| `PostToolUse` | After each tool call | Episode capture, trajectory step, failure detection |
+| `PreCompact` | Before context compaction | Flush buffered captures; snapshot anchored summary |
+| `PostCompact` | After context compaction | Update anchored summary to post-compact state |
+| `Stop` | Session ends | Pattern consolidation, persona finalization, full flush |
 
 ---
 
@@ -784,7 +920,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-Copyright 2026 AINL Graph Memory Plugin Contributors
+Copyright 2026 AINL Cortex Plugin Contributors
 
 ---
 
@@ -850,7 +986,7 @@ Copyright 2026 AINL Graph Memory Plugin Contributors
 ### How does this differ from other memory systems?
 
 **Traditional Memory:** Separate retrieval layer, episodic/semantic silos, expensive embeddings  
-**AINL Graph Memory:** Execution IS memory, unified graph, zero-LLM learning, metadata-driven
+**AINL Cortex:** Execution IS memory, unified graph, zero-LLM learning, metadata-driven
 
 ### Does this send data to external services?
 
@@ -876,12 +1012,24 @@ Memory is stored locally with file permissions matching your user. No cloud sync
 
 Yes! The graph memory system works with all Claude Code interactions. AINL integration is optional but provides additional optimization.
 
+### How do goals differ from the file-based memory system?
+
+The file-based memory in `~/.claude/projects/.../memory/` is for human-readable facts (user preferences, project notes). Goals are **typed graph nodes** tied to episode clusters — they track multi-session work items, link to contributing episodes, carry status lifecycles, and auto-infer from your activity. They are complementary, not competing.
+
+### Do I need ArmaraOS to use A2A features?
+
+You need the **ArmaraOS daemon** running locally for `a2a_send` / `a2a_task_send` to deliver messages. Without it the tools report a clean "bridge offline" error and fall back gracefully. `a2a_note_to_self` always works — it writes to a local inbox file that surfaces at next SessionStart regardless of daemon status.
+
+### What happens to memory during context compaction?
+
+Nothing is lost. The `PreCompact` hook flushes all buffered captures to the graph DB and snapshots the current session state before compaction fires. The `PostCompact` hook then updates the anchored summary to reflect post-compact state. The next session's `SessionStart` injects the correct context.
+
 ---
 
 ## 💬 Support
 
-**Issues & Bugs:** https://github.com/sbhooley/ainativelang-claudecode/issues  
-**Discussions:** https://github.com/sbhooley/ainativelang-claudecode/discussions  
+**Issues & Bugs:** https://github.com/sbhooley/ainl-cortex/issues  
+**Discussions:** https://github.com/sbhooley/ainl-cortex/discussions  
 **Email:** support@ainativelang.com
 
 ---
@@ -890,7 +1038,7 @@ Yes! The graph memory system works with all Claude Code interactions. AINL integ
 
 **Powered by AINL architecture from ArmaraOS**
 
-**Making AI coding assistants that learn and evolve with you**
+**AINL Cortex — the intelligent core that learns, connects, and evolves with you**
 
 ---
 
@@ -938,3 +1086,40 @@ Error: unknown adapter 'httP'
 ```
 
 That's the power of **graph-as-memory** with **zero-LLM learning**. 🚀
+
+---
+
+## 🌐 A2A + Goal Tracking in Action
+
+```python
+# Session 1
+"Build an auth middleware rewrite"
+
+→ Goal auto-inferred from episode cluster:
+  GOAL: "Implement auth middleware rewrite" (status: active)
+
+→ 4 episodes linked: refactor, test, validate, document
+
+# End of session — want to pick up next time?
+a2a_note_to_self("Resume auth middleware at step 3: add compliance headers")
+
+# Session 2 opens →
+[SessionStart]  Note from last session:
+  "Resume auth middleware at step 3: add compliance headers"
+
+→ Goal recalled: memory_list_goals → "Implement auth middleware rewrite" (active)
+→ Continue seamlessly
+
+# Want another agent to review?
+a2a_send(to="ELF", message="Review the new auth middleware PR branch")
+  → ELF responds
+  → Exchange stored as MessageNode in graph DB for audit
+
+# Done?
+memory_complete_goal(goal_id="g_abc123",
+  summary="Auth middleware rewritten, compliance headers added, tests passing")
+  → GOAL node marked completed
+  → Contributing episodes retained in graph
+```
+
+Goals + A2A + graph memory = **collaborative, continuous, cross-session intelligence**.
