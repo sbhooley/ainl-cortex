@@ -1,6 +1,6 @@
 # AINL User Guide for Claude Code
 
-**AI Native Lang (AINL)** is now integrated into Claude Code through the ainl-graph-memory plugin!
+**AI Native Lang (AINL)** is now integrated into Claude Code through **AINL Cortex**!
 
 This guide shows you how to use AINL to create cost-efficient, deterministic workflows.
 

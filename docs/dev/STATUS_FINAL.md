@@ -13,7 +13,7 @@ All tasks completed successfully and pushed to production!
 
 ### Git Status: ✅ PUSHED
 ```
-Repository: https://github.com/sbhooley/ainativelang-claudecode.git
+Repository: https://github.com/sbhooley/ainl-cortex.git
 Branch: main
 Commit: f0e2eaa
 Files Changed: 31 files, 7,693 insertions
@@ -22,7 +22,7 @@ Files Changed: 31 files, 7,693 insertions
 ### License: ✅ ADDED
 - Apache License 2.0 added to repository
 - README updated with proper licensing
-- Copyright 2026 AINL Graph Memory Plugin Contributors
+- Copyright 2026 AINL Cortex Plugin Contributors
 
 ### Website: ✅ INTEGRATED
 - https://ainativelang.com added to README
@@ -205,7 +205,7 @@ Claude should recall the previous pattern.
 - **Docs:** https://ainativelang.com/docs
 
 ### Plugin Repository
-- **GitHub:** https://github.com/sbhooley/ainativelang-claudecode.git
+- **GitHub:** https://github.com/sbhooley/ainl-cortex.git
 - **Branch:** main
 - **Latest Commit:** f0e2eaa
 
@@ -289,7 +289,7 @@ To confirm the integration works:
 4. ✅ **Memory integration:** Plugin code complete, will activate in new sessions
 
 **Git details:**
-- Repository: https://github.com/sbhooley/ainativelang-claudecode.git
+- Repository: https://github.com/sbhooley/ainl-cortex.git
 - Commit: f0e2eaa
 - Files: 31 changed, 7,693 insertions
 - License: Apache 2.0

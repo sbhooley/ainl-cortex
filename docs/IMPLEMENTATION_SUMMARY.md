@@ -313,10 +313,7 @@ ainl-graph-memory/
    pip install -r requirements.txt
    ```
 
-2. **Verify installation:**
-   ```bash
-   ./verify_activation.sh
-   ```
+2. **Verify installation:** Restart Claude Code and check for the `[AINL Cortex]` banner and ~24 tools in `/mcp`.
 
 3. **Use MCP tools in Claude:**
    - `ainl_validate` to check syntax

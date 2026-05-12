@@ -388,7 +388,7 @@ finally:
 
 ## Comparison to Traditional Memory Systems
 
-| Aspect | Traditional RAG | AINL Graph Memory |
+| Aspect | Traditional RAG | AINL Cortex |
 |--------|----------------|-------------------|
 | **Storage** | Vector DB + metadata | Typed graph nodes + edges |
 | **Retrieval** | Embedding similarity | Graph traversal + ranking |
@@ -404,7 +404,7 @@ finally:
 ## Learn More
 
 - **ArmaraOS Architecture**: https://github.com/sbhooley/armaraos/blob/main/ARCHITECTURE.md
-- **AINL Graph Memory Guide**: https://github.com/sbhooley/armaraos/blob/main/docs/graph-memory.md
+- **AINL Cortex Guide**: https://github.com/sbhooley/ainl-cortex
 - **ainl-memory crate**: https://crates.io/crates/ainl-memory
 - **ainl-persona crate**: https://crates.io/crates/ainl-persona
 - **ainl-runtime crate**: https://crates.io/crates/ainl-runtime

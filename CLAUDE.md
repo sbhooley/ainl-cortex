@@ -26,7 +26,7 @@ Requires armaraos source at `~/.openclaw/workspace/armaraos/` and Rust toolchain
 
 ---
 
-You have the **AINL Graph Memory** plugin with **full AINL language integration**.
+You have the **AINL Cortex** plugin with **full AINL language integration**.
 
 ## Your Capabilities
 

@@ -1,6 +1,6 @@
 # Advanced Compression Features
 
-**AINL Graph Memory v0.2** - Production-grade compression enhancements
+**AINL Cortex v0.2** - Production-grade compression enhancements
 
 ## Overview
 
@@ -18,7 +18,7 @@ All enhancements work together in a **unified compression pipeline**.
 
 ### Installation
 
-Already included! If you have AINL Graph Memory installed, you have these features.
+Already included! If you have AINL Cortex installed, you have these features.
 
 ### Basic Usage
 
