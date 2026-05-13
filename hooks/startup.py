@@ -256,7 +256,16 @@ def main():
             db_s = f"error: {e}"
 
         mcp_ok, mcp_detail = verify_mcp_imports(root)
-        native_status = _ensure_ainl_native(root)
+        # Only attempt native build when config explicitly requests it
+        try:
+            import json as _json
+            _backend = _json.loads((root / "config.json").read_text()).get("memory", {}).get("store_backend", "python")
+        except Exception:
+            _backend = "python"
+        if _backend == "native":
+            native_status = _ensure_ainl_native(root)
+        else:
+            native_status = "skipped (python backend selected)"
         venv_file_status = append_venv_to_envfile(root)
 
         # ── A2A bridge ────────────────────────────────────────────────────────
