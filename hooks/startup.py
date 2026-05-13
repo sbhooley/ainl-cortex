@@ -23,6 +23,7 @@ if _mcp_dir not in sys.path:
 from shared.logger import get_logger
 from shared.project_id import get_project_id
 from shared.a2a_inbox import read_self_inbox, clear_self_inbox
+from notifications import poll as _poll_notifications, format_banner as _format_notif_banner
 
 try:
     import ainl_native as _ainl_native
@@ -280,6 +281,16 @@ def main():
         else:
             bridge_line = f"not running — {bridge_status.get('reason', 'unknown')}"
 
+        # ── Notification feed ─────────────────────────────────────────────────
+        new_notifs: list = []
+        update_msgs: list = []
+        try:
+            import json as _json
+            _cfg = _json.loads((root / "config.json").read_text())
+            new_notifs, update_msgs = _poll_notifications(root, _cfg)
+        except Exception as _ne:
+            logger.debug("Notification poll error (non-fatal): %s", _ne)
+
         # ── Self-inbox injection ──────────────────────────────────────────────
         self_notes = read_self_inbox(root)
         clear_self_inbox(root)
@@ -328,6 +339,11 @@ def main():
                 trig_lines.append(f"  • {t.get('message', str(t))}")
             trig_lines.append("━━━ END ALERTS ━━━\n")
             system_blocks.append("\n".join(trig_lines))
+
+        # ── Notification banner ───────────────────────────────────────────────
+        notif_banner = _format_notif_banner(new_notifs, update_msgs)
+        if notif_banner:
+            system_blocks.append(notif_banner)
 
         # ── Anchored summary + freshness gate (prior-session context) ─────────
         if _NATIVE_OK:

@@ -1,4 +1,10 @@
 {
+  "notifications": {
+    "enabled": true,
+    "url": "https://ainativelang.com/notifications",
+    "check_timeout_seconds": 5,
+    "auto_update": false
+  },
   "features": {
     "graph_memory": true,
     "context_injection": true,
