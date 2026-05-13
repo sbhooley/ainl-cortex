@@ -270,12 +270,16 @@ def main():
                 _py_db = db_path  # ainl_memory.db
                 if _py_db.exists() and _py_db.stat().st_size > 8192:
                     import sqlite3 as _sq
-                    _native_empty = (
-                        not _native_db.exists()
-                        or _sq.connect(str(_native_db)).execute(
-                            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
-                        ).fetchone()[0] == 0
-                    )
+                    if not _native_db.exists():
+                        _native_empty = True
+                    else:
+                        _conn = _sq.connect(str(_native_db))
+                        try:
+                            _native_empty = _conn.execute(
+                                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                            ).fetchone()[0] == 0
+                        finally:
+                            _conn.close()
                     if _native_empty:
                         native_status += " — ⚠️  unmigrated data detected: re-run setup.sh to migrate"
             except Exception:

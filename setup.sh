@@ -16,9 +16,10 @@ echo "    1. Checks Python 3.10+"
 echo "    2. Installs Rust (enables the native backend with richer session memory)"
 echo "       → If Rust install fails, falls back to the Python backend automatically"
 echo "    3. Creates a Python venv and installs dependencies"
-echo "    4. Migrates any existing memory data if switching backends"
-echo "    5. Registers the plugin with Claude Code"
-echo "    6. Runs verification tests"
+echo "    4. Builds the ainl_native Rust extension (if Rust available)"
+echo "    5. Migrates any existing memory data if switching backends"
+echo "    6. Registers the plugin with Claude Code"
+echo "    7. Runs verification tests"
 echo ""
 
 # ── 1. Python check ────────────────────────────────────────────────────────
@@ -114,35 +115,54 @@ print("    config.json written")
 PYEOF
 echo "  [ok] Config updated"
 
-# ── 5. Migrate memory if switching Python → Native ─────────────────────────
+# ── 5. Build native extension (must happen before migration) ───────────────
 NEW_BACKEND=$(python3 -c "import json; print(json.load(open('$PLUGIN_DIR/config.json'))['memory']['store_backend'])")
 
-if [ "$PREV_BACKEND" = "python" ] && [ "$NEW_BACKEND" = "native" ]; then
-    # Check if there's any existing Python memory data to migrate
+NATIVE_BUILT=false
+if [ "$NEW_BACKEND" = "native" ]; then
+    echo "  Building ainl_native Rust extension..."
+    "$PLUGIN_DIR/.venv/bin/pip" install maturin --quiet 2>/dev/null || true
+    if PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+        "$PLUGIN_DIR/.venv/bin/maturin" develop --release \
+        --manifest-path "$PLUGIN_DIR/ainl_native/Cargo.toml" 2>&1 | tail -2; then
+        NATIVE_BUILT=true
+        echo "  [ok] ainl_native built"
+    else
+        echo "  [warn] ainl_native build failed — reverting to Python backend"
+        python3 -c "
+import json; p='$PLUGIN_DIR/config.json'
+cfg=json.load(open(p)); cfg.setdefault('memory',{})['store_backend']='python'
+open(p,'w').write(json.dumps(cfg,indent=2))
+"
+        NEW_BACKEND="python"
+    fi
+fi
+
+# ── 6. Migrate memory if switching Python → Native ─────────────────────────
+if [ "$PREV_BACKEND" = "python" ] && [ "$NEW_BACKEND" = "native" ] && [ "$NATIVE_BUILT" = "true" ]; then
     HAS_DATA=$(python3 -c "
-import pathlib, glob
+import pathlib
 dbs = list(pathlib.Path.home().glob('.claude/projects/*/graph_memory/ainl_memory.db'))
 print('yes' if dbs else 'no')
 ")
     if [ "$HAS_DATA" = "yes" ]; then
         echo "  Existing memory data found — migrating to native backend..."
-        echo "  (Python DB kept as backup — no data will be lost)"
-        "$PLUGIN_DIR/.venv/bin/python" "$PLUGIN_DIR/migrate_to_native.py" || {
-            echo "  [warn] Migration encountered errors — reverting to Python backend"
-            python3 -c "
-import json; p='$PLUGIN_DIR/config.json'
-cfg=json.load(open(p)); cfg.setdefault('memory',{})['store_backend']='python'
-open(p,'w').write(json.dumps(cfg,indent=2))
-"
-            NEW_BACKEND="python"
-        }
-        echo "  [ok] Memory migrated to native backend"
+        echo "  (Python DBs kept as backups at ~/.claude/projects/*/graph_memory/ainl_memory.db)"
+        MIGRATION_OUT=$("$PLUGIN_DIR/.venv/bin/python" "$PLUGIN_DIR/migrate_to_native.py" 2>&1)
+        echo "$MIGRATION_OUT"
+        # Check for error count in migration output
+        ERRORS=$(echo "$MIGRATION_OUT" | grep -c "^  !" || true)
+        if [ "$ERRORS" -gt 0 ]; then
+            echo "  [warn] $ERRORS node(s)/edge(s) failed to migrate — partial migration, Python backup intact"
+        else
+            echo "  [ok] Memory migrated to native backend"
+        fi
     else
         echo "  No existing memory to migrate — starting fresh with native backend"
     fi
 fi
 
-# ── 6. Set up local marketplace ────────────────────────────────────────────
+# ── 7. Set up local marketplace ────────────────────────────────────────────
 echo "  Setting up plugin marketplace..."
 mkdir -p "$MARKETPLACE/.claude-plugin"
 mkdir -p "$MARKETPLACE/plugins"
@@ -170,7 +190,7 @@ cat > "$MARKETPLACE/.claude-plugin/marketplace.json" <<JSONEOF
 JSONEOF
 echo "  [ok] Marketplace configured"
 
-# ── 7. Register plugin in ~/.claude/settings.json ──────────────────────────
+# ── 8. Register plugin in ~/.claude/settings.json ──────────────────────────
 echo "  Registering plugin with Claude Code..."
 python3 - "$SETTINGS" "$MARKETPLACE" <<'PYEOF'
 import json, pathlib, sys
@@ -198,13 +218,13 @@ print(f"    {settings_path} updated")
 PYEOF
 echo "  [ok] Plugin registered"
 
-# ── 8. Self-verification ───────────────────────────────────────────────────
+# ── 9. Self-verification ───────────────────────────────────────────────────
 echo "  Running self-verification..."
 echo ""
 bash "$PLUGIN_DIR/scripts/verify_activation.sh" || true
 bash "$PLUGIN_DIR/scripts/smoke_test.sh" || true
 
-# ── 9. Telemetry: install event ────────────────────────────────────────────
+# ── 10. Telemetry: install event ───────────────────────────────────────────
 "$PLUGIN_DIR/.venv/bin/python" - "$PLUGIN_DIR" <<'PYEOF' &
 import sys
 from pathlib import Path
