@@ -83,7 +83,7 @@ Once restarted, all of the following are on by default:
 - **Goal tracking** — active goals auto-inferred from episode clusters, injected at every prompt
 - **Failure learning** — past failures surfaced as warnings before you repeat them
 - **Pattern promotion** — successful tool sequences promoted to reusable procedural patterns
-- **In-plugin notifications** — fetches update notices from ainativelang.com at each session start
+- **In-plugin notifications** — fetches update notices from ainativelang.com at each session start; unseen notices appear in the banner; seen IDs are persisted so nothing repeats
 
 A2A multi-agent messaging is available but requires `"a2a": {"enabled": true}` in `config.json` and the ArmaraOS daemon running.
 
@@ -156,6 +156,13 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 - 📸 **Anchored Summary** - In-progress session state snapshotted so post-compaction context is accurate
 - 🔄 **PostCompact Sync** - Anchored summary updated after compaction; next session sees correct state
 - 🚫 **No Silent Data Loss** - Compaction can no longer silently discard unwritten memory
+
+### Notification Feed
+- 🔔 **Session-Start Polling** - Fetches `ainativelang.com/notifications` once per session; zero latency on cache hit
+- 👁️ **Seen-ID Persistence** - Already-shown notices are never repeated across sessions
+- 🎯 **Smart Filtering** - Only surfaces notices targeting `claude-code-plugin` or `*`; ignores expired entries
+- 📢 **Priority Ordering** - High-priority notices appear first in the SessionStart banner
+- 🔄 **Optional Auto-Update** - Can `git pull --ff-only` automatically when the server marks a release safe (opt-in)
 
 ---
 
@@ -632,6 +639,54 @@ a2a_note_to_self(message="Remember: migration is half done, resume at step 3")
 
 ---
 
+## 🔔 Notification Feed
+
+AINL Cortex polls `https://www.ainativelang.com/notifications` once per session and surfaces any unseen notices in the `[AINL Cortex]` SessionStart banner. The system is completely passive — no data is sent, no account needed.
+
+### What you'll see
+
+When a new notice is available it appears in the banner:
+
+```
+[AINL Cortex]  ...
+  • [NOTICE] New release: ainl-cortex 0.4.0 — run `git pull` to update
+```
+
+Seen notice IDs are persisted in `a2a/notifications_seen.json` so the same notice never appears twice.
+
+### How filtering works
+
+The plugin only shows notices that:
+- Target `"claude-code-plugin"` or `"*"` (broadcast)
+- Have not yet expired (`expires_at` in the future, or no expiry set)
+- Have not been seen in a previous session
+
+Notices are sorted by `priority` (high first) then `published_at` (newest first).
+
+### Configuration
+
+```json
+// config.json — notifications section (all keys optional)
+{
+  "notifications": {
+    "enabled": true,              // set false to disable polling entirely
+    "url": "https://www.ainativelang.com/notifications",  // override feed URL
+    "check_timeout_seconds": 5,   // network timeout per poll
+    "auto_update": false          // opt-in: git pull --ff-only when server marks a release safe
+  }
+}
+```
+
+### Auto-update (opt-in)
+
+When `auto_update` is `true`, the poller will run `git pull --ff-only` inside the plugin directory if a notification carries an `auto_update` block that:
+- Sets `enabled: true` and `artifact: "ainl-cortex"`
+- Specifies a `min_version` / `max_version` range that includes your installed version
+
+The result (success, failure, or skip reason) is shown in the banner. This is **disabled by default** — set `"auto_update": true` in `config.json` to opt in.
+
+---
+
 ## 🛠️ Usage & CLI Tools
 
 ### Inspecting Memory
@@ -1033,6 +1088,7 @@ Copyright 2026 AINL Cortex Plugin Contributors
 - ✅ Reverse-edge graph traversal (`walk_edges_to`)
 - ✅ Migration tooling (`migrate_to_native.py`) for existing Python-backend data
 - ✅ PreCompact / PostCompact hooks for zero-data-loss at context compaction
+- ✅ Notification feed poller — session-start banner notices with seen-ID persistence and optional auto-update
 
 ### 📋 v0.4 (Planned)
 - [ ] Semantic embeddings for vector search (local model)
@@ -1062,7 +1118,7 @@ Copyright 2026 AINL Cortex Plugin Contributors
 
 ### Does this send data to external services?
 
-**No.** All memory is stored locally in SQLite databases. No external API calls for learning.
+**Almost no.** All memory is stored locally in SQLite databases. No external API calls for learning. The one exception is the **notification feed**: at each session start the plugin makes a read-only `GET` request to `ainativelang.com/notifications` to check for update notices. No user data is included — only the plugin version in the `User-Agent` header. You can disable this entirely by setting `"notifications": {"enabled": false}` in `config.json`.
 
 ### How much disk space does it use?
 
