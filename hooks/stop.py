@@ -25,8 +25,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 from shared.project_id import get_project_id, get_project_info
 from shared.logger import log_event, log_error, get_logger
 from shared.a2a_inbox import write_self_note
+from shared.config import is_strict_native
 
 logger = get_logger("stop")
+
+# Strict-native mode: Rust is the single source of truth for episodes,
+# semantics, procedurals, persona, and the anchored summary. The Python
+# pipeline is skipped except for the documented carve-outs (write_failures,
+# write_goals) which still write to the Python sidecar DB. See CLAUDE.md
+# "Database files" and shared/config.py:is_strict_native for full rationale.
+_STRICT_NATIVE = is_strict_native(_NATIVE_OK)
 
 
 def drain_session_inbox(project_id: str) -> dict:
@@ -583,12 +591,72 @@ def write_goals(store, project_id: str, episode_data: Optional[dict] = None) -> 
     return updated
 
 
+def _open_python_sidecar_store(project_id: str):
+    """Open the Python SQLiteGraphStore directly, bypassing the get_graph_store
+    backend factory. Used by strict-native mode for the documented carve-outs
+    (write_failures, write_goals) which still target ainl_memory.db even when
+    the rest of the pipeline writes to ainl_native.db."""
+    from graph_store import SQLiteGraphStore
+    db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return SQLiteGraphStore(db_path)
+
+
+def _build_episode_data_only(session_data: dict) -> dict:
+    """Construct an episode_data dict in-memory without writing it to any store.
+
+    Strict-native mode uses this to feed write_goals (Python sidecar) with the
+    same shape it would receive from write_episode in the Python path. The
+    actual EPISODE node is created by _ainl_native.finalize_session in the
+    Rust DB, so we deliberately do NOT persist this dict on the Python side."""
+    return {
+        "turn_id": str(uuid.uuid4()),
+        "task_description": create_episode_summary(session_data),
+        "tool_calls": session_data.get("tools_used", []),
+        "files_touched": session_data.get("files_touched", []),
+        "outcome": "partial" if session_data.get("had_errors") else "success",
+        "duration_ms": 0,
+        "git_commit": None,
+    }
+
+
+def _native_finalize_session(project_id: str, session_data: dict, capture_count: int):
+    """Invoke ainl_native.finalize_session with the standard payload shape.
+    Returns the result dict on success, None on any failure (non-fatal)."""
+    if not _NATIVE_OK:
+        return None
+    try:
+        native_db_path = str(
+            Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_native.db"
+        )
+        inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
+        step_file = str(inbox_dir / f"{project_id}_traj_steps.jsonl")
+        task_summary = create_episode_summary(session_data)
+        outcome = "partial" if session_data.get("had_errors") else "success"
+        session_json = json.dumps({
+            "tool_calls": session_data.get("tools_used", []),
+            "files_touched": session_data.get("files_touched", []),
+            "had_errors": session_data.get("had_errors", False),
+            "task_summary": task_summary,
+            "outcome": outcome,
+            "capture_count": capture_count,
+        })
+        return _ainl_native.finalize_session(native_db_path, project_id, session_json, step_file)
+    except Exception as e:
+        logger.debug(f"Native finalize_session failed (non-fatal): {e}")
+        return None
+
+
 def flush_pending_captures(project_id: str) -> int:
     """
     Flush any buffered captures to the graph DB right now.
     Called at the start of each UserPromptSubmit so every completed turn is
     persisted even if the session ends abruptly before Stop fires.
     Returns number of captures flushed (0 = nothing pending).
+
+    Strict-native mode: skips the Python episode/persona/patterns/semantics
+    write pipeline; Rust owns those node types via _ainl_native.finalize_session.
+    write_failures + write_goals still run on the Python sidecar DB.
     """
     inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
     inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
@@ -603,34 +671,42 @@ def flush_pending_captures(project_id: str) -> int:
     try:
         session_data = drain_session_inbox(project_id)
         if session_data["tool_captures"]:
-            store, episode_data = write_episode(project_id, session_data)
-            write_failures(store, project_id, session_data)
-            if episode_data:
-                if not _NATIVE_OK:
-                    write_persona(store, project_id, episode_data)
-                link_resolutions(store, project_id, episode_data)
-            write_patterns(store, project_id)
-            write_semantics(store, project_id)
-            write_goals(store, project_id, episode_data)
-            if _NATIVE_OK:
+            if _STRICT_NATIVE:
+                episode_data = _build_episode_data_only(session_data)
+                sidecar_store = None
                 try:
-                    native_db_path = str(Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_native.db")
-                    inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
-                    step_file = str(inbox_dir / f"{project_id}_traj_steps.jsonl")
-                    task_summary = create_episode_summary(session_data)
-                    outcome = "partial" if session_data["had_errors"] else "success"
-                    session_json = json.dumps({
-                        "tool_calls": session_data.get("tools_used", []),
-                        "files_touched": session_data.get("files_touched", []),
-                        "had_errors": session_data.get("had_errors", False),
-                        "task_summary": task_summary,
-                        "outcome": outcome,
-                        "capture_count": count,
-                    })
-                    _ainl_native.finalize_session(native_db_path, project_id, session_json, step_file)
-                except Exception as _ne:
-                    logger.debug(f"Per-prompt native finalize_session failed (non-fatal): {_ne}")
-            logger.info(f"Per-prompt flush: wrote all node types for {count} captures")
+                    sidecar_store = _open_python_sidecar_store(project_id)
+                except Exception as e:
+                    logger.warning(f"Python sidecar open failed (per-prompt flush): {e}")
+                if sidecar_store:
+                    try:
+                        write_failures(sidecar_store, project_id, session_data)
+                    except Exception as e:
+                        logger.warning(f"Failure write failed (strict-native sidecar): {e}")
+                    try:
+                        write_goals(sidecar_store, project_id, episode_data)
+                    except Exception as e:
+                        logger.warning(f"Goal write failed (strict-native sidecar): {e}")
+            else:
+                store, episode_data = write_episode(project_id, session_data)
+                write_failures(store, project_id, session_data)
+                if episode_data:
+                    if not _NATIVE_OK:
+                        write_persona(store, project_id, episode_data)
+                    link_resolutions(store, project_id, episode_data)
+                write_patterns(store, project_id)
+                write_semantics(store, project_id)
+                write_goals(store, project_id, episode_data)
+
+            # Native finalize: source of truth in strict mode, parallel learning
+            # side-channel in hybrid mode.
+            if _NATIVE_OK:
+                _native_finalize_session(project_id, session_data, count)
+
+            logger.info(
+                f"Per-prompt flush ({'strict-native' if _STRICT_NATIVE else 'python'}): "
+                f"wrote {count} captures"
+            )
         return count
     except Exception as e:
         logger.warning(f"Per-prompt flush failed (non-fatal): {e}")
@@ -639,50 +715,90 @@ def flush_pending_captures(project_id: str) -> int:
 
 
 def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> None:
-    """Write all node types, self-note (if substantial), and log structured event."""
+    """Write all node types, self-note (if substantial), and log structured event.
+
+    Strict-native (memory.store_backend == 'native' AND ainl_native loaded):
+      - Rust owns episode, persona, patterns, semantics, anchored summary.
+      - Python sidecar still owns failures + goals (see CLAUDE.md
+        "Database files" for the rationale on those carve-outs).
+
+    Python / hybrid mode:
+      - Full Python pipeline runs as historically.
+      - If the native module is loaded, _ainl_native.finalize_session also
+        runs as a parallel learning side-channel (writes Rust DB but is not
+        the source of truth for read paths).
+    """
     task_summary = create_episode_summary(session_data)
     outcome = "partial" if session_data["had_errors"] else "success"
+    capture_count = len(session_data.get("tool_captures", []))
 
-    store = None
-    episode_data = None
-    try:
-        store, episode_data = write_episode(project_id, session_data)
-    except Exception as e:
-        logger.warning(f"Episode write failed: {e}")
-
-    if store:
+    if _STRICT_NATIVE:
+        # Strict-native: Rust handles the bulk of the pipeline. Python sidecar
+        # only writes failures + goals to ainl_memory.db.
+        episode_data = _build_episode_data_only(session_data)
+        sidecar_store = None
         try:
-            write_failures(store, project_id, session_data)
+            sidecar_store = _open_python_sidecar_store(project_id)
         except Exception as e:
-            logger.warning(f"Failure nodes write failed: {e}")
+            logger.warning(f"Python sidecar open failed: {e}")
 
+        if sidecar_store:
+            try:
+                write_failures(sidecar_store, project_id, session_data)
+            except Exception as e:
+                logger.warning(f"Failure nodes write failed (strict-native sidecar): {e}")
+            try:
+                write_goals(sidecar_store, project_id, episode_data)
+            except Exception as e:
+                logger.warning(f"Goal write failed (strict-native sidecar): {e}")
+    else:
+        # Python or hybrid: full Python pipeline as before.
+        store = None
+        episode_data = None
         try:
-            # Native mode: persona is handled by finalize_session (Rust) — skip Python path
-            if episode_data and not _NATIVE_OK:
-                write_persona(store, project_id, episode_data)
+            store, episode_data = write_episode(project_id, session_data)
         except Exception as e:
-            logger.warning(f"Persona write failed: {e}")
+            logger.warning(f"Episode write failed: {e}")
 
-        try:
-            if episode_data:
-                link_resolutions(store, project_id, episode_data)
-        except Exception as e:
-            logger.warning(f"Resolution linking failed: {e}")
+        if store:
+            try:
+                write_failures(store, project_id, session_data)
+            except Exception as e:
+                logger.warning(f"Failure nodes write failed: {e}")
 
-        try:
-            write_patterns(store, project_id)
-        except Exception as e:
-            logger.warning(f"Pattern write failed: {e}")
+            try:
+                # Hybrid mode: persona is handled by finalize_session (Rust) — skip Python
+                if episode_data and not _NATIVE_OK:
+                    write_persona(store, project_id, episode_data)
+            except Exception as e:
+                logger.warning(f"Persona write failed: {e}")
 
-        try:
-            write_semantics(store, project_id)
-        except Exception as e:
-            logger.warning(f"Semantic write failed: {e}")
+            try:
+                if episode_data:
+                    link_resolutions(store, project_id, episode_data)
+            except Exception as e:
+                logger.warning(f"Resolution linking failed: {e}")
 
-        try:
-            write_goals(store, project_id, episode_data)
-        except Exception as e:
-            logger.warning(f"Goal write failed: {e}")
+            try:
+                write_patterns(store, project_id)
+            except Exception as e:
+                logger.warning(f"Pattern write failed: {e}")
+
+            try:
+                write_semantics(store, project_id)
+            except Exception as e:
+                logger.warning(f"Semantic write failed: {e}")
+
+            try:
+                write_goals(store, project_id, episode_data)
+            except Exception as e:
+                logger.warning(f"Goal write failed: {e}")
+
+            try:
+                from anchored_summary import update_anchored_summary
+                update_anchored_summary(store, project_id)
+            except Exception as e:
+                logger.warning(f"Anchored summary update failed: {e}")
 
     # Drain compression events and update auto-tune profile
     try:
@@ -737,29 +853,19 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
     except Exception as e:
         logger.warning(f"Self-note write failed: {e}")
 
-    # Consolidated native finalization: trajectory + persona + procedure learning + anchored summary
+    # Consolidated native finalization: trajectory + persona + procedure
+    # learning + anchored summary. In strict-native mode this is the source
+    # of truth; in hybrid mode it runs in parallel as a learning side-channel.
     if _NATIVE_OK:
-        try:
-            native_db_path = str(Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_native.db")
-            inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
-            step_file = str(inbox_dir / f"{project_id}_traj_steps.jsonl")
-            session_json = json.dumps({
-                "tool_calls": session_data.get("tools_used", []),
-                "files_touched": session_data.get("files_touched", []),
-                "had_errors": session_data.get("had_errors", False),
-                "task_summary": task_summary,
-                "outcome": outcome,
-                "capture_count": len(session_data.get("tool_captures", [])),
-            })
-            result = _ainl_native.finalize_session(native_db_path, project_id, session_json, step_file)
+        result = _native_finalize_session(project_id, session_data, capture_count)
+        if result:
+            mode_label = "strict" if _STRICT_NATIVE else "hybrid"
             logger.info(
-                f"Native finalize_session: episode={result.get('episode_id', '?')[:8]}, "
+                f"Native finalize_session ({mode_label}): episode={result.get('episode_id', '?')[:8]}, "
                 f"traj_steps={result.get('trajectory_steps', 0)}, "
                 f"procedures={result.get('procedures_promoted', 0)}, "
                 f"summary={result.get('summary_saved', False)}"
             )
-        except Exception as e:
-            logger.debug(f"Native finalize_session failed (non-fatal): {e}")
 
     log_event("session_finalized", {
         "project_id": project_id,
@@ -767,17 +873,16 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
         "tools_used": session_data["tools_used"],
         "files_touched": session_data["files_touched"],
         "outcome": outcome,
-        "capture_count": len(session_data["tool_captures"])
+        "capture_count": len(session_data["tool_captures"]),
+        "strict_native": _STRICT_NATIVE,
     })
 
 
 def main():
     """Main hook entry point"""
     try:
-        try:
-            input_data = json.load(sys.stdin)
-        except json.JSONDecodeError:
-            input_data = {}
+        from shared.stdin import read_stdin_json
+        input_data = read_stdin_json(hook_name="stop")
 
         # Use cwd from payload — hooks run with cd to plugin root
         cwd = Path(input_data.get('cwd', str(Path.cwd())))

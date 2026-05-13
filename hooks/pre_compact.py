@@ -90,7 +90,8 @@ def _flush_and_snapshot(project_id: str, message_count: int, estimated_tokens: i
 
 def main():
     try:
-        input_data = json.load(sys.stdin)
+        from shared.stdin import read_stdin_json
+        input_data = read_stdin_json(hook_name="pre_compact")
         project_id = get_project_id()
 
         messages = input_data.get('messages', [])

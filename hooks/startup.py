@@ -21,7 +21,7 @@ if _mcp_dir not in sys.path:
     sys.path.insert(0, _mcp_dir)
 
 from shared.logger import get_logger
-from shared.project_id import get_project_id
+from shared.project_id import get_project_id, get_project_info, LEGACY_GLOBAL_PROJECT_ID
 from shared.a2a_inbox import read_self_inbox, clear_self_inbox
 from notifications import poll as _poll_notifications, format_banner as _format_notif_banner
 
@@ -49,12 +49,12 @@ def _plugin_root() -> Path:
 
 def _hook_cwd() -> Path:
     try:
-        if not sys.stdin.isatty():
-            data = json.load(sys.stdin)
-            c = data.get("cwd")
-            if c:
-                return Path(c)
-    except (json.JSONDecodeError, OSError, TypeError, AttributeError):
+        from shared.stdin import read_stdin_json
+        data = read_stdin_json(hook_name="startup")
+        c = data.get("cwd")
+        if c:
+            return Path(c)
+    except Exception:
         pass
     return Path.cwd()
 
@@ -329,6 +329,19 @@ def main():
         except Exception as _ne:
             logger.debug("Notification poll error (non-fatal): %s", _ne)
 
+        # ── Per-session delta-injection hash reset (#8, #9) ──────────────────
+        # These files track what was last injected so turns 2+ can skip
+        # unchanged content.  Clear at session start so the first turn always
+        # gets a fresh inject, even if content hasn't changed from last session.
+        _inbox_dir = root / "inbox"
+        _inbox_dir.mkdir(parents=True, exist_ok=True)
+        _session_project_id = get_project_id(os.getcwd())
+        for _hf in ("_brief.hash", "_goals.hash", "_anchored.flag"):
+            try:
+                (_inbox_dir / f"{_session_project_id}{_hf}").unlink(missing_ok=True)
+            except Exception:
+                pass
+
         # ── Self-inbox injection ──────────────────────────────────────────────
         self_notes = read_self_inbox(root)
         clear_self_inbox(root)
@@ -344,10 +357,24 @@ def main():
         except Exception:
             pass
 
+        # Project banner: include the active isolation mode + legacy fallback
+        # so users can see at a glance whether they're on per-repo or global
+        # buckets and which legacy bucket the read-fallback chain still queries.
+        try:
+            _info = get_project_info(cwd)
+            _project_line = (
+                f"  • Project: {_info['project_id']}  ({_info['isolation_mode']}, "
+                f"git={'yes' if _info['git_toplevel'] else 'no'})  cwd: {cwd}\n"
+                f"  • Legacy fallback: {LEGACY_GLOBAL_PROJECT_ID} "
+                f"(read-only until backfill via scripts/repartition_by_repo.py)\n"
+            )
+        except Exception:
+            _project_line = f"  • Project: {get_project_id(cwd)}  cwd: {cwd}\n"
+
         banner = (
             f"[AINL Graph Memory]  Plugin root: {root}\n"
             f"  • Graph DB: {db_s}\n"
-            f"  • Project: {get_project_id(cwd)}  cwd: {cwd}\n"
+            f"{_project_line}"
             f"  • Compression: {status['mode']} ({'on' if status['enabled'] else 'off'})  ~savings {status['savings']}\n"
             f"  • AINL Python tools module: {'yes' if ainl else 'no (optional)'}\n"
             f"  • ainl_native (Rust bindings): {native_status}\n"
@@ -391,7 +418,20 @@ def main():
                 if note.get("context"):
                     note_lines.append(f"  Context: {note['context']}")
             note_lines.append("━━━ END SELF-NOTE ━━━\n")
-            system_blocks.append("\n".join(note_lines))
+            note_text = "\n".join(note_lines)
+            try:
+                from compression_pipeline import get_compression_pipeline
+                _pipeline = get_compression_pipeline()
+                _result = _pipeline.compress_memory_context(note_text, "self_notes")
+                if _result and _result.compressed_text:
+                    note_text = (
+                        "\n━━━ SELF-NOTE FROM PRIOR SESSION ━━━\n"
+                        + _result.compressed_text
+                        + "\n━━━ END SELF-NOTE ━━━\n"
+                    )
+            except Exception:
+                pass
+            system_blocks.append(note_text)
 
         if monitor_triggers:
             trig_lines = ["\n━━━ PRE-SESSION MONITOR ALERTS ━━━"]
@@ -427,6 +467,9 @@ def main():
             system_blocks.append(notif_banner)
 
         # ── Anchored summary + freshness gate (prior-session context) ─────────
+        _anchored_flag_file = _inbox_dir / f"{_session_project_id}_anchored.flag"
+        _anchored_injected = False
+
         if _NATIVE_OK:
             try:
                 _project_id = get_project_id(cwd)
@@ -457,9 +500,37 @@ def main():
                         )
                     _lines.append("━━━ END PRIOR SESSION ━━━\n")
                     system_blocks.append("\n".join(_lines))
-                    logger.info("Injected anchored summary from prior session")
+                    logger.info("Injected native anchored summary from prior session")
+                    _anchored_injected = True
             except Exception as _ae:
-                logger.debug(f"Anchored summary load failed (non-fatal): {_ae}")
+                logger.debug(f"Native anchored summary load failed (non-fatal): {_ae}")
+
+        if not _anchored_injected and _backend == "python":
+            # Python-backend anchored summary: synthesised brief from all graph memory.
+            try:
+                _py_pid = get_project_id(cwd)
+                _py_db = Path.home() / ".claude" / "projects" / _py_pid / "graph_memory" / "ainl_memory.db"
+                if _py_db.exists():
+                    from graph_store import get_graph_store as _get_gs
+                    from anchored_summary import get_anchored_summary as _get_anc
+                    _py_store = _get_gs(_py_db)
+                    _anc_text = _get_anc(_py_store, _py_pid)
+                    if _anc_text:
+                        system_blocks.append(
+                            f"\n━━━ MEMORY BRIEF (anchored) ━━━\n{_anc_text}\n━━━ END MEMORY BRIEF ━━━\n"
+                        )
+                        logger.info(f"Injected Python anchored summary ({len(_anc_text)} chars)")
+                        _anchored_injected = True
+            except Exception as _ae:
+                logger.debug(f"Python anchored summary load failed (non-fatal): {_ae}")
+
+        # Write flag so UserPromptSubmit knows to skip/reduce per-turn FTS recall
+        if _anchored_injected:
+            try:
+                import time as _t
+                _anchored_flag_file.write_text(str(_t.time()))
+            except Exception:
+                pass
 
         # ── Environment snapshot reconciliation ───────────────────────────────
         # Compares current plugin root / name / backend against the last stored

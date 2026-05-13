@@ -296,8 +296,8 @@ Would you like to try AINL for this?
 def main():
     """Hook entry point for UserPromptSubmit."""
     try:
-        # Read event from stdin
-        event = json.loads(sys.stdin.read())
+        from shared.stdin import read_stdin_json
+        event = read_stdin_json(hook_name="ainl_detection")
 
         prompt = event.get("prompt", "")
         project_id = event.get("projectId")

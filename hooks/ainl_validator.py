@@ -173,8 +173,8 @@ def main():
         return
 
     try:
-        # Read event from stdin
-        event = json.loads(sys.stdin.read())
+        from shared.stdin import read_stdin_json
+        event = read_stdin_json(hook_name="ainl_validator")
 
         project_id = event.get("projectId")
         validator = AINLValidator(project_id=project_id)

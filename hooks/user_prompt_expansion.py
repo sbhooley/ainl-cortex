@@ -88,8 +88,8 @@ def compress_user_prompt(prompt: str, project_id: str) -> tuple:
 def main():
     """Main hook entry point"""
     try:
-        # Read input from stdin
-        input_data = json.load(sys.stdin)
+        from shared.stdin import read_stdin_json
+        input_data = read_stdin_json(hook_name="user_prompt_expansion")
         prompt = input_data.get('prompt', '')
 
         if not prompt:

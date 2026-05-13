@@ -30,7 +30,8 @@ except ImportError:
 
 def main():
     try:
-        input_data = json.load(sys.stdin)
+        from shared.stdin import read_stdin_json
+        input_data = read_stdin_json(hook_name="post_compact")
         project_id = get_project_id()
 
         messages_before = input_data.get('messagesBefore', 0)

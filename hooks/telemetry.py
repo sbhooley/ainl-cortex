@@ -32,6 +32,29 @@ def _load_config(plugin_root: Path) -> Dict[str, Any]:
         return {}
 
 
+_PLUGIN_VERSION_CACHE: Dict[str, str] = {}
+
+
+def _plugin_version(plugin_root: Path) -> str:
+    """Read the canonical plugin version from .claude-plugin/plugin.json.
+
+    Cached per plugin_root for the process lifetime so we don't stat the
+    manifest on every PostHog event. Falls back to ``"unknown"`` if the
+    manifest is missing or malformed — telemetry must never raise.
+    """
+    key = str(plugin_root)
+    cached = _PLUGIN_VERSION_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        manifest = json.loads((plugin_root / ".claude-plugin" / "plugin.json").read_text())
+        version = str(manifest.get("version") or "unknown")
+    except Exception:
+        version = "unknown"
+    _PLUGIN_VERSION_CACHE[key] = version
+    return version
+
+
 def _is_enabled(config: Dict[str, Any]) -> bool:
     return bool(config.get("telemetry", {}).get("remote", {}).get("enabled", True))
 
@@ -72,7 +95,7 @@ def capture(event: str, properties: Dict[str, Any], plugin_root: Path, blocking:
         iid = _install_id(config)
         prefixed = f"ainl_cortex_{event}"
         base = {
-            "plugin_version": "0.3.0",
+            "plugin_version": _plugin_version(plugin_root),
             "os": platform.system().lower(),
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
             **properties,

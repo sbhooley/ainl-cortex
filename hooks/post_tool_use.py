@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from shared.project_id import get_project_id
 from shared.logger import log_event, log_error, get_logger
+from shared.config import is_strict_native
 
 logger = get_logger("post_tool_use")
 
@@ -26,6 +27,11 @@ try:
 except ImportError:
     _ainl_native = None
     _NATIVE_OK = False
+
+# When strict-native is on, the mid-session flush must NOT run the Python
+# episode/persona/patterns/semantics writers — Rust is the source of truth.
+# See hooks/stop.py for the same gating used at end-of-session.
+_STRICT_NATIVE = is_strict_native(_NATIVE_OK)
 
 
 # Tool canonicalization (matches extractor.py)
@@ -203,6 +209,11 @@ def flush_episode_if_due(project_id: str, capture_count: int, plugin_root: Path)
     If capture_count has hit the flush threshold, write an episode to the
     graph DB immediately and truncate the inbox — same logic as stop.py but
     without the self-note (that's reserved for true session end).
+
+    Strict-native mode skips the Python episode/persona/patterns/semantics
+    pipeline. Per the carve-outs, write_failures and write_goals would still
+    run on the Python sidecar at end-of-session via stop.py; mid-session we
+    intentionally defer all sidecar writes to Stop to keep this hook fast.
     """
     try:
         cfg_path = plugin_root / "config.json"
@@ -214,6 +225,15 @@ def flush_episode_if_due(project_id: str, capture_count: int, plugin_root: Path)
             return
 
         sys.path.insert(0, str(plugin_root / "mcp_server"))
+
+        if _STRICT_NATIVE:
+            # Skip Python pipeline entirely — Rust will pick everything up at
+            # session end (or via the per-prompt flush in stop.flush_pending_captures).
+            logger.debug(
+                f"Mid-session flush skipped (strict-native mode) at {capture_count} captures"
+            )
+            return
+
         from stop import drain_session_inbox, write_episode, write_failures, write_persona, write_patterns, write_semantics
 
         session_data = drain_session_inbox(project_id)
@@ -256,8 +276,8 @@ def _buffer_traj_step(project_id: str, tool: str, capture: dict) -> None:
 def main():
     """Main hook entry point"""
     try:
-        # Read input from stdin
-        input_data = json.load(sys.stdin)
+        from shared.stdin import read_stdin_json
+        input_data = read_stdin_json(hook_name="post_tool_use")
 
         # Claude Code PostToolUse payload: tool_name / tool_input / tool_result (top-level)
         tool_name = input_data.get('tool_name', '')

@@ -14,7 +14,7 @@ from pathlib import Path
 # Add shared module to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared.project_id import get_project_id, GLOBAL_PROJECT_ID
+from shared.project_id import get_project_id, GLOBAL_PROJECT_ID, LEGACY_GLOBAL_PROJECT_ID
 from shared.logger import log_event, log_error, get_logger
 from shared.a2a_inbox import read_inbox, clear_inbox
 from shared.a2a_log import append_log
@@ -211,11 +211,17 @@ def recall_context(project_id: str, prompt: str) -> dict:
         store = get_graph_store(db_path)
         retrieval = MemoryRetrieval(store)
 
-        # Create retrieval context
+        # Create retrieval context. Pass the legacy chain so per-repo recall
+        # still surfaces pre-issue-1 memories from the global bucket until
+        # `scripts/repartition_by_repo.py` has been run.
+        chain = [project_id]
+        if LEGACY_GLOBAL_PROJECT_ID != project_id:
+            chain.append(LEGACY_GLOBAL_PROJECT_ID)
         context = RetrievalContext(
             project_id=project_id,
             current_task=prompt[:200] if prompt else None,
-            files_mentioned=[]
+            files_mentioned=[],
+            project_id_chain=chain,
         )
 
         # Retrieve memory context
@@ -376,8 +382,8 @@ def record_prompt_summary(project_id: str, prompt: str) -> None:
 def main():
     """Main hook entry point"""
     try:
-        # Read input from stdin
-        input_data = json.load(sys.stdin)
+        from shared.stdin import read_stdin_json
+        input_data = read_stdin_json(hook_name="user_prompt_submit")
         prompt = input_data.get('prompt', '')
 
         # Use cwd from payload — hooks cd to plugin root so Path.cwd() is wrong
@@ -385,9 +391,10 @@ def main():
         project_id = get_project_id(cwd)
 
         logger.info(f"Processing prompt for project {project_id}")
+        plugin_root = Path(__file__).parent.parent
 
         # Load config for compression settings
-        sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+        sys.path.insert(0, str(plugin_root / "mcp_server"))
         from config import get_config
         config = get_config()
 
@@ -405,12 +412,32 @@ def main():
         # Check if memory context compression should be used
         use_memory_compression = config.should_compress_memory_context()
 
+        # Gate: skip memory recall for very short prompts (follow-ups, acks, greetings).
+        # 15 tokens ≈ 60 chars — anything shorter is unlikely to benefit from retrieval.
+        _skip_memory = (len(prompt_for_recall) < 60)
+
+        # Gate (#7): skip FTS recall if an anchored summary was injected at SessionStart.
+        # The anchored summary already covers historical context; FTS is redundant until
+        # the session accumulates enough new data to change the brief.
+        if not _skip_memory:
+            try:
+                _anc_flag = plugin_root / "inbox" / f"{project_id}_anchored.flag"
+                if _anc_flag.exists():
+                    _flag_age = time.time() - float(_anc_flag.read_text().strip() or "0")
+                    if _flag_age < 28800:  # 8 hours — same session boundary
+                        _skip_memory = True
+                        logger.debug("Anchored summary active, skipping per-turn FTS recall")
+            except Exception:
+                pass
+
         # Recall + format: try native Rust path first
         brief = ""
         memory_compression_metrics = None
         pipeline_stats = None
         _used_native_recall = False
-        if _NATIVE_OK:
+        if _skip_memory:
+            logger.debug(f"Skipping memory recall: prompt too short or anchored summary active ({len(prompt_for_recall)} chars)")
+        elif _NATIVE_OK:
             try:
                 _native_db = str(
                     Path.home() / ".claude" / "projects" / project_id
@@ -430,14 +457,29 @@ def main():
             except Exception as _re:
                 logger.debug(f"Native recall failed, falling back to Python: {_re}")
 
-        if not _used_native_recall:
+        if not _skip_memory and not _used_native_recall:
             context = recall_context(project_id, prompt_for_recall)
             brief, memory_compression_metrics, pipeline_stats = format_memory_brief(
                 context, project_id, compress=use_memory_compression
             )
 
+        # Gate (#8): skip re-injecting if brief is identical to the previous turn.
+        # Claude already has it in context — re-sending is pure token waste.
+        if brief.strip():
+            try:
+                import hashlib as _hl
+                _brief_hash = _hl.md5(brief.encode()).hexdigest()
+                _hash_file = plugin_root / "inbox" / f"{project_id}_brief.hash"
+                _last_hash = _hash_file.read_text().strip() if _hash_file.exists() else ""
+                if _brief_hash == _last_hash:
+                    logger.debug("Memory brief unchanged from last turn, skipping injection")
+                    brief = ""
+                else:
+                    _hash_file.write_text(_brief_hash)
+            except Exception:
+                pass
+
         # ── A2A inbox injection ───────────────────────────────────────────────
-        plugin_root = Path(__file__).parent.parent
         a2a_blocks = {"critical": [], "normal": [], "low": []}
         a2a_cfg = {}
         try:
@@ -532,23 +574,56 @@ def main():
         except Exception as _ge:
             logger.debug(f"Goal/failure context failed (non-fatal): {_ge}")
 
+        # Gate (#9): skip goal re-injection if goals are unchanged AND the prompt
+        # has no keyword overlap with any active goal.  Goals only re-inject when
+        # something actually changed or the user is talking about them.
+        if goal_context_text:
+            try:
+                import hashlib as _hl
+                _goals_hash = _hl.md5(goal_context_text.encode()).hexdigest()
+                _goals_file = plugin_root / "inbox" / f"{project_id}_goals.hash"
+                _last_goals = _goals_file.read_text().strip() if _goals_file.exists() else ""
+                if _goals_hash == _last_goals:
+                    # Goals unchanged — only re-inject if prompt overlaps with them
+                    _has_overlap = False
+                    try:
+                        from goal_tracker import _keyword_overlap
+                        for _g in (_goals if '_goals' in dir() else []):
+                            _gtxt = f"{_g.data.get('title','')} {_g.data.get('description','')}"
+                            if _keyword_overlap(prompt, _gtxt) > 0.15:
+                                _has_overlap = True
+                                break
+                    except Exception:
+                        _has_overlap = True  # fail open
+                    if not _has_overlap:
+                        logger.debug("Goals unchanged and no prompt overlap, skipping goal injection")
+                        goal_context_text = ""
+                else:
+                    _goals_file.write_text(_goals_hash)
+            except Exception:
+                pass
+
         # ── Assemble system message ───────────────────────────────────────────
+        # Order: stable content first, dynamic content last — maximises prompt-cache hits.
+        # Critical A2A → goals (rarely change) → failure warnings (semi-stable) → memory
+        # brief (most dynamic, FTS result changes every turn).
         system_parts = []
 
         if a2a_blocks["critical"]:
             block = "\n\n".join(a2a_blocks["critical"])
             system_parts.append(f"━━━ CRITICAL A2A MESSAGES ━━━\n{block}\n━━━ END CRITICAL ━━━")
 
-        # Goals go first — they frame everything that follows
+        # Goals: semi-stable, frame everything that follows
         if goal_context_text:
             system_parts.append(goal_context_text)
 
-        if brief.strip() and len(brief) > len("## Relevant Graph Memory\n\n"):
-            system_parts.append(brief)
-
-        # Failure warnings after memory brief — salient but not overriding goals
+        # Failure warnings: semi-stable, before dynamic memory brief
         if failure_warning_text:
             system_parts.append(failure_warning_text)
+
+        # Memory brief: most dynamic — goes last so stable prefix can be cached
+        if brief.strip() and len(brief) > len("## Relevant Graph Memory\n\n"):
+            system_parts.append(brief)
 
         other_a2a = a2a_blocks["normal"] or a2a_blocks["low"]
         if other_a2a:
