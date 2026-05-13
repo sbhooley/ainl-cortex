@@ -22,7 +22,7 @@
     "project_isolation": true,
     "enable_persona_evolution": true,
     "enable_pattern_extraction": true,
-    "store_backend": "native"
+    "store_backend": "python"
   },
   "telemetry": {
     "track_compression_savings": true,
