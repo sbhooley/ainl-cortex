@@ -6,6 +6,7 @@ Captures tool outcomes and buffers for MCP server consolidation.
 Follows AINL pattern: lightweight capture, async consolidation.
 """
 
+import re
 import sys
 import json
 from pathlib import Path
@@ -45,6 +46,90 @@ def canonicalize_tool(tool_name: str) -> str:
     return TOOL_CANON.get(tool_name, tool_name.lower())
 
 
+# Semantic failure patterns anchored to line starts to minimise false positives.
+# Covers: git conflicts/fatal/abort, compiler errors, test failures, shell errors,
+# permission errors, Python tracebacks, npm/make build errors.
+_BASH_FAILURE_RE = re.compile(
+    r'(?m)'
+    r'(?:'
+    r'^CONFLICT\b'                              # git merge/rebase/cherry-pick conflict
+    r'|^fatal: '                                # git fatal, cmake fatal
+    r'|^error: '                                # compiler errors, git errors, CLI errors
+    r'|^FAILED\b'                               # pytest FAILED, make FAILED
+    r'|^Aborting\b'                             # git aborting
+    r'|: [Pp]ermission denied'                  # file/dir permission denied
+    r'|: command not found'                      # unknown command
+    r'|^make: \*\*\*'                           # make error prefix
+    r'|^npm ERR!'                               # npm error prefix
+    r'|^Traceback \(most recent call last\):'    # Python exception
+    r')'
+)
+
+
+def _bash_output(result: dict) -> str:
+    """Extract text from bash tool_result, handling flat and nested content formats."""
+    if isinstance(result.get('text'), str):
+        return result['text']
+    if isinstance(result.get('error'), str):
+        return result['error']
+    content = result.get('content')
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return '\n'.join(
+            b.get('text', '') for b in content
+            if isinstance(b, dict) and b.get('type') == 'text'
+        )
+    return ''
+
+
+def _first_lines(text: str, max_len: int = 500) -> str:
+    """Return the first non-empty lines of text up to max_len chars."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return '\n'.join(lines[:5])[:max_len]
+
+
+def _detect_bash_failure(result: dict) -> tuple:
+    """Return (is_failure: bool, error_snippet: str).
+
+    Detection order (highest confidence first):
+    1. Explicit tool_error type — Claude Code system-level error.
+    2. Non-zero exit_code field — exit code provided by hook runtime.
+    3. Semantic failure patterns — conservative regex on output text.
+
+    If exit_code == 0 is explicitly present, semantic scanning is skipped
+    to prevent false positives from output that legitimately contains error-
+    like substrings (e.g. grep returning log lines).
+    """
+    # 1. Explicit tool error
+    if result.get('type') == 'tool_error':
+        return True, _bash_output(result)[:500]
+
+    # 2. Explicit exit code
+    exit_code = result.get('exit_code')
+    if exit_code is not None:
+        try:
+            code = int(exit_code)
+        except (TypeError, ValueError):
+            code = None
+        if code is not None:
+            if code != 0:
+                return True, _first_lines(_bash_output(result))
+            else:
+                return False, ''  # exit 0 — skip semantic scan
+
+    # 3. Semantic patterns in output
+    text = _bash_output(result)
+    if text:
+        m = _BASH_FAILURE_RE.search(text)
+        if m:
+            start = m.start()
+            snippet = text[start:start + 400].strip()
+            return True, snippet[:500]
+
+    return False, ''
+
+
 def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
     """
     Extract relevant data from tool execution.
@@ -74,14 +159,11 @@ def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
 
     elif tool == 'bash':
         capture['type'] = 'command'
-        capture['command'] = tool_input.get('command', '')[:200]  # Limit length
-        capture['success'] = result.get('type') != 'tool_error'
-
-        # Extract error text if present
-        if not capture['success']:
-            error_text = result.get('text', '') or result.get('error', '')
-            if error_text:
-                capture['error'] = error_text[:500]
+        capture['command'] = tool_input.get('command', '')[:200]
+        is_failure, error_snippet = _detect_bash_failure(result)
+        capture['success'] = not is_failure
+        if is_failure and error_snippet:
+            capture['error'] = error_snippet
 
     elif tool == 'grep':
         capture['type'] = 'search'
