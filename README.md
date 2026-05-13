@@ -1,6 +1,6 @@
 # AINL Cortex for Claude Code
 
-**Graph-native memory and learning for Claude Code — every interaction remembered, every pattern learned, every agent connected.**
+**Graph-native memory and learning for Claude Code — every interaction remembered, every pattern learned, every agent connected.** [**→ Install in 30 seconds**](#-install-in-30-seconds)
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -8,6 +8,83 @@
 [![Status](https://img.shields.io/badge/status-production--ready-green.svg)]()
 
 AINativeLang: [Website](https://ainativelang.com) · [PyPI](https://pypi.org/project/ainativelang/) · [GitHub](https://github.com/sbhooley/ainativelang) · [Docs](https://ainativelang.com/docs) · Developer: [Steven Hooley](https://stevenhooley.com) | [@sbhooley](https://x.com/sbhooley)
+
+---
+
+## 🌟 What is This?
+
+AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant into a **self-learning system** that gets smarter with every interaction. It combines:
+
+1. **Graph-Native Memory** - Persistent, queryable knowledge graph where execution history becomes searchable knowledge
+2. **Zero-LLM Learning** - Learns your preferences and patterns without expensive LLM introspection
+3. **First-Class AINL Integration** - Full support for AI Native Lang workflows with automatic optimization
+4. **Self-Improving System** - Captures trajectories, learns from failures, and evolves with your coding style
+
+**Powered by:** [AI Native Lang (AINL)](https://ainativelang.com) - The graph-canonical programming language designed for AI agents.
+
+---
+
+## 🎯 Key Innovation
+
+> **Graph-as-Memory Paradigm:** Every coding turn, tool invocation, and decision becomes a typed node in a persistent graph. The execution graph IS the memory—no separate retrieval layer needed. The system learns from patterns, evolves understanding, and prevents repeated mistakes, all without constant LLM overhead.
+
+---
+
+## ✨ Features at a Glance
+
+### Core Memory System
+- ✅ **Typed Graph Memory** - Episode, Semantic, Procedural, Persona, and Failure nodes
+- ✅ **Project Isolation** - Memories never leak between different codebases
+- ✅ **Context-Aware Retrieval** - Inject only relevant memories (ranked by confidence, recency, fitness)
+- ✅ **Graceful Degradation** - Hooks never break Claude Code, even on errors
+- ✅ **Inspectable** - CLI tools for debugging and exploration
+
+### Self-Learning Capabilities (New!)
+- 🧠 **Zero-LLM Persona Evolution** - Learn preferences from metadata signals without asking
+- 📊 **Trajectory Capture** - Complete execution traces for pattern analysis
+- 🎯 **Pattern Promotion** - Successful workflows automatically become reusable patterns
+- ⚠️ **Failure Learning** - Remember and prevent repeated errors
+- 💡 **Smart Suggestions** - Context-aware recommendations based on history
+- 🔄 **Closed-Loop Validation** - Proposals validated before adoption
+- 🎨 **Adaptive Compression** - Learn optimal token savings per project
+
+### AINL Integration
+- 🚀 **AINL Language Support** - Full integration with AINL workflows
+- 💰 **Cost Optimization** - Auto-detects when to use .ainl for 90-95% token savings
+- 🔍 **Pattern Memory** - Stores and recalls successful AINL workflows
+- ⚡ **Eco Mode** - 40-70% token savings on memory context
+- 🎯 **Smart Detection** - Automatically suggests AINL for recurring tasks
+- 🔒 **Security Analysis** - Pre-run risk assessment for every workflow
+- 📐 **IR Diff** - Compare two AINL workflow versions at the graph IR level
+- 📚 **Template Library** - 6 ready-to-use workflows (API, monitor, pipeline, blockchain, LLM, multi-step)
+
+### A2A Multi-Agent Coordination
+- 🤝 **Agent Messaging** - Send messages and tasks to any registered A2A agent
+- 📝 **Note to Self** - Write a note that auto-surfaces in the *next* session's context
+- 👁️ **Condition Monitors** - Register file/URL watchers that push A2A notifications on trigger
+- ⏳ **Async Task Delegation** - Delegate work with `a2a_task_send`; poll status with `a2a_task_status`
+- 🔍 **Agent Discovery** - List and register agents in the ArmaraOS daemon network
+- 💾 **Graph-Backed History** - Every message and task is stored as a typed node for replay and audit
+
+### Goal Tracking
+- 🎯 **Multi-Session Goals** - Persistent objectives that survive session restarts and compaction
+- 🔮 **Auto-Inference** - Goals auto-derived from episode clusters without manual setup
+- 🔗 **Episode Linking** - New episodes automatically scored and linked to active goals
+- ✅ **Completion Tracking** - Clear done states with achievement summaries
+- 📋 **Status Lifecycle** - `active → blocked → completed / abandoned` with timestamped progress notes
+
+### Zero-Loss Context Compaction
+- 🔐 **PreCompact Flush** - All buffered captures written to the graph DB before Claude compacts
+- 📸 **Anchored Summary** - In-progress session state snapshotted so post-compaction context is accurate
+- 🔄 **PostCompact Sync** - Anchored summary updated after compaction; next session sees correct state
+- 🚫 **No Silent Data Loss** - Compaction can no longer silently discard unwritten memory
+
+### Notification Feed
+- 🔔 **Session-Start Polling** - Fetches `ainativelang.com/notifications` once per session; zero latency on cache hit
+- 👁️ **Seen-ID Persistence** - Already-shown notices are never repeated across sessions
+- 🎯 **Smart Filtering** - Only surfaces notices targeting `claude-code-plugin` or `*`; ignores expired entries
+- 📢 **Priority Ordering** - High-priority notices appear first in the SessionStart banner
+- 🔄 **Optional Auto-Update** - Can `git pull --ff-only` automatically when the server marks a release safe (opt-in)
 
 ---
 
@@ -86,83 +163,6 @@ Once restarted, all of the following are on by default:
 - **In-plugin notifications** — fetches update notices from ainativelang.com at each session start; unseen notices appear in the banner; seen IDs are persisted so nothing repeats
 
 A2A multi-agent messaging is available but requires `"a2a": {"enabled": true}` in `config.json` and the ArmaraOS daemon running.
-
----
-
-## 🌟 What is This?
-
-AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant into a **self-learning system** that gets smarter with every interaction. It combines:
-
-1. **Graph-Native Memory** - Persistent, queryable knowledge graph where execution history becomes searchable knowledge
-2. **Zero-LLM Learning** - Learns your preferences and patterns without expensive LLM introspection
-3. **First-Class AINL Integration** - Full support for AI Native Lang workflows with automatic optimization
-4. **Self-Improving System** - Captures trajectories, learns from failures, and evolves with your coding style
-
-**Powered by:** [AI Native Lang (AINL)](https://ainativelang.com) - The graph-canonical programming language designed for AI agents.
-
----
-
-## 🎯 Key Innovation
-
-> **Graph-as-Memory Paradigm:** Every coding turn, tool invocation, and decision becomes a typed node in a persistent graph. The execution graph IS the memory—no separate retrieval layer needed. The system learns from patterns, evolves understanding, and prevents repeated mistakes, all without constant LLM overhead.
-
----
-
-## ✨ Features at a Glance
-
-### Core Memory System
-- ✅ **Typed Graph Memory** - Episode, Semantic, Procedural, Persona, and Failure nodes
-- ✅ **Project Isolation** - Memories never leak between different codebases
-- ✅ **Context-Aware Retrieval** - Inject only relevant memories (ranked by confidence, recency, fitness)
-- ✅ **Graceful Degradation** - Hooks never break Claude Code, even on errors
-- ✅ **Inspectable** - CLI tools for debugging and exploration
-
-### Self-Learning Capabilities (New!)
-- 🧠 **Zero-LLM Persona Evolution** - Learn preferences from metadata signals without asking
-- 📊 **Trajectory Capture** - Complete execution traces for pattern analysis
-- 🎯 **Pattern Promotion** - Successful workflows automatically become reusable patterns
-- ⚠️ **Failure Learning** - Remember and prevent repeated errors
-- 💡 **Smart Suggestions** - Context-aware recommendations based on history
-- 🔄 **Closed-Loop Validation** - Proposals validated before adoption
-- 🎨 **Adaptive Compression** - Learn optimal token savings per project
-
-### AINL Integration
-- 🚀 **AINL Language Support** - Full integration with AINL workflows
-- 💰 **Cost Optimization** - Auto-detects when to use .ainl for 90-95% token savings
-- 🔍 **Pattern Memory** - Stores and recalls successful AINL workflows
-- ⚡ **Eco Mode** - 40-70% token savings on memory context
-- 🎯 **Smart Detection** - Automatically suggests AINL for recurring tasks
-- 🔒 **Security Analysis** - Pre-run risk assessment for every workflow
-- 📐 **IR Diff** - Compare two AINL workflow versions at the graph IR level
-- 📚 **Template Library** - 6 ready-to-use workflows (API, monitor, pipeline, blockchain, LLM, multi-step)
-
-### A2A Multi-Agent Coordination
-- 🤝 **Agent Messaging** - Send messages and tasks to any registered A2A agent
-- 📝 **Note to Self** - Write a note that auto-surfaces in the *next* session's context
-- 👁️ **Condition Monitors** - Register file/URL watchers that push A2A notifications on trigger
-- ⏳ **Async Task Delegation** - Delegate work with `a2a_task_send`; poll status with `a2a_task_status`
-- 🔍 **Agent Discovery** - List and register agents in the ArmaraOS daemon network
-- 💾 **Graph-Backed History** - Every message and task is stored as a typed node for replay and audit
-
-### Goal Tracking
-- 🎯 **Multi-Session Goals** - Persistent objectives that survive session restarts and compaction
-- 🔮 **Auto-Inference** - Goals auto-derived from episode clusters without manual setup
-- 🔗 **Episode Linking** - New episodes automatically scored and linked to active goals
-- ✅ **Completion Tracking** - Clear done states with achievement summaries
-- 📋 **Status Lifecycle** - `active → blocked → completed / abandoned` with timestamped progress notes
-
-### Zero-Loss Context Compaction
-- 🔐 **PreCompact Flush** - All buffered captures written to the graph DB before Claude compacts
-- 📸 **Anchored Summary** - In-progress session state snapshotted so post-compaction context is accurate
-- 🔄 **PostCompact Sync** - Anchored summary updated after compaction; next session sees correct state
-- 🚫 **No Silent Data Loss** - Compaction can no longer silently discard unwritten memory
-
-### Notification Feed
-- 🔔 **Session-Start Polling** - Fetches `ainativelang.com/notifications` once per session; zero latency on cache hit
-- 👁️ **Seen-ID Persistence** - Already-shown notices are never repeated across sessions
-- 🎯 **Smart Filtering** - Only surfaces notices targeting `claude-code-plugin` or `*`; ignores expired entries
-- 📢 **Priority Ordering** - High-priority notices appear first in the SessionStart banner
-- 🔄 **Optional Auto-Update** - Can `git pull --ff-only` automatically when the server marks a release safe (opt-in)
 
 ---
 
