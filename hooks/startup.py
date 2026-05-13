@@ -344,6 +344,24 @@ def main():
         except Exception:
             pass
 
+        # ── Upgrade hint (Python backend, first 3 sessions only) ─────────────
+        upgrade_hint_line = ""
+        if _backend == "python":
+            try:
+                import json as _jcfg
+                _cfg_path = root / "config.json"
+                _cfg = _jcfg.loads(_cfg_path.read_text())
+                _hint_count = _cfg.get("python_upgrade_hint_shown", 0)
+                if _hint_count < 3:
+                    upgrade_hint_line = (
+                        "  • Upgrade tip: install Rust 1.75+ (rustup.rs) then re-run setup.sh"
+                        " — unlocks trajectory distillation, procedure scoring & anchored compression\n"
+                    )
+                    _cfg["python_upgrade_hint_shown"] = _hint_count + 1
+                    _cfg_path.write_text(_jcfg.dumps(_cfg, indent=2))
+            except Exception:
+                pass
+
         banner = (
             f"[AINL Graph Memory]  Plugin root: {root}\n"
             f"  • Graph DB: {db_s}\n"
@@ -356,6 +374,7 @@ def main():
             f"  • A2A bridge: {bridge_line}\n"
             f"  • When Claude spawns MCP, expect ~{EXPECTED_MCP_TOOLS} tools (ainl + memory + a2a); "
             f"if missing, /plugin -> Installed -> ainl-cortex and /mcp, or /reload-plugins.\n"
+            f"{upgrade_hint_line}"
         )
 
         system_blocks = [banner]
