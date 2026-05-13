@@ -5,7 +5,7 @@ Learn user preferences from behavior, not LLM introspection.
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import sqlite3
 from pathlib import Path
 
@@ -202,7 +202,7 @@ class PersonaEvolutionEngine:
             # Increment cycle
             new_cycle = cycle + 1
 
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
 
             # Upsert
             conn.execute("""
@@ -245,7 +245,7 @@ class PersonaEvolutionEngine:
             delta = 0.5 - strength
             new_strength = strength + self.CORRECTION_RATE * delta
 
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
 
             conn.execute("""
                 UPDATE persona_nodes

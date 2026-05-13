@@ -7,7 +7,7 @@ import json
 import sqlite3
 from typing import Dict, List, Optional, Any
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class AINLPatternStore:
@@ -123,7 +123,7 @@ class AINLPatternStore:
             (pattern_id,)
         ).fetchone()
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         if existing:
             # Update existing pattern
@@ -297,7 +297,7 @@ class AINLPatternStore:
                 fitness_score = ?, updated_at = ?
             WHERE id = ?
         """, (uses, successes, failures, new_fitness,
-              datetime.utcnow().isoformat(), pattern_id))
+              datetime.now(timezone.utc).isoformat(), pattern_id))
 
         conn.commit()
         conn.close()
@@ -345,7 +345,7 @@ class AINLPatternStore:
         new_fitness = alpha * success_rate + (1 - alpha) * fitness
 
         # Update DB
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         conn.execute("""
             UPDATE ainl_patterns
             SET uses = ?, successes = ?, failures = ?,
@@ -400,7 +400,7 @@ class AINLPatternStore:
 
         # Calculate rank scores
         ranked = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         for row in rows:
             last_seen = datetime.fromisoformat(row['last_seen']) if row['last_seen'] else now
@@ -579,7 +579,7 @@ class AINLPatternStore:
                         total_failures,
                         new_fitness,
                         total_recurrence,
-                        datetime.utcnow().isoformat(),
+                        datetime.now(timezone.utc).isoformat(),
                         best['id']
                     ))
 

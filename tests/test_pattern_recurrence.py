@@ -5,7 +5,7 @@ Tests for pattern recurrence tracking and semantic ranking.
 import pytest
 import tempfile
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -191,7 +191,7 @@ class TestSemanticRanking:
             # Make p2 appear old by directly updating last_seen
             import sqlite3
             conn = sqlite3.connect(db_path)
-            old_date = (datetime.utcnow() - timedelta(days=60)).isoformat()
+            old_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
             conn.execute(
                 "UPDATE ainl_patterns SET last_seen = ? WHERE id = ?",
                 (old_date, p2_id)

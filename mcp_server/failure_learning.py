@@ -5,7 +5,7 @@ Learn from failures and suggest resolutions.
 import sqlite3
 from dataclasses import dataclass
 from typing import Optional, List, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 
@@ -86,7 +86,7 @@ class FailureLearningStore:
             error_message,
             ainl_source,
             json.dumps(context),
-            datetime.utcnow().isoformat()
+            datetime.now(timezone.utc).isoformat()
         ))
 
         conn.execute("""
@@ -130,7 +130,7 @@ class FailureLearningStore:
             UPDATE failure_resolutions
             SET resolution = ?, resolution_diff = ?, resolved_at = ?
             WHERE id = ?
-        """, (fixed_source, diff, datetime.utcnow().isoformat(), failure_id))
+        """, (fixed_source, diff, datetime.now(timezone.utc).isoformat(), failure_id))
 
         conn.commit()
         conn.close()

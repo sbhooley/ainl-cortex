@@ -6,7 +6,7 @@ Learn optimal compression settings from user feedback.
 import sqlite3
 from dataclasses import dataclass
 from typing import Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 
@@ -82,7 +82,7 @@ class CompressionProfileStore:
         """Create new compression profile with defaults."""
         conn = sqlite3.connect(str(self.db_path))
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         conn.execute("""
             INSERT INTO compression_profiles
@@ -160,7 +160,7 @@ class CompressionProfileStore:
                 success_count=new_success_count
             )
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         conn.execute("""
             UPDATE compression_profiles
