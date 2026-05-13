@@ -1,0 +1,22 @@
+AINL Cortex
+Copyright (c) 2026 AINativeLang, Inc. and AINL Cortex contributors
+
+AINL Cortex is a Claude Code plugin providing graph-native memory, self-learning,
+AINL workflow integration, and A2A multi-agent coordination.
+
+Project-origin notice:
+- AINL Cortex was human-initiated by Steven Hooley.
+- Public attribution references:
+  - https://x.com/sbhooley
+  - https://stevenhooley.com
+  - https://ainativelang.com
+
+Unless otherwise noted:
+
+- Source code is licensed under the Apache License 2.0 (see LICENSE).
+- "AINL Cortex," "AINL," "AI Native Lang," and associated logos and branding are
+  trademarks or claimed marks of AINativeLang, Inc. and are governed separately
+  (see TRADEMARKS.md).
+
+This NOTICE file is provided for informational purposes and does not modify or
+replace the applicable license terms.
