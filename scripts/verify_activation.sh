@@ -135,7 +135,7 @@ echo ""
 echo "  Passed: $PASS / $((PASS + FAIL))"
 echo ""
 if [ "$FAIL" -eq 0 ]; then
-  echo "  ✅ Ready — restart Claude Code and run /mcp to confirm ~26 tools."
+  echo "  ✅ Ready — restart Claude Code and run /mcp to confirm ~30 tools."
 else
   echo "  ❌ $FAIL check(s) failed. Fix the above, then re-run this script."
 fi

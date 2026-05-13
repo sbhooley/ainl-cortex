@@ -34,7 +34,7 @@ except ImportError:
 
 logger = get_logger("startup")
 
-TOOL_COUNT_MEMORY = 7
+TOOL_COUNT_MEMORY = 11  # 7 core + 4 goal management
 TOOL_COUNT_AINL = 12
 TOOL_COUNT_A2A = 7
 EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL + TOOL_COUNT_A2A

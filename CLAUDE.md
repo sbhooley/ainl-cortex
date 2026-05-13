@@ -13,7 +13,7 @@ bash setup.sh
 
 `setup.sh` handles: venv creation, dep install, marketplace registration, settings.json update, and config defaults.
 
-**To verify it worked** after restarting: `/mcp` should list ~20 tools starting with `ainl-cortex__`.
+**To verify it worked** after restarting: `/mcp` should list ~30 tools starting with `ainl-cortex__`.
 
 **Common issues:**
 - `python3 not found` → install Python 3.10+ from python.org

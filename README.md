@@ -132,14 +132,14 @@ bash setup.sh
 
 The plugin activates on the **next session start**. Tell the user:
 
-> "Setup complete. Please restart Claude Code now. After restart you'll see an `[AINL Cortex]` banner and `/mcp` will list ~20 new tools."
+> "Setup complete. Please restart Claude Code now. After restart you'll see an `[AINL Cortex]` banner and `/mcp` will list ~30 new tools."
 
 ### Step 3 — Verify after restart
 
 After the user restarts, confirm the install worked by checking:
 
 1. The `[AINL Cortex]` banner appears at the top of the session — it shows graph DB status, compression mode, MCP stack health, and A2A bridge status.
-2. Running `/mcp` in Claude Code lists ~26 tools prefixed `ainl-cortex__` (7 memory tools + 12 AINL tools + 7 A2A tools).
+2. Running `/mcp` in Claude Code lists ~30 tools prefixed `ainl-cortex__` (11 memory tools + 12 AINL tools + 7 A2A tools).
 
 ### Troubleshooting — fix these before reporting failure
 
@@ -303,7 +303,7 @@ On your next session start, the `[AINL Cortex]` banner appears:
   ...
 ```
 
-And `/mcp` shows ~26 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, `ainl_propose_improvement`, etc.).
+And `/mcp` shows ~30 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, `ainl_propose_improvement`, `memory_set_goal`, etc.).
 
 From that point on, memory accumulates automatically — no prompts, no configuration needed.
 
