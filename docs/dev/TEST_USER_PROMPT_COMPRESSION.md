@@ -8,7 +8,7 @@
 ## What Was Changed
 
 ### Modified File
-`/Users/clawdbot/.claude/plugins/ainl-graph-memory/hooks/user_prompt_submit.py`
+`/Users/clawdbot/.claude/plugins/ainl-cortex/hooks/user_prompt_submit.py`
 
 ### Changes Made
 
@@ -26,7 +26,7 @@
    - Log both prompt and memory compression metrics
 
 ### Configuration
-`/Users/clawdbot/.claude/plugins/ainl-graph-memory/config.json`
+`/Users/clawdbot/.claude/plugins/ainl-cortex/config.json`
 
 ```json
 {
@@ -98,7 +98,7 @@ The hook runs automatically on **every user prompt** when Claude Code starts bec
 
 ### Check Logs After Next Prompt
 ```bash
-tail -f ~/.claude/plugins/ainl-graph-memory/logs/user_prompt_submit.log
+tail -f ~/.claude/plugins/ainl-cortex/logs/user_prompt_submit.log
 ```
 
 Look for:
@@ -109,7 +109,7 @@ Look for:
 
 ### Check Hook Output
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory/hooks
+cd ~/.claude/plugins/ainl-cortex/hooks
 echo '{"prompt": "YOUR_TEST_PROMPT_HERE"}' | python3 user_prompt_submit.py
 ```
 

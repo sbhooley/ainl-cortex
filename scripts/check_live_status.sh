@@ -43,7 +43,7 @@ echo ""
 
 # Check hook activity
 echo "Hook Activity:"
-HOOK_LOG=~/.claude/plugins/ainl-graph-memory/logs/hooks.log
+HOOK_LOG=~/.claude/plugins/ainl-cortex/logs/hooks.log
 if [ -f "$HOOK_LOG" ]; then
     LAST_ACTIVITY=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$HOOK_LOG" 2>/dev/null || stat -c "%y" "$HOOK_LOG" 2>/dev/null | cut -d. -f1)
     ERROR_COUNT=$(tail -50 "$HOOK_LOG" 2>/dev/null | grep -c "ERROR" || echo "0")
@@ -110,5 +110,5 @@ fi
 
 echo ""
 echo "=================================="
-echo "Run ~/.claude/plugins/ainl-graph-memory/verify_plugin_activation.sh"
+echo "Run ~/.claude/plugins/ainl-cortex/verify_plugin_activation.sh"
 echo "for full diagnostic report"

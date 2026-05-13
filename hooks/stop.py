@@ -31,7 +31,7 @@ logger = get_logger("stop")
 
 def drain_session_inbox(project_id: str) -> dict:
     """Drain buffered captures from inbox, return aggregated session data."""
-    inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+    inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
     inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
 
     session_data = {
@@ -393,7 +393,7 @@ def write_semantics(store, project_id: str) -> int:
     # ── Prompt history mining ─────────────────────────────────────────────────
     import re as _re
     hist_file = (
-        Path.home() / ".claude" / "plugins" / "ainl-graph-memory"
+        Path(__file__).resolve().parent.parent
         / "inbox" / f"{project_id}_prompts.jsonl"
     )
     if hist_file.exists():
@@ -592,7 +592,7 @@ def flush_pending_captures(project_id: str) -> int:
     persisted even if the session ends abruptly before Stop fires.
     Returns number of captures flushed (0 = nothing pending).
     """
-    inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+    inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
     inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
     if not inbox_file.exists():
         return 0
@@ -617,7 +617,7 @@ def flush_pending_captures(project_id: str) -> int:
             if _NATIVE_OK:
                 try:
                     native_db_path = str(Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_native.db")
-                    inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+                    inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
                     step_file = str(inbox_dir / f"{project_id}_traj_steps.jsonl")
                     task_summary = create_episode_summary(session_data)
                     outcome = "partial" if session_data["had_errors"] else "success"
@@ -719,7 +719,7 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
     if _NATIVE_OK:
         try:
             native_db_path = str(Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_native.db")
-            inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+            inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
             step_file = str(inbox_dir / f"{project_id}_traj_steps.jsonl")
             session_json = json.dumps({
                 "tool_calls": session_data.get("tools_used", []),

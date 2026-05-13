@@ -120,7 +120,7 @@ class AINLGraphMemoryServer:
 
 
 # Create server instance
-server = Server("ainl-graph-memory")
+server = Server("ainl-cortex")
 memory_server = AINLGraphMemoryServer()
 
 

@@ -198,7 +198,7 @@ python3 -c "from runtime.engine import RUNTIME_VERSION; print(RUNTIME_VERSION)"
 ### Verify Installation
 
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 
 # Install
 pip install -r requirements-ainl.txt

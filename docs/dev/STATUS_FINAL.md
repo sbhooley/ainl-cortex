@@ -158,7 +158,7 @@ User: "Create a Solana wallet monitor"
 
 ### 1. Verify Installation
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 pip install -r requirements-ainl.txt
 python3 -c "from runtime.engine import RUNTIME_VERSION; print(f'AINL v{RUNTIME_VERSION}')"
 ```
@@ -210,7 +210,7 @@ Claude should recall the previous pattern.
 - **Latest Commit:** f0e2eaa
 
 ### Documentation
-All docs in: `~/.claude/plugins/ainl-graph-memory/`
+All docs in: `~/.claude/plugins/ainl-cortex/`
 - `COMPLETION_REPORT.md` - Comprehensive final report
 - `docs/USER_GUIDE_AINL.md` - User-facing guide
 - `docs/AINL_LANGUAGE_GUIDE.md` - Language reference

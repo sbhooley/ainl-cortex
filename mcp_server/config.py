@@ -120,7 +120,7 @@ class PluginConfig:
         if root:
             self.config_path = Path(root) / "config.json"
         else:
-            self.config_path = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "config.json"
+            self.config_path = Path(__file__).resolve().parent.parent / "config.json"
         self.config = self._load_config()
 
     def _load_config(self) -> dict:

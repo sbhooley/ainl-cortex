@@ -6,7 +6,7 @@ echo "=== AINL Graph Memory Plugin Activation Check ==="
 echo ""
 
 # Check plugin directory
-if [ -d ~/.claude/plugins/ainl-graph-memory ]; then
+if [ -d ~/.claude/plugins/ainl-cortex ]; then
     echo "✅ Plugin directory exists"
 else
     echo "❌ Plugin directory not found"
@@ -14,7 +14,7 @@ else
 fi
 
 # Check plugin.json
-if [ -f ~/.claude/plugins/ainl-graph-memory/.claude-plugin/plugin.json ]; then
+if [ -f ~/.claude/plugins/ainl-cortex/.claude-plugin/plugin.json ]; then
     echo "✅ Plugin metadata (plugin.json) exists"
 else
     echo "❌ Plugin metadata not found"
@@ -22,7 +22,7 @@ else
 fi
 
 # Check hooks.json
-if [ -f ~/.claude/plugins/ainl-graph-memory/hooks/hooks.json ]; then
+if [ -f ~/.claude/plugins/ainl-cortex/hooks/hooks.json ]; then
     echo "✅ Hooks configuration (hooks.json) exists"
 else
     echo "❌ Hooks configuration not found"
@@ -30,7 +30,7 @@ else
 fi
 
 # Check MCP server config
-if [ -f ~/.claude/plugins/ainl-graph-memory/.mcp.json ]; then
+if [ -f ~/.claude/plugins/ainl-cortex/.mcp.json ]; then
     echo "✅ MCP server configuration exists"
 else
     echo "❌ MCP server configuration not found"
@@ -39,7 +39,7 @@ fi
 
 # Check hooks are executable
 hook_count=0
-for hook in ~/.claude/plugins/ainl-graph-memory/hooks/*.py; do
+for hook in ~/.claude/plugins/ainl-cortex/hooks/*.py; do
     if [ -x "$hook" ]; then
         ((hook_count++))
     fi
@@ -49,7 +49,7 @@ echo "✅ Found $hook_count executable hooks"
 # Test Python dependencies
 echo ""
 echo "Checking Python dependencies..."
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 if python3 -c "import sys; sys.path.insert(0, '.'); from mcp_server.config import get_config; get_config()" 2>/dev/null; then
     echo "✅ Python dependencies OK"
 else

@@ -6,19 +6,19 @@ If a user says they just cloned or downloaded this plugin and needs help activat
 
 **The one-command install:**
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 bash setup.sh
 # then restart Claude Code
 ```
 
 `setup.sh` handles: venv creation, dep install, marketplace registration, settings.json update, and config defaults.
 
-**To verify it worked** after restarting: `/mcp` should list ~20 tools starting with `ainl-graph-memory__`.
+**To verify it worked** after restarting: `/mcp` should list ~20 tools starting with `ainl-cortex__`.
 
 **Common issues:**
 - `python3 not found` → install Python 3.10+ from python.org
 - `pip install fails` → run `bash setup.sh` again with internet connection
-- No banner at startup → check `~/.claude/settings.json` has `"enabledPlugins": {"ainl-graph-memory@ainl-local": true}`; if missing, re-run setup.sh
+- No banner at startup → check `~/.claude/settings.json` has `"enabledPlugins": {"ainl-cortex@ainl-local": true}`; if missing, re-run setup.sh
 - Only ~13 tools (no ainl_ tools) → run `pip install ainativelang[mcp]>=1.7.0` inside `.venv`
 
 **Native Rust backend (optional, higher fidelity):**
@@ -321,7 +321,7 @@ Would you like me to test it?
 
 ## Integration Notes
 
-- Plugin is at `~/.claude/plugins/ainl-graph-memory/`
+- Plugin is at `~/.claude/plugins/ainl-cortex/`
 - Uses PyPI package `ainativelang[mcp]` v1.7.0+
 - Graph memory stores AINL patterns as Procedural nodes
 - Hooks auto-validate .ainl files on save
@@ -342,7 +342,7 @@ The plugin has two storage backends, switched via `config.json`:
 
 **Auto-build**: `hooks/startup.py:_ensure_ainl_native()` builds `ainl_native` at every SessionStart using maturin. Falls back silently to Python if build fails. Build command (run manually if needed):
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
   .venv/bin/maturin develop --release \
   --manifest-path ainl_native/Cargo.toml

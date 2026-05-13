@@ -152,7 +152,7 @@ For each project:
 - Track compression stats by mode
 - Calculate effectiveness (savings + quality)
 - Auto-detect best mode after 5+ compressions
-- Store preferences in `~/.claude/plugins/ainl-graph-memory/profiles/`
+- Store preferences in `~/.claude/plugins/ainl-cortex/profiles/`
 
 #### Auto-Detection
 
@@ -303,7 +303,7 @@ The unified pipeline coordinates all features:
 
 ## Configuration File
 
-Full configuration in `~/.claude/plugins/ainl-graph-memory/.mcp.json`:
+Full configuration in `~/.claude/plugins/ainl-cortex/.mcp.json`:
 
 ```json
 {
@@ -410,7 +410,7 @@ python3 cli/compression_advanced_cli.py profile -p myproject
 
 1. Check config: `python3 cli/compression_advanced_cli.py config`
 2. Test pipeline: `echo "test" | python3 cli/compression_advanced_cli.py test -p test`
-3. Check logs in `~/.claude/plugins/ainl-graph-memory/logs/`
+3. Check logs in `~/.claude/plugins/ainl-cortex/logs/`
 
 ### Quality warnings
 

@@ -14,7 +14,7 @@ python3 --version
 pip --version
 
 # Navigate to plugin directory
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 ```
 
 ## Step 1: Install AINL Package
@@ -483,7 +483,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp_server.ainl_tools import register_ainl_tools
 
 # In main():
-mcp = FastMCP("ainl-graph-memory")
+mcp = FastMCP("ainl-cortex")
 
 # Register existing graph memory tools
 # ... existing code ...

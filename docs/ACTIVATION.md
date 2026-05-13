@@ -4,28 +4,23 @@
 
 ---
 
-## A Note on Names
+## Quick Reference
 
-**AINL Cortex** is the product name. `ainl-graph-memory` is the internal plugin ID that Claude Code uses for settings, MCP registration, and the plugin directory. These are intentionally different — the ID stays stable so existing installs and settings aren't broken when the product name changes.
-
-| What you see | Value |
+| What | Value |
 |---|---|
-| Product name | AINL Cortex |
-| Plugin directory | `~/.claude/plugins/ainl-graph-memory/` |
-| MCP server ID | `ainl-graph-memory` |
-| Settings key | `ainl-graph-memory@ainl-local` |
-| MCP tool prefix | `ainl-graph-memory__*` |
+| Plugin directory | `~/.claude/plugins/ainl-cortex/` |
+| MCP server ID | `ainl-cortex` |
+| Settings key | `ainl-cortex@ainl-local` |
+| MCP tool prefix | `ainl-cortex__*` |
 | GitHub repo | `https://github.com/sbhooley/ainl-cortex` |
-
-There is no conflict — the directory is named `ainl-graph-memory` on purpose.
 
 ---
 
 ## Installation
 
 ```bash
-git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-graph-memory
-cd ~/.claude/plugins/ainl-graph-memory
+git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-cortex
+cd ~/.claude/plugins/ainl-cortex
 bash setup.sh
 ```
 
@@ -50,7 +45,7 @@ If you have the [ArmaraOS](https://github.com/sbhooley/armaraos) source at `~/.o
 On every session start you should see:
 
 ```
-[AINL Cortex]  Plugin root: ~/.claude/plugins/ainl-graph-memory
+[AINL Cortex]  Plugin root: ~/.claude/plugins/ainl-cortex
   • Graph DB: ready (ainl_memory.db)
   • Compression: BALANCED (on)  ~savings ~40–60%
   • MCP stack: OK
@@ -61,7 +56,7 @@ If the banner is absent, see [Troubleshooting](#troubleshooting) below.
 
 ### 2. MCP tools
 
-Run `/mcp` in Claude Code. You should see **~24 tools** prefixed with `ainl-graph-memory__`:
+Run `/mcp` in Claude Code. You should see **~24 tools** prefixed with `ainl-cortex__`:
 
 | Group | Tools |
 |---|---|
@@ -82,7 +77,7 @@ ls ~/.claude/projects/*/graph_memory/
 ### 4. Hook activity
 
 ```bash
-tail -20 ~/.claude/plugins/ainl-graph-memory/logs/hooks.log
+tail -20 ~/.claude/plugins/ainl-cortex/logs/hooks.log
 ```
 
 You should see timestamped entries for `user_prompt_submit`, `post_tool_use`, etc.
@@ -126,10 +121,10 @@ You should see timestamped entries for `user_prompt_submit`, `post_tool_use`, et
 
 ```bash
 # Check settings.json has the plugin
-grep -A3 "ainl-graph-memory" ~/.claude/settings.json
+grep -A3 "ainl-cortex" ~/.claude/settings.json
 
 # Re-run setup if missing
-cd ~/.claude/plugins/ainl-graph-memory && bash setup.sh
+cd ~/.claude/plugins/ainl-cortex && bash setup.sh
 ```
 
 ### Fewer than 24 MCP tools
@@ -158,7 +153,7 @@ echo '{"projectId":"test","workingDir":"'$PWD'","prompt":"test"}' | \
 ### Python dependencies missing
 
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 .venv/bin/pip install -r requirements.txt
 ```
 
@@ -182,7 +177,7 @@ The plugin falls back to the Python backend silently — Claude Code continues w
 
 To force a rebuild manually:
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
   .venv/bin/maturin develop --release \
   --manifest-path ainl_native/Cargo.toml
@@ -196,7 +191,7 @@ The plugin works out-of-the-box. To tune it:
 
 ```bash
 # View current settings
-cat ~/.claude/plugins/ainl-graph-memory/config.json
+cat ~/.claude/plugins/ainl-cortex/config.json
 ```
 
 Key options in `config.json`:
@@ -224,7 +219,7 @@ Feature flags (environment variables):
 ## Uninstalling
 
 ```bash
-rm -rf ~/.claude/plugins/ainl-graph-memory
+rm -rf ~/.claude/plugins/ainl-cortex
 
 # Optional: remove project memory databases (deletes all learned memory)
 # find ~/.claude/projects -name "graph_memory" -type d -exec rm -rf {} +

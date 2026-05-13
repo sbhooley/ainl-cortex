@@ -1,5 +1,5 @@
 {
-  "name": "ainl-graph-memory",
+  "name": "ainl-cortex",
   "displayName": "AINL Cortex",
   "version": "0.2.0",
   "description": "Graph-native memory, self-learning, and multi-agent coordination for Claude Code. Every session is captured, every pattern learned, every agent connected.",
@@ -12,7 +12,7 @@
   },
   "readme": "README.md",
   "mcpServers": {
-    "ainl-graph-memory": {
+    "ainl-cortex": {
       "command": "bash",
       "args": ["${CLAUDE_PLUGIN_ROOT}/mcp_launch.sh"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}"

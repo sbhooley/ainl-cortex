@@ -240,7 +240,7 @@ balance_checker @cron "0 * * * *":  # Every hour
 ## File Structure After Integration
 
 ```
-ainl-graph-memory/
+ainl-cortex/
 ├── .claude-plugin/
 │   └── plugin.json                    # Updated capabilities
 ├── mcp_server/
@@ -309,7 +309,7 @@ ainl-graph-memory/
 
 1. **Enable the plugin:**
    ```bash
-   cd ~/.claude/plugins/ainl-graph-memory
+   cd ~/.claude/plugins/ainl-cortex
    pip install -r requirements.txt
    ```
 
@@ -326,7 +326,7 @@ ainl-graph-memory/
 
 ```bash
 # 1. Navigate to plugin directory
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 
 # 2. Install dependencies (includes ainativelang from PyPI)
 pip install -r requirements.txt

@@ -342,7 +342,7 @@ def record_prompt_summary(project_id: str, prompt: str) -> None:
     """
     import re as _re
 
-    inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+    inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     hist_file = inbox_dir / f"{project_id}_prompts.jsonl"
 

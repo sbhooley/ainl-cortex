@@ -47,7 +47,7 @@ def _flush_and_snapshot(project_id: str, message_count: int, estimated_tokens: i
     if not _NATIVE_OK:
         return
     try:
-        inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+        inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
         captures_file = inbox_dir / f"{project_id}_captures.jsonl"
         capture_count = 0
         if captures_file.exists():

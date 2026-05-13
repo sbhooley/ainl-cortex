@@ -166,11 +166,11 @@ Claude will generate the `.ainl` file.
 
 **Option 2: Use a Template**
 
-Templates are in `~/.claude/plugins/ainl-graph-memory/templates/ainl/`:
+Templates are in `~/.claude/plugins/ainl-cortex/templates/ainl/`:
 
 ```bash
 # Copy template
-cp ~/.claude/plugins/ainl-graph-memory/templates/ainl/monitor_workflow.ainl my_monitor.ainl
+cp ~/.claude/plugins/ainl-cortex/templates/ainl/monitor_workflow.ainl my_monitor.ainl
 
 # Edit it
 # Then ask Claude to validate
@@ -481,7 +481,7 @@ Stick with Python/TS for:
 
 1. **Try it!** Ask Claude to create an AINL workflow for something you do regularly
 
-2. **Explore templates** in `~/.claude/plugins/ainl-graph-memory/templates/ainl/`
+2. **Explore templates** in `~/.claude/plugins/ainl-cortex/templates/ainl/`
 
 3. **Check the language guide** at `docs/AINL_LANGUAGE_GUIDE.md` for complete syntax reference
 
@@ -493,7 +493,7 @@ Stick with Python/TS for:
 
 - **Ask Claude:** "How do I... in AINL?"
 - **MCP Tools:** `ainl_validate`, `ainl_compile`, `ainl_run`, `ainl_capabilities`
-- **Templates:** `~/.claude/plugins/ainl-graph-memory/templates/ainl/`
+- **Templates:** `~/.claude/plugins/ainl-cortex/templates/ainl/`
 - **Official docs:** https://ainativelang.com
 - **Language spec:** https://github.com/sbhooley/ainativelang
 

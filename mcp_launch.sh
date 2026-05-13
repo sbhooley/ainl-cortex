@@ -24,5 +24,5 @@ if command -v python3 >/dev/null 2>&1; then
   exec python3 -m mcp_server.server
 fi
 
-echo "ainl-graph-memory: no Python in .venv/bin and no python3 on PATH" >&2
+echo "ainl-cortex: no Python in .venv/bin and no python3 on PATH" >&2
 exit 1

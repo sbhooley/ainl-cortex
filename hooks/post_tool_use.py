@@ -100,7 +100,7 @@ def buffer_capture(project_id: str, capture: dict) -> int:
     """
     Buffer capture to session inbox. Returns current capture count.
     """
-    inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+    inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
 
@@ -153,7 +153,7 @@ def _buffer_traj_step(project_id: str, tool: str, capture: dict) -> None:
     Written to {project_id}_traj_steps.jsonl; flushed to ainl_native.db at session end.
     """
     try:
-        inbox_dir = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "inbox"
+        inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
         inbox_dir.mkdir(parents=True, exist_ok=True)
         step_file = inbox_dir / f"{project_id}_traj_steps.jsonl"
         step = {

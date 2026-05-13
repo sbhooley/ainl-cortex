@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "ainl_native"
 version = "0.1.0"
-description = "Native Rust bindings for ainl-graph-memory plugin"
+description = "Native Rust bindings for AINL Cortex"
 requires-python = ">=3.10"
 
 [tool.maturin]

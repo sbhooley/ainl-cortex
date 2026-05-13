@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 
 
-PLUGIN_ROOT = Path(os.environ.get("AINL_PLUGIN_ROOT", Path.home() / ".claude" / "plugins" / "ainl-graph-memory"))
+PLUGIN_ROOT = Path(os.environ.get("AINL_PLUGIN_ROOT", Path(__file__).resolve().parent.parent))
 INBOX_DIR = PLUGIN_ROOT / "a2a" / "inbox"
 
 

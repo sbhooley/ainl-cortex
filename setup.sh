@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — Install and activate ainl-graph-memory for Claude Code.
+# setup.sh — Install and activate ainl-cortex for Claude Code.
 # Run once after cloning: bash setup.sh
 # Safe to re-run — all steps are idempotent.
 set -euo pipefail
@@ -9,7 +9,7 @@ SETTINGS="$HOME/.claude/settings.json"
 MARKETPLACE="$HOME/.claude/ainl-local-marketplace"
 
 echo ""
-echo "=== AINL Graph Memory — Setup ==="
+echo "=== AINL Cortex — Setup ==="
 echo ""
 
 # ── 1. Python check ────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ echo "  Setting up plugin marketplace..."
 mkdir -p "$MARKETPLACE/.claude-plugin"
 mkdir -p "$MARKETPLACE/plugins"
 
-LINK_PATH="$MARKETPLACE/plugins/ainl-graph-memory"
+LINK_PATH="$MARKETPLACE/plugins/ainl-cortex"
 if [[ -L "$LINK_PATH" ]] || [[ -e "$LINK_PATH" ]]; then
     rm -f "$LINK_PATH"
 fi
@@ -80,13 +80,13 @@ cat > "$MARKETPLACE/.claude-plugin/marketplace.json" <<JSONEOF
 {
   "name": "ainl-local",
   "version": "1.0.0",
-  "description": "Local marketplace: AINL Graph Memory",
+  "description": "Local marketplace: AINL Cortex",
   "owner": { "name": "local" },
   "plugins": [
     {
-      "name": "ainl-graph-memory",
-      "description": "Graph-native memory and self-learning for Claude Code",
-      "source": "./plugins/ainl-graph-memory"
+      "name": "ainl-cortex",
+      "description": "Graph-native memory, self-learning, and multi-agent coordination for Claude Code",
+      "source": "./plugins/ainl-cortex"
     }
   ]
 }
@@ -112,7 +112,7 @@ if settings_path.exists():
 settings.setdefault("extraKnownMarketplaces", {})["ainl-local"] = {
     "source": {"source": "directory", "path": marketplace}
 }
-settings.setdefault("enabledPlugins", {})["ainl-graph-memory@ainl-local"] = True
+settings.setdefault("enabledPlugins", {})["ainl-cortex@ainl-local"] = True
 
 settings_path.parent.mkdir(parents=True, exist_ok=True)
 with open(settings_path, "w") as f:
@@ -133,8 +133,8 @@ echo ""
 echo "Next step: restart Claude Code."
 echo ""
 echo "You should see:"
-echo "  • [AINL Graph Memory] banner at session start"
-echo "  • ~20 new MCP tools under /mcp (ainl + memory)"
+echo "  • [AINL Cortex] banner at session start"
+echo "  • ~24 new MCP tools under /mcp (memory + goals + ainl + a2a)"
 echo ""
 echo "To verify installation: bash $PLUGIN_DIR/scripts/verify_activation.sh"
 echo ""

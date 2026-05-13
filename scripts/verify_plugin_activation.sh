@@ -33,7 +33,7 @@ test_result() {
 
 # Test 1: Check plugin directory exists
 echo -e "${YELLOW}[1/10] Checking plugin installation...${NC}"
-if [ -d ~/.claude/plugins/ainl-graph-memory ]; then
+if [ -d ~/.claude/plugins/ainl-cortex ]; then
     test_result 0 "Plugin directory exists"
 else
     test_result 1 "Plugin directory not found"
@@ -41,7 +41,7 @@ fi
 
 # Test 2: Check MCP configuration
 echo -e "${YELLOW}[2/10] Checking MCP configuration...${NC}"
-if [ -f ~/.claude/plugins/ainl-graph-memory/.mcp.json ]; then
+if [ -f ~/.claude/plugins/ainl-cortex/.mcp.json ]; then
     test_result 0 "MCP configuration file exists"
 else
     test_result 1 "MCP configuration file missing"
@@ -57,7 +57,7 @@ fi
 
 # Test 4: Check Python dependencies
 echo -e "${YELLOW}[4/10] Checking Python dependencies...${NC}"
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 if python3 -c "import sys; sys.path.insert(0, '.'); from mcp_server import compression_profiles" 2>/dev/null; then
     test_result 0 "Python dependencies available"
 else
@@ -90,7 +90,7 @@ fi
 
 # Test 7: Check hook logs
 echo -e "${YELLOW}[7/10] Checking hook execution logs...${NC}"
-HOOK_LOG=~/.claude/plugins/ainl-graph-memory/logs/hooks.log
+HOOK_LOG=~/.claude/plugins/ainl-cortex/logs/hooks.log
 if [ -f "$HOOK_LOG" ]; then
     RECENT_LOGS=$(tail -20 "$HOOK_LOG" 2>/dev/null | grep -v "JSONDecodeError" | wc -l)
     if [ $RECENT_LOGS -gt 0 ]; then
@@ -119,7 +119,7 @@ fi
 
 # Test 9: Test MCP server can start
 echo -e "${YELLOW}[9/10] Testing MCP server executable...${NC}"
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 if timeout 2 python3 mcp_server/server.py --help >/dev/null 2>&1; then
     test_result 0 "MCP server is executable"
 else
@@ -128,7 +128,7 @@ fi
 
 # Test 10: Check for AINL tools availability (this requires Claude Code to be running)
 echo -e "${YELLOW}[10/10] Checking AINL integration...${NC}"
-if [ -f ~/.claude/plugins/ainl-graph-memory/mcp_server/ainl_tools.py ]; then
+if [ -f ~/.claude/plugins/ainl-cortex/mcp_server/ainl_tools.py ]; then
     test_result 0 "AINL tools module exists"
 else
     test_result 1 "AINL tools module missing"
@@ -177,11 +177,11 @@ else
     echo ""
     echo "Recommended fixes:"
     if grep -q "dependencies missing" <(echo "$TESTS_FAILED"); then
-        echo "  • Install dependencies: cd ~/.claude/plugins/ainl-graph-memory && pip install -r requirements.txt"
+        echo "  • Install dependencies: cd ~/.claude/plugins/ainl-cortex && pip install -r requirements.txt"
     fi
     echo "  • Restart Claude Code to load the plugin"
     echo "  • Check Claude Code console for errors"
-    echo "  • Review logs at ~/.claude/plugins/ainl-graph-memory/logs/"
+    echo "  • Review logs at ~/.claude/plugins/ainl-cortex/logs/"
     echo ""
 fi
 

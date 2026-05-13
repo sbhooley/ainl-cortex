@@ -3,16 +3,16 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ainl-graph-memory"
-version = "0.1.0"
-description = "AINL-inspired graph memory system for Claude Code"
+name = "ainl-cortex"
+version = "0.2.0"
+description = "Graph-native memory, self-learning, and multi-agent coordination for Claude Code"
 readme = "README.md"
 authors = [
-    {name = "Claude Code Community"}
+    {name = "Steven Hooley", email = "steven@hooley.me"}
 ]
 license = {text = "MIT OR Apache-2.0"}
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "License :: OSI Approved :: Apache Software License",
@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-keywords = ["ainl", "graph", "memory", "agent", "claude-code"]
+keywords = ["ainl", "graph", "memory", "agent", "claude-code", "a2a", "multi-agent", "goals"]
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=0.1.0"
@@ -38,10 +38,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/claude-code/ainl-graph-memory"
-Documentation = "https://github.com/claude-code/ainl-graph-memory/blob/main/README.md"
-Repository = "https://github.com/claude-code/ainl-graph-memory"
-Issues = "https://github.com/claude-code/ainl-graph-memory/issues"
+Homepage = "https://github.com/sbhooley/ainl-cortex"
+Documentation = "https://github.com/sbhooley/ainl-cortex/blob/main/README.md"
+Repository = "https://github.com/sbhooley/ainl-cortex"
+Issues = "https://github.com/sbhooley/ainl-cortex/issues"
 
 [tool.black]
 line-length = 100

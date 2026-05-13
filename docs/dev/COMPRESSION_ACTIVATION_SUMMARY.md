@@ -88,7 +88,7 @@ Quality: Preserved all technical content
 ## Files Modified
 
 ### 1. Hook Updated
-`~/.claude/plugins/ainl-graph-memory/hooks/user_prompt_submit.py`
+`~/.claude/plugins/ainl-cortex/hooks/user_prompt_submit.py`
 
 **Changes:**
 - ✅ Added `compress_user_prompt()` function (lines ~202-256)
@@ -97,7 +97,7 @@ Quality: Preserved all technical content
 - ✅ Returns compressed prompt in JSON result
 
 ### 2. Config Already Enabled
-`~/.claude/plugins/ainl-graph-memory/config.json`
+`~/.claude/plugins/ainl-cortex/config.json`
 
 ```json
 {
@@ -155,7 +155,7 @@ The compression happens invisibly - you won't see it directly, but you can verif
 
 **Check logs:**
 ```bash
-tail -f ~/.claude/plugins/ainl-graph-memory/logs/user_prompt_submit.log
+tail -f ~/.claude/plugins/ainl-cortex/logs/user_prompt_submit.log
 ```
 
 **Look for:**
@@ -205,7 +205,7 @@ Compression preserves:
 
 To turn off user prompt compression:
 
-1. Edit: `~/.claude/plugins/ainl-graph-memory/config.json`
+1. Edit: `~/.claude/plugins/ainl-cortex/config.json`
 2. Change: `"compress_user_prompt": false`
 3. Restart Claude Code
 

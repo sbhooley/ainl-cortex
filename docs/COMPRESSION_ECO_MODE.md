@@ -58,7 +58,7 @@ The plugin includes **Ultra Cost-Efficient Mode** - embedding-free input compres
 
 ### Plugin Config
 
-Create or edit `~/.claude/plugins/ainl-graph-memory/config.json`:
+Create or edit `~/.claude/plugins/ainl-cortex/config.json`:
 
 ```json
 {
@@ -195,7 +195,7 @@ Compression metrics are logged for each operation:
 
 Check logs:
 ```bash
-tail -f ~/.claude/plugins/ainl-graph-memory/logs/hooks.log | grep compression
+tail -f ~/.claude/plugins/ainl-cortex/logs/hooks.log | grep compression
 ```
 
 ## Cost Savings Calculator

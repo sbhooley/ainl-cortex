@@ -151,7 +151,7 @@ Phases 2-6 of the self-learning implementation are now complete, building on Pha
 ## File Structure
 
 ```
-ainl-graph-memory/
+ainl-cortex/
 ├── mcp_server/
 │   ├── persona_evolution.py          ✅ NEW (Phase 2)
 │   ├── failure_learning.py           ✅ NEW (Phase 3)
@@ -232,7 +232,7 @@ ainl-graph-memory/
 
 ### Testing
 ```bash
-cd /Users/clawdbot/.claude/plugins/ainl-graph-memory
+cd /Users/clawdbot/.claude/plugins/ainl-cortex
 
 # Install pytest if needed
 pip install pytest

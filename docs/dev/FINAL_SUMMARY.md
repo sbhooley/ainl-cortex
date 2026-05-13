@@ -210,7 +210,7 @@ Total: 480 tokens (under 500 budget) ✅
 
 ### 1. Testing (Optional)
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 
 # Install pytest (if needed)
 pip3 install --break-system-packages pytest

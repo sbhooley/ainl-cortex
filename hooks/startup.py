@@ -179,7 +179,7 @@ def append_venv_to_envfile(plugin_root: Path) -> str:
     if not fe:
         return "CLAUDE_ENV_FILE not set (optional)"
     try:
-        line = f'\n# ainl-graph-memory (SessionStart)\nexport PATH="{plugin_root / ".venv" / "bin"}:$PATH"\n'
+        line = f'\n# ainl-cortex (SessionStart)\nexport PATH="{plugin_root / ".venv" / "bin"}:$PATH"\n'
         line += f'export PYTHONPATH="{plugin_root}:$PYTHONPATH"\n'
         with open(fe, "a", encoding="utf-8") as f:
             f.write(line)
@@ -306,7 +306,7 @@ def main():
             f"  • venv on PATH (child processes): {venv_file_status}\n"
             f"  • A2A bridge: {bridge_line}\n"
             f"  • When Claude spawns MCP, expect ~{EXPECTED_MCP_TOOLS} tools (ainl + memory + a2a); "
-            f"if missing, /plugin -> Installed -> ainl-graph-memory and /mcp, or /reload-plugins.\n"
+            f"if missing, /plugin -> Installed -> ainl-cortex and /mcp, or /reload-plugins.\n"
         )
 
         system_blocks = [banner]

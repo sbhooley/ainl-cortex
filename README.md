@@ -192,8 +192,8 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 ### Installation
 
 ```bash
-git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-graph-memory
-cd ~/.claude/plugins/ainl-graph-memory
+git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-cortex
+cd ~/.claude/plugins/ainl-cortex
 bash setup.sh
 ```
 
@@ -209,7 +209,7 @@ Then **restart Claude Code**. That's it.
 On your next session start, the `[AINL Cortex]` banner appears:
 
 ```
-[AINL Cortex]  Plugin root: ~/.claude/plugins/ainl-graph-memory
+[AINL Cortex]  Plugin root: ~/.claude/plugins/ainl-cortex
   • Graph DB: ready (ainl_memory.db)
   • Compression: BALANCED (on)  ~savings ~40–60%
   • MCP stack: OK
@@ -299,7 +299,7 @@ If the build fails (missing Rust, missing armaraos, etc.), the plugin **silently
 
 To force a rebuild manually:
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
   .venv/bin/maturin develop --release \
   --manifest-path ainl_native/Cargo.toml
@@ -324,7 +324,7 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
 If you have existing memories in the Python backend and want to switch to native:
 
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 
 # Dry run first — shows what would be migrated
 python3 migrate_to_native.py --dry-run
@@ -836,7 +836,7 @@ open htmlcov/index.html
 ### Project Structure
 
 ```
-ainl-graph-memory/
+ainl-cortex/
 ├── mcp_server/              # MCP server implementation
 │   ├── server.py            # Main server entry point
 │   ├── ainl_tools.py        # AINL tool implementations

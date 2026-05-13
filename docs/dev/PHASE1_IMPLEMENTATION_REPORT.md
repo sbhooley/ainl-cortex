@@ -447,7 +447,7 @@ Phase 1 provides the data layer for:
 pip install pytest
 
 # Run tests
-cd /Users/clawdbot/.claude/plugins/ainl-graph-memory
+cd /Users/clawdbot/.claude/plugins/ainl-cortex
 python3 -m pytest tests/test_trajectory_capture.py -v
 python3 -m pytest tests/test_pattern_recurrence.py -v
 ```

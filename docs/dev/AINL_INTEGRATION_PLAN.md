@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-This document outlines the strategy to make AI Native Lang (AINL) a first-class programming language within Claude Code through the ainl-graph-memory plugin. The goal is to enable Claude Code to fully understand AINL, utilize all AINL MCP tools, and proactively suggest using .ainl files for appropriate use cases.
+This document outlines the strategy to make AI Native Lang (AINL) a first-class programming language within Claude Code through the ainl-cortex plugin. The goal is to enable Claude Code to fully understand AINL, utilize all AINL MCP tools, and proactively suggest using .ainl files for appropriate use cases.
 
 ## Background
 
@@ -23,7 +23,7 @@ AI Native Lang (AINL) is a **graph-canonical, agent-native programming language*
 ### Current State
 
 **Existing:**
-- ✅ `ainl-graph-memory` plugin provides graph-based memory for Claude Code sessions
+- ✅ `ainl-cortex` plugin provides graph-based memory for Claude Code sessions
 - ✅ AINL runtime available on PyPI as `ainativelang` (v1.7.0+)
 - ✅ MCP server implementation available in `ainativelang[mcp]` package
 - ✅ ArmaraOS integration (desktop agent OS built on AINL)
@@ -357,7 +357,7 @@ python3 cli/ainl_onboard.py
 
 ```json
 {
-  "name": "ainl-graph-memory",
+  "name": "ainl-cortex",
   "version": "0.3.0",
   "description": "AINL-powered graph memory with first-class AINL language support",
   "mcp": {
@@ -420,7 +420,7 @@ ainativelang[mcp]>=1.7.0
 **Installation:**
 
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 pip install -r requirements.txt
 ```
 
@@ -440,7 +440,7 @@ AINL_STRICT_MODE=1                        # Enable strict validation by default
 AINL_HOST_ADAPTER_ALLOWLIST=http,fs,cache # Allowed adapters
 
 # Plugin-specific
-AINL_PLUGIN_TEMPLATES_DIR=~/.claude/plugins/ainl-graph-memory/templates/ainl
+AINL_PLUGIN_TEMPLATES_DIR=~/.claude/plugins/ainl-cortex/templates/ainl
 AINL_PATTERN_MEMORY_ENABLED=1             # Store AINL patterns in graph memory
 
 # Package discovery (auto-detected from pip installation)
@@ -471,7 +471,7 @@ fs:
 ## File Structure Changes
 
 ```
-ainl-graph-memory/
+ainl-cortex/
 ├── .claude-plugin/
 │   └── plugin.json                    # Updated with AINL capabilities
 ├── mcp_server/

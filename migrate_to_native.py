@@ -7,7 +7,7 @@ and writes it into NativeGraphStore (Rust ainl-memory). After migration, flip
 config.json memory.store_backend from "python" to "native" and restart.
 
 Usage:
-    cd ~/.claude/plugins/ainl-graph-memory
+    cd ~/.claude/plugins/ainl-cortex
     .venv/bin/python migrate_to_native.py [--project-hash HASH] [--dry-run]
 """
 

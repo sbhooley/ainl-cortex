@@ -51,12 +51,10 @@ class ProjectProfileManager:
         """
         Args:
             profiles_dir: Directory to store profile files
-                         Defaults to ~/.claude/plugins/ainl-graph-memory/profiles/
+                         Defaults to <plugin_root>/profiles/
         """
         if profiles_dir is None:
-            profiles_dir = (
-                Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "profiles"
-            )
+            profiles_dir = Path(__file__).resolve().parent.parent / "profiles"
 
         self.profiles_dir = profiles_dir
         self.profiles_dir.mkdir(parents=True, exist_ok=True)

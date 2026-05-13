@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Successfully implemented **AI Native Lang (AINL)** as a first-class programming language in Claude Code through the ainl-graph-memory plugin.
+Successfully implemented **AI Native Lang (AINL)** as a first-class programming language in Claude Code through the ainl-cortex plugin.
 
 ### What Was Delivered
 
@@ -180,7 +180,7 @@ Successfully implemented **AI Native Lang (AINL)** as a first-class programming 
 ## File Structure Created
 
 ```
-ainl-graph-memory/
+ainl-cortex/
 ├── CLAUDE.md                           # NEW: Plugin instructions for Claude
 ├── AINL_INTEGRATION_PLAN.md            # NEW: Technical plan
 ├── PYPI_REFACTOR_SUMMARY.md            # NEW: PyPI migration
@@ -347,7 +347,7 @@ Built-in token savings calculator:
 ### Step 1: Install Dependencies
 
 ```bash
-cd ~/.claude/plugins/ainl-graph-memory
+cd ~/.claude/plugins/ainl-cortex
 pip install -r requirements-ainl.txt
 ```
 

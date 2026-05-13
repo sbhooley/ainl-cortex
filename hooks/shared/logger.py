@@ -12,7 +12,7 @@ import sys
 
 
 # Set up log directory
-LOG_DIR = Path.home() / ".claude" / "plugins" / "ainl-graph-memory" / "logs"
+LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 LOG_FILE = LOG_DIR / "hooks.log"

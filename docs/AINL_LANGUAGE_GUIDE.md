@@ -770,7 +770,7 @@ When helping users with AINL:
    - `ainl_security_report` - Security analysis
 
 3. **Documentation:**
-   - Local templates: `~/.claude/plugins/ainl-graph-memory/templates/ainl/`
+   - Local templates: `~/.claude/plugins/ainl-cortex/templates/ainl/`
    - Examples: Show from template library
 
 ---
