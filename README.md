@@ -7,6 +7,8 @@
 [![AINL](https://img.shields.io/badge/AINL-v1.8.0+-orange.svg)](https://ainativelang.com)
 [![Status](https://img.shields.io/badge/status-production--ready-green.svg)]()
 
+[Website](https://ainativelang.com) · [PyPI](https://pypi.org/project/ainativelang/) · [GitHub](https://github.com/sbhooley/ainativelang) · [Docs](https://ainativelang.com/docs) · Developer: [Steven Hooley](https://stevenhooley.com) | [@sbhooley](https://x.com/sbhooley)
+
 ---
 
 ## ⚡ Install in 30 Seconds
@@ -1001,20 +1003,6 @@ limitations under the License.
 Copyright 2026 AINL Cortex Plugin Contributors
 
 ---
-
-## 🔗 Learn More
-
-### AINL Resources
-- **Official Website**: https://ainativelang.com
-- **AINL on PyPI**: https://pypi.org/project/ainativelang/
-- **GitHub**: https://github.com/sbhooley/ainativelang
-- **Documentation**: https://ainativelang.com/docs
-
-### Related Projects
-- **ArmaraOS**: https://github.com/sbhooley/armaraos - Desktop agent OS built on AINL
-- **Hermes Agent**: https://github.com/NousResearch/hermes-agent - Skill-native agent with closed learning loop
-- **ainl-memory crate**: https://crates.io/crates/ainl-memory
-- **ainl-runtime crate**: https://crates.io/crates/ainl-runtime
 
 ---
 
