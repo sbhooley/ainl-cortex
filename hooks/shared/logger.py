@@ -6,24 +6,47 @@ All hooks log to the same file for easy debugging.
 
 import logging
 import json
+import os
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict
 import sys
 
 
-# Set up log directory
 LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 LOG_FILE = LOG_DIR / "hooks.log"
 
 
-# Configure logger
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var, falling back silently on bad input."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+# Bound the on-disk hook log so a long-running session can't fill the user's
+# disk. Defaults: 5 MB per file × 3 backups = ~20 MB ceiling. Operators can
+# override with AINL_CORTEX_HOOKS_LOG_MAX_BYTES / _BACKUPS.
+_MAX_BYTES = _env_int("AINL_CORTEX_HOOKS_LOG_MAX_BYTES", 5 * 1024 * 1024)
+_BACKUP_COUNT = _env_int("AINL_CORTEX_HOOKS_LOG_BACKUPS", 3)
+
+
 logger = logging.getLogger("ainl_graph_memory_hooks")
 logger.setLevel(logging.DEBUG)
 
-# File handler
-file_handler = logging.FileHandler(LOG_FILE)
+file_handler = RotatingFileHandler(
+    LOG_FILE,
+    maxBytes=_MAX_BYTES,
+    backupCount=_BACKUP_COUNT,
+    encoding="utf-8",
+)
 file_handler.setLevel(logging.DEBUG)
 file_formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

@@ -42,8 +42,8 @@ profiles/
 htmlcov/
 .tox/
 
-# Logs
-logs/*.log
+# Logs (runtime output — never commit)
+logs/
 *.log
 
 # Database files (user data)
