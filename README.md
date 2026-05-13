@@ -7,7 +7,7 @@
 [![AINL](https://img.shields.io/badge/AINL-v1.8.0+-orange.svg)](https://ainativelang.com)
 [![Status](https://img.shields.io/badge/status-production--ready-green.svg)]()
 
-[Website](https://ainativelang.com) · [PyPI](https://pypi.org/project/ainativelang/) · [GitHub](https://github.com/sbhooley/ainativelang) · [Docs](https://ainativelang.com/docs) · Developer: [Steven Hooley](https://stevenhooley.com) | [@sbhooley](https://x.com/sbhooley)
+AINativeLang: [Website](https://ainativelang.com) · [PyPI](https://pypi.org/project/ainativelang/) · [GitHub](https://github.com/sbhooley/ainativelang) · [Docs](https://ainativelang.com/docs) · Developer: [Steven Hooley](https://stevenhooley.com) | [@sbhooley](https://x.com/sbhooley)
 
 ---
 
