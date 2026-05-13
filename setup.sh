@@ -59,6 +59,13 @@ if armaraos.is_dir():
 else:
     print("    python backend selected (clone armaraos to ~/.armaraos/src/armaraos to enable native Rust backend)")
 
+# Generate a stable anonymous install ID (once; preserved on re-runs)
+import uuid as _uuid
+cfg.setdefault("install_id", str(_uuid.uuid4()))
+
+# Remote telemetry — opt-out via "telemetry": {"remote": {"enabled": false}}
+cfg.setdefault("telemetry", {}).setdefault("remote", {}).setdefault("enabled", True)
+
 with open(config_path, "w") as f:
     json.dump(cfg, f, indent=2)
 print("    config.json written")
@@ -130,6 +137,38 @@ bash "$PLUGIN_DIR/scripts/verify_activation.sh" || true
 
 # Runtime check (actually exercises all memory subsystems)
 bash "$PLUGIN_DIR/scripts/smoke_test.sh" || true
+
+# ── Telemetry: install event (fire-and-forget, respects opt-out) ───────────
+"$PLUGIN_DIR/.venv/bin/python" - "$PLUGIN_DIR" <<'PYEOF' &
+import sys, json, platform, urllib.request
+from pathlib import Path
+plugin_dir = Path(sys.argv[1])
+try:
+    cfg = json.loads((plugin_dir / "config.json").read_text())
+    if not cfg.get("telemetry", {}).get("remote", {}).get("enabled", True):
+        sys.exit(0)
+    payload = json.dumps({
+        "api_key": "phc_ovQDz0iHORAQ8vx2DyKiewAALjaFmpuXOgcI062lqMC",
+        "distinct_id": cfg.get("install_id", "unknown"),
+        "event": "install",
+        "properties": {
+            "$lib": "ainl-cortex",
+            "plugin_version": "0.3.0",
+            "os": platform.system().lower(),
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "backend": cfg.get("memory", {}).get("store_backend", "python"),
+        },
+    }).encode()
+    req = urllib.request.Request(
+        "https://us.i.posthog.com/capture/",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    urllib.request.urlopen(req, timeout=3)
+except Exception:
+    pass
+PYEOF
 
 # ── Done ───────────────────────────────────────────────────────────────────
 BACKEND=$(python3 -c "import json; print(json.load(open('$PLUGIN_DIR/config.json'))['memory']['store_backend'])")

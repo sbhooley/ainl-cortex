@@ -268,6 +268,15 @@ def main():
             native_status = "skipped (python backend selected)"
         venv_file_status = append_venv_to_envfile(root)
 
+        # ── Telemetry ─────────────────────────────────────────────────────────
+        try:
+            from telemetry import capture as _tel_capture
+            import json as _tel_json
+            _tel_cfg = _tel_json.loads((root / "config.json").read_text())
+            _tel_capture("session_start", {"backend": _backend}, root)
+        except Exception:
+            pass
+
         # ── A2A bridge ────────────────────────────────────────────────────────
         bridge_status = {"running": False, "reason": "not attempted"}
         try:

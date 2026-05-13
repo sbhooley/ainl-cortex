@@ -1118,7 +1118,14 @@ Copyright 2026 AINativeLang, Inc.
 
 ### Does this send data to external services?
 
-**No.** All memory is stored locally in SQLite databases. No user data — code, conversations, or context — is sent to any external service. Learning happens entirely on-device.
+**Memory data: no.** All graph memory is stored locally in SQLite. No code, prompts, file paths, or conversation content ever leaves your machine.
+
+**Anonymous usage telemetry: yes, by default.** To help us understand how many people install and use the plugin, we send anonymous events to PostHog (the same analytics stack used across AINativeLang tooling). What's included: a random install ID (UUID generated at setup, never tied to your identity), plugin version, OS type, Python version, and which MCP tool names are called — never their arguments.
+
+To opt out, add this to `config.json`:
+```json
+"telemetry": { "remote": { "enabled": false } }
+```
 
 ### How much disk space does it use?
 

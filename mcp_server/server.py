@@ -532,6 +532,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls"""
     try:
         logger.info(f"Tool called: {name}")
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(_plugin_root() / "hooks"))
+            from telemetry import capture as _tel_capture
+            _tel_capture("tool_used", {"tool": name}, _plugin_root())
+        except Exception:
+            pass
 
         if name == "memory_store_episode":
             result = await memory_server.memory_store_episode(**arguments)

@@ -28,7 +28,10 @@
     "track_compression_savings": true,
     "log_compression_details": false,
     "track_quality_scores": true,
-    "track_adaptive_decisions": true
+    "track_adaptive_decisions": true,
+    "remote": {
+      "enabled": true
+    }
   },
   "a2a": {
     "enabled": false,
