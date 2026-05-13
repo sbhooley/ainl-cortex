@@ -5,10 +5,23 @@ edition = "2021"
 
 [lib]
 name = "ainl_native"
-crate-type = ["cdylib"]
+# rlib is required so #[cfg(test)] modules in src/*.rs can be exercised by
+# `cargo test --lib`. cdylib remains the production artifact loaded by Python
+# via PyO3.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# `extension-module` is REQUIRED for the production .so/.dylib that Python
+# loads via PyO3 — it makes the build skip the libpython link step (the
+# embedding interpreter resolves these symbols at load time). It must NOT
+# be enabled for `cargo test --lib`, because unit tests run as a normal
+# binary and need Python symbols at link time. Default-on for builds
+# performed by maturin / setup.sh; disabled by `cargo test --no-default-features`.
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-pyo3 = { version = "0.24", features = ["extension-module", "abi3-py310"] }
+pyo3 = { version = "0.24", features = ["abi3-py310"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
@@ -35,3 +48,6 @@ ainl-context-freshness = "0.1.2"
 
 # Trajectory
 ainl-trajectory = "0.1.2"
+
+[dev-dependencies]
+tempfile = "3"

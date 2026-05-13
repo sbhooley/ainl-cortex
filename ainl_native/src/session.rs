@@ -608,9 +608,22 @@ pub fn recall_context(
         vec![]
     };
 
-    // 3. All procedural patterns + persona traits
-    let all_procs = store.find_by_type("Procedural").unwrap_or_default();
-    let persona_nodes = store.find_by_type("Persona").unwrap_or_default();
+    // 3. All procedural patterns + persona traits — project-scoped (issue 5).
+    //    `find_by_type` returns rows for every project sharing this DB. Without
+    //    this filter, recall would surface patterns/personas from unrelated repos
+    //    (made worse once issue 1 actually splits projects into separate buckets).
+    let all_procs: Vec<AinlMemoryNode> = store
+        .find_by_type("Procedural")
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|n| node_project_matches(n, project_id))
+        .collect();
+    let persona_nodes: Vec<AinlMemoryNode> = store
+        .find_by_type("Persona")
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|n| node_project_matches(n, project_id))
+        .collect();
 
     // 4. Collect known tool names from recent episodes for score_reuse
     let available_tools = collect_episode_tools(&episodes);
@@ -622,10 +635,14 @@ pub fn recall_context(
         .collect();
     scored_procs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    // 6. Partition FTS results by type
+    // 6. Partition FTS results by type. Drop semantic nodes that live in the
+    //    `_plugin:*` topic_cluster namespace (issue 4) — those are Goal /
+    //    RuntimeState carried as Semantic for storage compatibility and must
+    //    not surface as user-facing facts in the recall brief.
     let fts_semantics: Vec<&AinlMemoryNode> = fts_nodes
         .iter()
         .filter(|n| node_type_tag(n) == "Semantic")
+        .filter(|n| !is_plugin_namespaced_semantic(n))
         .take(10)
         .collect();
     let fts_failures: Vec<&AinlMemoryNode> = fts_nodes
@@ -663,6 +680,12 @@ pub fn recall_context(
 
 // ── recall helpers ────────────────────────────────────────────────────────────
 
+/// Reserved topic_cluster prefix for plugin-extension semantic nodes
+/// (Goal, RuntimeState — see mcp_server/native_graph_store.py). The Rust side
+/// must skip these in any retrieval path that surfaces "facts" to the model
+/// or feeds persona/procedure scoring.
+pub(crate) const PLUGIN_TOPIC_CLUSTER_PREFIX: &str = "_plugin:";
+
 fn node_type_tag(node: &AinlMemoryNode) -> &'static str {
     match &node.node_type {
         AinlNodeType::Semantic { .. } => "Semantic",
@@ -672,6 +695,27 @@ fn node_type_tag(node: &AinlMemoryNode) -> &'static str {
         AinlNodeType::Persona { .. } => "Persona",
         _ => "Other",
     }
+}
+
+/// True iff this node is a Semantic node carrying a Python plugin extension
+/// payload (Goal, RuntimeState). Used to filter the recall brief and to guard
+/// scoring helpers against accidentally weighing storage-compat artifacts as
+/// real facts.
+pub(crate) fn is_plugin_namespaced_semantic(node: &AinlMemoryNode) -> bool {
+    match &node.node_type {
+        AinlNodeType::Semantic { semantic } => semantic
+            .topic_cluster
+            .as_deref()
+            .is_some_and(|c| c.starts_with(PLUGIN_TOPIC_CLUSTER_PREFIX)),
+        _ => false,
+    }
+}
+
+/// Project-scope predicate. Nodes without a project_id (legacy / global rows)
+/// are excluded from per-project recall — the Python read-fallback chain in
+/// mcp_server/retrieval.py compensates by also querying the legacy bucket.
+pub(crate) fn node_project_matches(node: &AinlMemoryNode, project_id: &str) -> bool {
+    node.project_id.as_deref() == Some(project_id)
 }
 
 fn collect_episode_tools(episodes: &[AinlMemoryNode]) -> Vec<String> {
@@ -697,6 +741,14 @@ fn collect_episode_tools(episodes: &[AinlMemoryNode]) -> Vec<String> {
 }
 
 fn score_proc_node(node: &AinlMemoryNode, prompt: &str, tools: &[String]) -> f32 {
+    // Defensive: the recall_context caller already filters to Procedural nodes,
+    // but this guard documents the contract — plugin-namespaced semantic rows
+    // (Goal / RuntimeState) must never be scored as reusable patterns even if a
+    // future caller forgets to pre-filter.
+    if is_plugin_namespaced_semantic(node) {
+        return 0.0;
+    }
+
     let (title, required_tools, fitness, obs_count) = match &node.node_type {
         AinlNodeType::Procedural { procedural } => (
             procedural.pattern_name.clone(),
@@ -888,5 +940,141 @@ fn truncate(s: &str, max: usize) -> &str {
             .last()
             .map(|(i, _)| i + 1)
             .unwrap_or(max)]
+    }
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+//
+// Issues 4 + 5 regression coverage. These tests exercise the predicates used
+// by recall_context — node_project_matches and is_plugin_namespaced_semantic —
+// against synthetic AinlMemoryNode fixtures. They do not call recall_context
+// itself because that function is a #[pyfunction] requiring Python::with_gil
+// from a Rust test, which the build does not link against.
+
+#[cfg(test)]
+mod tests {
+    use super::{is_plugin_namespaced_semantic, node_project_matches, PLUGIN_TOPIC_CLUSTER_PREFIX};
+    use ainl_memory::node::{
+        AinlNodeType, MemoryCategory, ProceduralNode, ProcedureType, SemanticNode,
+    };
+    use ainl_memory::AinlMemoryNode;
+    use uuid::Uuid;
+
+    fn semantic(topic_cluster: Option<&str>, project_id: Option<&str>) -> AinlMemoryNode {
+        let semantic = SemanticNode {
+            fact: "test fact".to_string(),
+            confidence: 1.0,
+            source_turn_id: Uuid::new_v4(),
+            topic_cluster: topic_cluster.map(str::to_string),
+            source_episode_id: String::new(),
+            contradiction_ids: Vec::new(),
+            last_referenced_at: 0,
+            reference_count: 0,
+            decay_eligible: true,
+            tags: Vec::new(),
+            recurrence_count: 0,
+            last_ref_snapshot: 0,
+        };
+        AinlMemoryNode {
+            id: Uuid::new_v4(),
+            memory_category: MemoryCategory::Semantic,
+            importance_score: 1.0,
+            agent_id: "claude-code".to_string(),
+            project_id: project_id.map(str::to_string),
+            node_type: AinlNodeType::Semantic { semantic },
+            edges: Vec::new(),
+            plugin_data: None,
+        }
+    }
+
+    fn procedural(project_id: Option<&str>) -> AinlMemoryNode {
+        let procedural = ProceduralNode {
+            pattern_name: "test_pattern".to_string(),
+            compiled_graph: Vec::new(),
+            tool_sequence: vec!["read".to_string(), "edit".to_string()],
+            confidence: Some(0.9),
+            procedure_type: ProcedureType::ToolSequence,
+            trigger_conditions: Vec::new(),
+            success_count: 3,
+            failure_count: 0,
+            success_rate: 1.0,
+            last_invoked_at: 0,
+            reinforcement_episode_ids: Vec::new(),
+            suppression_episode_ids: Vec::new(),
+            patch_version: 0,
+            fitness: Some(0.9),
+            declared_reads: Vec::new(),
+            retired: false,
+            label: "test_pattern".to_string(),
+            trace_id: None,
+            pattern_observation_count: 3,
+            prompt_eligible: true,
+        };
+        AinlMemoryNode {
+            id: Uuid::new_v4(),
+            memory_category: MemoryCategory::Procedural,
+            importance_score: 0.9,
+            agent_id: "claude-code".to_string(),
+            project_id: project_id.map(str::to_string),
+            node_type: AinlNodeType::Procedural { procedural },
+            edges: Vec::new(),
+            plugin_data: None,
+        }
+    }
+
+    #[test]
+    fn plugin_topic_cluster_prefix_is_underscore_namespaced() {
+        // The Python side (mcp_server/native_graph_store.py) writes
+        // `_plugin:goal` and `_plugin:runtime_state`. If the prefix changes,
+        // both sides must change in lockstep.
+        assert_eq!(PLUGIN_TOPIC_CLUSTER_PREFIX, "_plugin:");
+    }
+
+    #[test]
+    fn semantic_with_plugin_cluster_is_filtered() {
+        let goal = semantic(Some("_plugin:goal"), Some("proj_a"));
+        let runtime_state = semantic(Some("_plugin:runtime_state"), Some("proj_a"));
+        let real_fact = semantic(Some("topic.module.feature"), Some("proj_a"));
+        let untagged = semantic(None, Some("proj_a"));
+
+        assert!(is_plugin_namespaced_semantic(&goal));
+        assert!(is_plugin_namespaced_semantic(&runtime_state));
+        assert!(!is_plugin_namespaced_semantic(&real_fact));
+        assert!(!is_plugin_namespaced_semantic(&untagged));
+    }
+
+    #[test]
+    fn non_semantic_nodes_are_never_plugin_namespaced() {
+        let proc_node = procedural(Some("proj_a"));
+        assert!(!is_plugin_namespaced_semantic(&proc_node));
+    }
+
+    #[test]
+    fn project_filter_keeps_only_matching_project() {
+        // Mirrors the recall_context fix for issue 5 — three procedurals across
+        // two projects, one project filter must yield only its own rows.
+        let p1 = procedural(Some("proj_a"));
+        let p2 = procedural(Some("proj_a"));
+        let p3 = procedural(Some("proj_b"));
+
+        let all = vec![p1, p2, p3];
+        let filtered: Vec<_> = all
+            .iter()
+            .filter(|n| node_project_matches(n, "proj_a"))
+            .collect();
+
+        assert_eq!(filtered.len(), 2);
+        for n in &filtered {
+            assert_eq!(n.project_id.as_deref(), Some("proj_a"));
+        }
+    }
+
+    #[test]
+    fn project_filter_rejects_legacy_unscoped_nodes() {
+        // Legacy rows written before issue 1 may have project_id == None.
+        // Per-project recall must drop them; the Python read-fallback chain
+        // (mcp_server/retrieval.py) handles surfacing them when needed.
+        let unscoped = procedural(None);
+        assert!(!node_project_matches(&unscoped, "proj_a"));
     }
 }

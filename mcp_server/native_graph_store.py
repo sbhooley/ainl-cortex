@@ -10,16 +10,46 @@ Node type mapping:
   FAILURE    → Failure
   PERSONA    → Persona
   PROCEDURAL → Procedural
-  GOAL       → Semantic  (topic_cluster="goal",        plugin_data = full GoalData dict)
-  RUNTIME_STATE → Semantic (topic_cluster="runtime_state", plugin_data = full RuntimeStateData dict)
+  GOAL       → Semantic with topic_cluster="_plugin:goal"
+                (plugin_data = full GoalData dict; _schema_version = PLUGIN_SCHEMA_VERSION)
+  RUNTIME_STATE → Semantic with topic_cluster="_plugin:runtime_state"
+                (plugin_data = full RuntimeStateData dict; _schema_version = PLUGIN_SCHEMA_VERSION)
+
+The `_plugin:*` namespace is reserved (PLUGIN_RESERVED_CLUSTERS); the Rust
+session.rs side filters those clusters out of recall/scoring (issue 4), and
+this module's query_by_type(SEMANTIC, ...) drops them so semantic queries
+never accidentally return goals.
+
+Back-compat: rows written with the old `goal` / `runtime_state` topic_cluster
+(no underscore prefix) still round-trip correctly via `py_node_type` plugin
+data — they just don't get the namespace filter benefit until rewritten.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+# ── Plugin namespace constants ────────────────────────────────────────────────
+
+PLUGIN_TOPIC_CLUSTER_PREFIX = "_plugin:"
+PLUGIN_GOAL_CLUSTER = f"{PLUGIN_TOPIC_CLUSTER_PREFIX}goal"
+PLUGIN_RUNTIME_STATE_CLUSTER = f"{PLUGIN_TOPIC_CLUSTER_PREFIX}runtime_state"
+PLUGIN_RESERVED_CLUSTERS = frozenset({PLUGIN_GOAL_CLUSTER, PLUGIN_RUNTIME_STATE_CLUSTER})
+
+# Bump when the on-disk plugin_data shape for Goal / RuntimeState changes.
+PLUGIN_SCHEMA_VERSION = 1
+
+GOAL_INDEX_FILENAME = "goal_index.json"
+
+
+def _is_plugin_namespaced(topic_cluster: Optional[str]) -> bool:
+    return bool(topic_cluster) and topic_cluster.startswith(PLUGIN_TOPIC_CLUSTER_PREFIX)
 
 try:
     import ainl_native as _native
@@ -187,7 +217,10 @@ def _node_to_ainl(node: GraphNode) -> dict:
             "fact": f"{d.get('title', '')}: {d.get('description', '')}".strip(": "),
             "confidence": node.confidence,
             "source_turn_id": "00000000-0000-0000-0000-000000000000",
-            "topic_cluster": "goal",
+            # Reserved namespace — Rust session.rs (is_plugin_namespaced_semantic)
+            # and Python query_by_type(SEMANTIC) both filter rows in this
+            # cluster so they never surface as semantic facts.
+            "topic_cluster": PLUGIN_GOAL_CLUSTER,
             "source_episode_id": "",
             "contradiction_ids": [],
             "last_referenced_at": 0,
@@ -197,8 +230,11 @@ def _node_to_ainl(node: GraphNode) -> dict:
             "recurrence_count": 0,
             "_last_ref_snapshot": 0,
         }
+        # Carry the full goal payload byte-exact in plugin_data; _schema_version
+        # lets future readers detect format drift without breaking back-compat.
         plugin_data = dict(d)
         plugin_data["py_node_type"] = "goal"
+        plugin_data["_schema_version"] = PLUGIN_SCHEMA_VERSION
         memory_category = "semantic"
 
     elif nt == NodeType.RUNTIME_STATE:
@@ -207,7 +243,7 @@ def _node_to_ainl(node: GraphNode) -> dict:
             "fact": "runtime_state",
             "confidence": 1.0,
             "source_turn_id": "00000000-0000-0000-0000-000000000000",
-            "topic_cluster": "runtime_state",
+            "topic_cluster": PLUGIN_RUNTIME_STATE_CLUSTER,
             "source_episode_id": "",
             "contradiction_ids": [],
             "last_referenced_at": now,
@@ -219,6 +255,7 @@ def _node_to_ainl(node: GraphNode) -> dict:
         }
         plugin_data = dict(d)
         plugin_data["py_node_type"] = "runtime_state"
+        plugin_data["_schema_version"] = PLUGIN_SCHEMA_VERSION
         memory_category = "semantic"
 
     else:
@@ -254,11 +291,27 @@ def _node_to_ainl(node: GraphNode) -> dict:
 
 
 def _ainl_to_node(raw: dict) -> GraphNode:
-    """Convert an AinlMemoryNode dict (from read_node) back to a Python GraphNode."""
+    """Convert an AinlMemoryNode dict (from read_node) back to a Python GraphNode.
+
+    Plugin-extension semantic rows (Goal, RuntimeState) are detected by a
+    two-step rule:
+      1. plugin_data.py_node_type wins (the canonical signal).
+      2. Else, if topic_cluster is in PLUGIN_RESERVED_CLUSTERS, route by that.
+    Step 2 protects against rows whose plugin_data was somehow lost (e.g.
+    cross-version migration) but still carry the namespaced cluster.
+    """
     nt_raw = raw.get("node_type", {})
     kind = nt_raw.get("type", "semantic")
     pd = raw.get("plugin_data") or {}
     py_kind = pd.get("py_node_type", kind)
+
+    # Step 2 fallback for namespaced semantic rows.
+    if py_kind == kind and kind == "semantic":
+        cluster = nt_raw.get("topic_cluster")
+        if cluster == PLUGIN_GOAL_CLUSTER:
+            py_kind = "goal"
+        elif cluster == PLUGIN_RUNTIME_STATE_CLUSTER:
+            py_kind = "runtime_state"
 
     node_id = raw["id"]
     agent_id = raw.get("agent_id", "claude-code")
@@ -281,11 +334,17 @@ def _ainl_to_node(raw: dict) -> GraphNode:
         node_type = NodeType.EPISODE
 
     elif py_kind == "goal":
-        data = {k: v for k, v in pd.items() if k != "py_node_type"}
+        data = {
+            k: v for k, v in pd.items()
+            if k not in ("py_node_type", "_schema_version")
+        }
         node_type = NodeType.GOAL
 
     elif py_kind == "runtime_state":
-        data = {k: v for k, v in pd.items() if k != "py_node_type"}
+        data = {
+            k: v for k, v in pd.items()
+            if k not in ("py_node_type", "_schema_version")
+        }
         node_type = NodeType.RUNTIME_STATE
 
     elif kind == "semantic":
@@ -375,12 +434,50 @@ class NativeGraphStore(GraphStore):
         self._store = _native.AinlNativeStore.open(str(db_path))
         self._agent_id = agent_id
         self._db_path = db_path
+        # Goal index lives next to the DB so a fresh process can find it.
+        self._goal_index_path = Path(db_path).parent / GOAL_INDEX_FILENAME
 
     # ── Core writes ───────────────────────────────────────────────────────────
 
     def write_node(self, node: GraphNode) -> None:
         ainl_dict = _node_to_ainl(node)
         self._store.write_node(ainl_dict)
+        # Maintain the goal index in lockstep with goal writes so query_goals
+        # never has to scan the entire semantic table. The index is
+        # best-effort: failure to update is logged but does not raise (the
+        # fallback scan in query_goals catches missed entries).
+        if node.node_type == NodeType.GOAL:
+            try:
+                self._upsert_goal_index_entry(node)
+            except Exception:
+                pass
+
+    # ── Goal index ────────────────────────────────────────────────────────────
+
+    def _read_goal_index(self) -> Dict[str, Dict[str, Any]]:
+        try:
+            return json.loads(self._goal_index_path.read_text())
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {}
+
+    def _write_goal_index_atomic(self, index: Dict[str, Dict[str, Any]]) -> None:
+        # Atomic write via tmp + os.replace — never leaves a half-written file.
+        self._goal_index_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._goal_index_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(index, indent=2))
+        os.replace(tmp, self._goal_index_path)
+
+    def _upsert_goal_index_entry(self, node: GraphNode) -> None:
+        d = node.data or {}
+        index = self._read_goal_index()
+        index[node.id] = {
+            "id": node.id,
+            "project_id": node.project_id,
+            "title": d.get("title", ""),
+            "status": d.get("status", "active"),
+            "updated_at": int(time.time()),
+        }
+        self._write_goal_index_atomic(index)
 
     def write_edge(self, edge: GraphEdge) -> None:
         self._store.insert_edge(edge.from_node, edge.to_node, _edge_label(edge.edge_type))
@@ -428,6 +525,13 @@ class NativeGraphStore(GraphStore):
         rows = self._store.find_by_type(rust_type_name)
         nodes = []
         for r in rows:
+            # Issue 4: when caller asks for SEMANTIC, hide rows that live in
+            # the reserved plugin namespace (Goals / RuntimeState). Callers
+            # that want those use query_goals / query_runtime_state.
+            if node_type == NodeType.SEMANTIC:
+                cluster = (r.get("node_type") or {}).get("topic_cluster")
+                if _is_plugin_namespaced(cluster):
+                    continue
             n = _ainl_to_node(r)
             if n.project_id == project_id and n.confidence >= min_confidence:
                 if n.node_type == node_type:
@@ -516,18 +620,56 @@ class NativeGraphStore(GraphStore):
     def query_goals(
         self, project_id: str, status: Optional[str] = None, limit: int = 50
     ) -> List[GraphNode]:
+        """Query goal nodes for a project.
+
+        Fast path: read goal_index.json (maintained by write_node) and
+        round-trip the listed ids through read_node. Falls back to a full
+        find_by_type("semantic") scan if the index is missing or empty so
+        callers always see goals even on a fresh install.
+        """
+        index = self._read_goal_index()
+        if index:
+            candidates = [
+                meta for meta in index.values()
+                if meta.get("project_id") == project_id
+                and (status is None or meta.get("status") == status)
+            ]
+            nodes: List[GraphNode] = []
+            for meta in candidates:
+                raw = self._store.read_node(meta["id"])
+                if not raw:
+                    continue
+                n = _ainl_to_node(raw)
+                if status and (n.data or {}).get("status") != status:
+                    continue
+                nodes.append(n)
+                if len(nodes) >= limit:
+                    break
+            if nodes:
+                return nodes
+            # Fallthrough: index hit zero matches; do a fallback scan in case
+            # the index missed an entry (defensive).
+
+        # Fallback: scan all semantic rows (legacy behavior).
         rows = self._store.find_by_type("semantic")
         nodes = []
         for r in rows:
             pd = (r.get("plugin_data") or {})
             nt_raw = r.get("node_type", {})
-            if pd.get("py_node_type") == "goal" or nt_raw.get("topic_cluster") == "goal":
-                n = _ainl_to_node(r)
-                if n.project_id != project_id:
-                    continue
-                if status and (n.data or {}).get("status") != status:
-                    continue
-                nodes.append(n)
+            cluster = nt_raw.get("topic_cluster")
+            is_goal = (
+                pd.get("py_node_type") == "goal"
+                or cluster == PLUGIN_GOAL_CLUSTER
+                or cluster == "goal"  # legacy un-namespaced rows
+            )
+            if not is_goal:
+                continue
+            n = _ainl_to_node(r)
+            if n.project_id != project_id:
+                continue
+            if status and (n.data or {}).get("status") != status:
+                continue
+            nodes.append(n)
         return nodes[:limit]
 
     # ── Anchored summary passthrough ──────────────────────────────────────────

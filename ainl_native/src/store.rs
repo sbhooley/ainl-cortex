@@ -25,6 +25,25 @@ pub struct AinlNativeStore {
     inner: Mutex<SqliteGraphStore>,
 }
 
+impl AinlNativeStore {
+    /// Lock the inner store, converting a poisoned-mutex error into a
+    /// catchable Python `RuntimeError` instead of letting the panic from
+    /// `.unwrap()` abort the whole Python interpreter.
+    ///
+    /// A `Mutex` is poisoned only when a thread holding the guard panics;
+    /// in that case the data is potentially inconsistent and we surface a
+    /// clear error to the Python side rather than risking a hard crash of
+    /// the MCP server hosting this store.
+    fn lock_inner(&self) -> PyResult<std::sync::MutexGuard<'_, SqliteGraphStore>> {
+        self.inner.lock().map_err(|poison| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "ainl_native store mutex was poisoned by an earlier panic: {}",
+                poison
+            ))
+        })
+    }
+}
+
 #[pymethods]
 impl AinlNativeStore {
     /// Open or create the graph memory database at the given path.
@@ -40,9 +59,7 @@ impl AinlNativeStore {
     /// Write a node dict into the graph.
     fn write_node(&self, node_dict: &Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let node: AinlMemoryNode = from_py(node_dict)?;
-        self.inner
-            .lock()
-            .unwrap()
+        self.lock_inner()?
             .write_node(&node)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
     }
@@ -52,9 +69,7 @@ impl AinlNativeStore {
         let id = Uuid::parse_str(node_id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         match self
-            .inner
-            .lock()
-            .unwrap()
+            .lock_inner()?
             .read_node(id)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?
         {
@@ -70,10 +85,7 @@ impl AinlNativeStore {
         since_timestamp: i64,
         limit: usize,
     ) -> PyResult<PyObject> {
-        let nodes = self
-            .inner
-            .lock()
-            .unwrap()
+        let nodes = self.lock_inner()?
             .query_episodes_since(since_timestamp, limit)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &nodes)
@@ -81,10 +93,7 @@ impl AinlNativeStore {
 
     /// Find all nodes of a given type_name. Returns list of dicts.
     fn find_by_type(&self, py: Python<'_>, type_name: &str) -> PyResult<PyObject> {
-        let nodes = self
-            .inner
-            .lock()
-            .unwrap()
+        let nodes = self.lock_inner()?
             .find_by_type(type_name)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &nodes)
@@ -99,10 +108,7 @@ impl AinlNativeStore {
     ) -> PyResult<PyObject> {
         let id = Uuid::parse_str(from_id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let nodes = self
-            .inner
-            .lock()
-            .unwrap()
+        let nodes = self.lock_inner()?
             .walk_edges(id, label)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &nodes)
@@ -117,10 +123,7 @@ impl AinlNativeStore {
     ) -> PyResult<PyObject> {
         let id = Uuid::parse_str(to_id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let nodes = self
-            .inner
-            .lock()
-            .unwrap()
+        let nodes = self.lock_inner()?
             .walk_edges_to(id, label)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &nodes)
@@ -132,9 +135,7 @@ impl AinlNativeStore {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let to = Uuid::parse_str(to_id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        self.inner
-            .lock()
-            .unwrap()
+        self.lock_inner()?
             .insert_graph_edge(from, to, label)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
     }
@@ -149,7 +150,7 @@ impl AinlNativeStore {
     ) -> PyResult<PyObject> {
         let id = Uuid::parse_str(start_id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let guard = self.inner.lock().unwrap();
+        let guard = self.lock_inner()?;
         let nodes = walk_from(&*guard, id, edge_label, max_depth)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &nodes)
@@ -163,10 +164,7 @@ impl AinlNativeStore {
         query: &str,
         limit: usize,
     ) -> PyResult<PyObject> {
-        let nodes = self
-            .inner
-            .lock()
-            .unwrap()
+        let nodes = self.lock_inner()?
             .search_failures_fts_for_agent(agent_id, query, limit)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &nodes)
@@ -182,10 +180,7 @@ impl AinlNativeStore {
         limit: usize,
         project_id: Option<&str>,
     ) -> PyResult<PyObject> {
-        let nodes = self
-            .inner
-            .lock()
-            .unwrap()
+        let nodes = self.lock_inner()?
             .search_all_nodes_fts_for_agent(agent_id, query, project_id, limit)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &nodes)
@@ -194,9 +189,7 @@ impl AinlNativeStore {
     /// Validate graph integrity for one agent. Returns summary dict.
     fn validate_graph(&self, py: Python<'_>, agent_id: &str) -> PyResult<PyObject> {
         let report = self
-            .inner
-            .lock()
-            .unwrap()
+            .lock_inner()?
             .validate_graph(agent_id)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         let d = PyDict::new(py);
@@ -213,9 +206,7 @@ impl AinlNativeStore {
     /// Insert a trajectory detail row.
     fn insert_trajectory(&self, trajectory_dict: &Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let row: TrajectoryDetailRecord = from_py(trajectory_dict)?;
-        self.inner
-            .lock()
-            .unwrap()
+        self.lock_inner()?
             .insert_trajectory_detail(&row)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
     }
@@ -230,9 +221,7 @@ impl AinlNativeStore {
         since_timestamp: Option<i64>,
     ) -> PyResult<PyObject> {
         let rows = self
-            .inner
-            .lock()
-            .unwrap()
+            .lock_inner()?
             .list_trajectories_for_agent(agent_id, limit, since_timestamp)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &rows)
@@ -258,9 +247,7 @@ impl AinlNativeStore {
         let timestamp = chrono::Utc::now().timestamp();
         let node = AinlMemoryNode::new_episode(turn_id, timestamp, tools, sub_agent_id, trace);
         let node_id = node.id; // This is the graph node ID referenced by FK constraints
-        self.inner
-            .lock()
-            .unwrap()
+        self.lock_inner()?
             .write_node(&node)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         Ok(node_id.to_string())
@@ -269,9 +256,7 @@ impl AinlNativeStore {
     /// Export the full agent graph as a snapshot dict.
     fn export_graph(&self, py: Python<'_>, agent_id: &str) -> PyResult<PyObject> {
         let snapshot = self
-            .inner
-            .lock()
-            .unwrap()
+            .lock_inner()?
             .export_graph(agent_id)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         to_py(py, &snapshot)
@@ -322,7 +307,7 @@ impl AinlNativeStore {
             plugin_data: pd,
         };
         let id = node.id;
-        self.inner.lock().unwrap().write_node(&node)
+        self.lock_inner()?.write_node(&node)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         Ok(id.to_string())
     }
@@ -359,7 +344,7 @@ impl AinlNativeStore {
             plugin_data: pd,
         };
         let id = node.id;
-        self.inner.lock().unwrap().write_node(&node)
+        self.lock_inner()?.write_node(&node)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         Ok(id.to_string())
     }
@@ -403,7 +388,7 @@ impl AinlNativeStore {
             plugin_data: pd,
         };
         let id = node.id;
-        self.inner.lock().unwrap().write_node(&node)
+        self.lock_inner()?.write_node(&node)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         Ok(id.to_string())
     }
@@ -453,7 +438,7 @@ impl AinlNativeStore {
             plugin_data: pd,
         };
         let id = node.id;
-        self.inner.lock().unwrap().write_node(&node)
+        self.lock_inner()?.write_node(&node)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         Ok(id.to_string())
     }
@@ -488,9 +473,7 @@ impl AinlNativeStore {
             edges: Vec::new(),
             plugin_data: None,
         };
-        self.inner
-            .lock()
-            .unwrap()
+        self.lock_inner()?
             .write_node(&node)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         Ok(id.to_string())
@@ -500,9 +483,7 @@ impl AinlNativeStore {
     fn fetch_anchored_summary(&self, agent_id: &str) -> PyResult<Option<String>> {
         let id = anchored_summary_id(agent_id);
         let node = self
-            .inner
-            .lock()
-            .unwrap()
+            .lock_inner()?
             .read_node(id)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         Ok(node.and_then(|n| match n.node_type {
@@ -521,7 +502,7 @@ impl AinlNativeStore {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let updates_val: serde_json::Value = from_py(updates)?;
 
-        let guard = self.inner.lock().unwrap();
+        let guard = self.lock_inner()?;
         let existing = guard.read_node(id)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         if let Some(mut node) = existing {
@@ -539,5 +520,46 @@ impl AinlNativeStore {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod poison_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::thread;
+    use tempfile::tempdir;
+
+    /// A panicking thread that holds the lock must leave the mutex poisoned;
+    /// our `lock_inner` helper must surface this as a catchable PyRuntimeError
+    /// rather than panicking the host process when the next call comes in.
+    #[test]
+    fn lock_inner_returns_pyerr_when_mutex_poisoned() {
+        pyo3::prepare_freethreaded_python();
+        let tmp = tempdir().expect("tempdir");
+        let db_path = tmp.path().join("poison.db");
+
+        let store = AinlNativeStore::open(db_path.to_str().unwrap())
+            .expect("open store");
+        let store = Arc::new(store);
+
+        // Poison the mutex from another thread.
+        let poisoner = Arc::clone(&store);
+        let _ = thread::spawn(move || {
+            let _guard = poisoner.inner.lock().unwrap();
+            panic!("intentional panic to poison the mutex");
+        })
+        .join();
+
+        // The mutex is now poisoned. lock_inner must convert that into a
+        // PyResult::Err, not panic.
+        let result = store.lock_inner();
+        assert!(result.is_err(), "expected PyResult::Err for poisoned mutex");
+        let err_text = format!("{}", result.err().unwrap());
+        assert!(
+            err_text.contains("poisoned"),
+            "error message should mention poisoning, got: {}",
+            err_text
+        );
     }
 }
