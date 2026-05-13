@@ -52,12 +52,12 @@ cfg.setdefault("a2a", {})["enabled"] = False
 cfg["a2a"].pop("bridge_script", None)  # remove any machine-specific path
 
 # Upgrade to native backend automatically if armaraos crates are present
-armaraos = pathlib.Path.home() / ".openclaw" / "workspace" / "armaraos"
+armaraos = pathlib.Path.home() / ".armaraos" / "src" / "armaraos"
 if armaraos.is_dir():
     cfg["memory"]["store_backend"] = "native"
-    print("    armaraos found at ~/.openclaw — enabling native Rust backend")
+    print("    armaraos source found at ~/.armaraos/src/armaraos — enabling native Rust backend")
 else:
-    print("    python backend selected (add armaraos to enable native Rust backend)")
+    print("    python backend selected (clone armaraos to ~/.armaraos/src/armaraos to enable native Rust backend)")
 
 with open(config_path, "w") as f:
     json.dump(cfg, f, indent=2)

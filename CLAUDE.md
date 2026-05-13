@@ -22,7 +22,7 @@ bash setup.sh
 - Only ~13 tools (no ainl_ tools) → run `pip install ainativelang[mcp]>=1.7.0` inside `.venv`
 
 **Native Rust backend (optional, higher fidelity):**
-Requires armaraos source at `~/.openclaw/workspace/armaraos/` and Rust toolchain 1.75+. setup.sh detects this automatically and sets `store_backend: native` in config.json. The Rust extension (`ainl_native`) builds automatically at the next SessionStart.
+Requires armaraos source cloned to `~/.armaraos/src/armaraos` and Rust toolchain 1.75+. setup.sh detects this automatically and sets `store_backend: native` in config.json. The Rust extension (`ainl_native`) builds automatically at the next SessionStart.
 
 ---
 
@@ -348,7 +348,7 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
   --manifest-path ainl_native/Cargo.toml
 ```
 
-**Prerequisites for native**: Rust toolchain 1.75+, armaraos source at `~/.openclaw/workspace/armaraos/` (provides ainl-* crates). See README.md § Backend Selection for full details.
+**Prerequisites for native**: Rust toolchain 1.75+, armaraos source cloned to `~/.armaraos/src/armaraos` (provides ainl-* crates). See README.md § Backend Selection for full details.
 
 **Migrating Python → Native**: `python3 migrate_to_native.py --flip-config` migrates existing data and flips the config in one step.
 

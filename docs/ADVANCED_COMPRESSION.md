@@ -447,7 +447,7 @@ class ModeRecommender:
 
 - [AINL Concepts](AINL_CONCEPTS.md) - Core architecture
 - [Compression Eco Mode](COMPRESSION_ECO_MODE.md) - Base compression
-- [ArmaraOS AINL](https://github.com/sbhooley/armaraos) - Original implementation
+- [ArmaraOS AINL](https://ainativelang.com/armaraos) - Original implementation
 
 ---
 

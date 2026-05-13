@@ -15,31 +15,31 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Core graph memory
-ainl-memory = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-memory" }
-ainl-contracts = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-contracts" }
+ainl-memory = { path = "../../../../.armaraos/src/armaraos/crates/ainl-memory" }
+ainl-contracts = { path = "../../../../.armaraos/src/armaraos/crates/ainl-contracts" }
 
 # Persona evolution
-ainl-persona = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-persona" }
+ainl-persona = { path = "../../../../.armaraos/src/armaraos/crates/ainl-persona" }
 
 # Semantic tagging (enable serde for SemanticTag serialization)
-ainl-semantic-tagger = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-semantic-tagger", features = ["serde"] }
+ainl-semantic-tagger = { path = "../../../../.armaraos/src/armaraos/crates/ainl-semantic-tagger", features = ["serde"] }
 
 # Failure learning
-ainl-failure-learning = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-failure-learning" }
+ainl-failure-learning = { path = "../../../../.armaraos/src/armaraos/crates/ainl-failure-learning" }
 
 # Procedure learning
-ainl-procedure-learning = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-procedure-learning" }
+ainl-procedure-learning = { path = "../../../../.armaraos/src/armaraos/crates/ainl-procedure-learning" }
 
 # Context freshness
-ainl-context-freshness = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-context-freshness" }
+ainl-context-freshness = { path = "../../../../.armaraos/src/armaraos/crates/ainl-context-freshness" }
 
 # Trajectory
-ainl-trajectory = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-trajectory" }
+ainl-trajectory = { path = "../../../../.armaraos/src/armaraos/crates/ainl-trajectory" }
 
 [patch.crates-io]
-ainl-graph-extractor = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-graph-extractor" }
-ainl-memory = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-memory" }
-ainl-persona = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-persona" }
-ainl-semantic-tagger = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-semantic-tagger" }
-ainl-runtime = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-runtime" }
-ainl-agent-snapshot = { path = "../../../../.openclaw/workspace/armaraos/crates/ainl-agent-snapshot" }
+ainl-graph-extractor = { path = "../../../../.armaraos/src/armaraos/crates/ainl-graph-extractor" }
+ainl-memory = { path = "../../../../.armaraos/src/armaraos/crates/ainl-memory" }
+ainl-persona = { path = "../../../../.armaraos/src/armaraos/crates/ainl-persona" }
+ainl-semantic-tagger = { path = "../../../../.armaraos/src/armaraos/crates/ainl-semantic-tagger" }
+ainl-runtime = { path = "../../../../.armaraos/src/armaraos/crates/ainl-runtime" }
+ainl-agent-snapshot = { path = "../../../../.armaraos/src/armaraos/crates/ainl-agent-snapshot" }

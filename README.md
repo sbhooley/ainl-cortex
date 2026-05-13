@@ -356,9 +356,15 @@ The plugin ships with two storage backends. You choose via a single line in `con
    .venv/bin/pip install maturin
    ```
 
-3. **armaraos source** at `~/.openclaw/workspace/armaraos/` — provides the `ainl-memory`, `ainl-trajectory`, `ainl-persona`, `ainl-procedure-learning`, and `ainl-contracts` crates that `ainl_native` depends on. The `ainl_native/Cargo.toml` has a `[patch.crates-io]` table pointing there.
+3. **armaraos source code** — the native extension is built from the armaraos Rust crates (`ainl-memory`, `ainl-trajectory`, `ainl-persona`, `ainl-procedure-learning`, `ainl-contracts`). Clone the repo to the conventional location:
 
-   If you have ArmaraOS checked out elsewhere, update the patch paths in `ainl_native/Cargo.toml` to match.
+   ```bash
+   git clone https://ainativelang.com/armaraos ~/.armaraos/src/armaraos
+   ```
+
+   `setup.sh` auto-detects this path and enables the native backend. If you clone elsewhere, update the `[patch.crates-io]` paths in `ainl_native/Cargo.toml` to match.
+
+   > **Note:** The ArmaraOS desktop app (installed from [ainativelang.com/armaraos](https://ainativelang.com/armaraos)) uses `~/.armaraos` for its own data. The source clone above is a separate thing — the app alone is not sufficient to build the native extension.
 
 #### Auto-Build at SessionStart
 
@@ -966,7 +972,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ## 🌐 Inspired By
 
-This plugin is directly inspired by the **AINL (AINativeLang) unified graph execution engine** from the [ArmaraOS](https://github.com/sbhooley/armaraos) project:
+This plugin is directly inspired by the **AINL (AINativeLang) unified graph execution engine** from the [ArmaraOS](https://ainativelang.com/armaraos) project:
 
 **AINL Crates:**
 - **ainl-memory** - GraphStore trait, typed nodes, SQLite backend

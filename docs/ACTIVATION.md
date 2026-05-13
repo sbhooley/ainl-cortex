@@ -34,7 +34,7 @@ Then **restart Claude Code**.
 
 ### Native Rust Backend (optional)
 
-If you have the [ArmaraOS](https://github.com/sbhooley/armaraos) source at `~/.openclaw/workspace/armaraos/` and Rust 1.75+, `setup.sh` detects this and sets `store_backend: native` in `config.json`. The Rust extension builds automatically on the next SessionStart. See [README.md § Backend Selection](../README.md) for full details.
+If you have the [ArmaraOS](https://ainativelang.com/armaraos) source cloned to `~/.armaraos/src/armaraos` and Rust 1.75+, `setup.sh` detects this and sets `store_backend: native` in `config.json`. The Rust extension builds automatically on the next SessionStart. See [README.md § Backend Selection](../README.md) for full details.
 
 ---
 

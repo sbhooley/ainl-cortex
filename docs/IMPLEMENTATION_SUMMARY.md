@@ -372,7 +372,7 @@ from tooling.security_report import analyze_ir
 - **Language Guide:** `AINL_LANGUAGE_GUIDE.md` (to be created)
 
 ### Local Reference (development)
-- **AINL Repo:** `/Users/clawdbot/.openclaw/workspace/AI_Native_Lang`
+- **AINL Repo:** `https://ainativelang.com`
 - **AINL Spec:** `AI_Native_Lang/docs/AINL_SPEC.md`
 - **Agent Guide:** `AI_Native_Lang/AGENTS.md`
 

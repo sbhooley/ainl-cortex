@@ -403,7 +403,7 @@ finally:
 
 ## Learn More
 
-- **ArmaraOS Architecture**: https://github.com/sbhooley/armaraos/blob/main/ARCHITECTURE.md
+- **ArmaraOS Architecture**: https://ainativelang.com/armaraos/blob/main/ARCHITECTURE.md
 - **AINL Cortex Guide**: https://github.com/sbhooley/ainl-cortex
 - **ainl-memory crate**: https://crates.io/crates/ainl-memory
 - **ainl-persona crate**: https://crates.io/crates/ainl-persona

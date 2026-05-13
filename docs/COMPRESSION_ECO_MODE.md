@@ -276,7 +276,7 @@ Planned features (matching ArmaraOS roadmap):
 ## Inspired By
 
 This compression system is a direct port of ArmaraOS `ainl-compression` crate:
-- Repository: https://github.com/sbhooley/armaraos
+- Repository: https://ainativelang.com/armaraos
 - Crate: `crates/ainl-compression`
 - Documentation: `docs/prompt-compression-efficient-mode.md`
 
@@ -284,6 +284,6 @@ All compression algorithms and preserve lists are attributed to the AINL project
 
 ## Learn More
 
-- **ArmaraOS Compression Guide**: https://github.com/sbhooley/armaraos/blob/main/docs/prompt-compression-efficient-mode.md
+- **ArmaraOS Compression Guide**: https://ainativelang.com/armaraos/blob/main/docs/prompt-compression-efficient-mode.md
 - **AINL Philosophy**: [AINL_CONCEPTS.md](AINL_CONCEPTS.md)
 - **Plugin README**: [README.md](../README.md)
