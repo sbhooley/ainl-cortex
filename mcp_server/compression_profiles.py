@@ -220,6 +220,10 @@ class CompressionProfileStore:
             else:
                 return current_mode  # Already at maximum
 
+        # Quality regressed below dial-up threshold while in aggressive — step back
+        elif current_mode == self.MODE_AGGRESSIVE and quality_score < self.SUCCESS_THRESHOLD:
+            return self.MODE_BALANCED
+
         # In sweet spot - keep current
         else:
             return current_mode

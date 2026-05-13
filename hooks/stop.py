@@ -119,12 +119,10 @@ def write_episode(project_id: str, session_data: dict):
     native_tags: list = []
     if _NATIVE_OK:
         try:
-            tools_str = " ".join(session_data.get("tools_used", []))
             tags = _ainl_native.tag_turn(task_summary, None, session_data.get("tools_used", []))
             native_tags = [{"namespace": t["namespace"], "value": t["value"]} for t in tags[:10]]
-            episode_data["semantic_tags"] = native_tags
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("tag_turn failed (non-fatal): %s", _e)
 
     node = GraphNode(
         id=str(uuid.uuid4()),
@@ -685,6 +683,30 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             write_goals(store, project_id, episode_data)
         except Exception as e:
             logger.warning(f"Goal write failed: {e}")
+
+    # Drain compression events and update auto-tune profile
+    try:
+        _inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
+        _evt_file = _inbox_dir / f"{project_id}_compression_events.jsonl"
+        if _evt_file.exists():
+            events = [json.loads(l) for l in _evt_file.read_text().strip().splitlines() if l.strip()]
+            if events:
+                _profile_db = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
+                _profile_db.parent.mkdir(parents=True, exist_ok=True)
+                from compression_profiles import CompressionProfileStore
+                _cps = CompressionProfileStore(_profile_db)
+                _had_errors = session_data.get("had_errors", False)
+                for _evt in events:
+                    _cps.record_compression_result(
+                        project_id=project_id,
+                        mode=_evt["mode"],
+                        token_savings_pct=_evt["savings_pct"],
+                        user_corrected=_had_errors,
+                    )
+                _evt_file.unlink()
+                logger.debug(f"Drained {len(events)} compression event(s) for auto-tune")
+    except Exception as _ce:
+        logger.debug(f"Compression event drain failed (non-fatal): {_ce}")
 
     # Write self-note if session was substantial (helps resume next session)
     try:

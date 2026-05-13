@@ -26,8 +26,8 @@ except ImportError:
 # Trigger keywords that suggest AINL usage
 RECURRING_KEYWORDS = [
     "every", "hourly", "daily", "weekly", "monthly",
-    "monitor", "check", "recurring", "scheduled", "cron",
-    "repeatedly", "periodic", "regular", "automation"
+    "monitor", "check", "recurring", "scheduled", "schedule", "cron",
+    "repeatedly", "periodic", "regular", "automation", "automat",
 ]
 
 WORKFLOW_KEYWORDS = [
@@ -60,7 +60,7 @@ class AINLDetector:
     """Detects opportunities to suggest AINL."""
 
     def __init__(self, project_id: Optional[str] = None):
-        self.confidence_threshold = 0.6
+        self.confidence_threshold = 0.35
         self.project_id = project_id
 
         # Initialize persona engine if available
@@ -104,7 +104,7 @@ class AINLDetector:
         # Check for recurring/scheduled patterns
         recurring_matches = sum(1 for kw in RECURRING_KEYWORDS if kw in prompt_lower)
         if recurring_matches > 0:
-            confidence_score += min(0.4, recurring_matches * 0.15)
+            confidence_score += min(0.70, 0.35 + (recurring_matches - 1) * 0.15)
             reasons.append(f"Recurring pattern detected ({recurring_matches} keywords)")
 
         # Check for workflow patterns
@@ -115,7 +115,7 @@ class AINLDetector:
 
         # Check for API integration
         api_matches = sum(1 for kw in API_KEYWORDS if kw in prompt_lower)
-        if api_matches > 1:
+        if api_matches >= 1:
             confidence_score += min(0.25, api_matches * 0.1)
             reasons.append("API integration detected")
 

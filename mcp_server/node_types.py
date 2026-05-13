@@ -408,6 +408,34 @@ def create_goal_node(
     )
 
 
+def create_runtime_state_node(
+    project_id: str,
+    **kwargs
+) -> GraphNode:
+    """Create or upsert the stable per-project runtime state node.
+
+    Uses a deterministic UUID so repeated calls produce an upsert, not a new node.
+    """
+    now = int(time.time())
+    stable_id = str(uuid.uuid5(uuid.NAMESPACE_OID, f"runtime_state:{project_id}"))
+
+    state_data = RuntimeStateData(
+        **{k: v for k, v in kwargs.items() if k in RuntimeStateData.__dataclass_fields__}
+    )
+    state_data.updated_at = now
+
+    return GraphNode(
+        id=stable_id,
+        node_type=NodeType.RUNTIME_STATE,
+        project_id=project_id,
+        created_at=now,
+        updated_at=now,
+        confidence=1.0,
+        data=asdict(state_data),
+        embedding_text=f"runtime_state {project_id}",
+    )
+
+
 def create_edge(
     from_node: str,
     to_node: str,

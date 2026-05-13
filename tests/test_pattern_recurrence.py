@@ -91,12 +91,13 @@ class TestPatternRecurrence:
         try:
             store = AINLPatternStore(db_path)
 
-            # Create pattern
+            # Create pattern with an initial failure so EMA convergence is observable
+            # (success=True would start at fitness=1.0 leaving no room to increase)
             source = "L1:\n  R core.ADD x y ->sum"
             pattern_id = store.extract_pattern(
                 ainl_source=source,
                 description="Test",
-                success=True
+                success=False
             )
 
             # Track multiple successes

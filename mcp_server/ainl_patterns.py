@@ -460,22 +460,23 @@ class AINLPatternStore:
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         """Convert SQLite row to dict."""
+        d = dict(row)
         return {
-            'id': row['id'],
-            'pattern_type': row['pattern_type'],
-            'ainl_source': row['ainl_source'],
-            'description': row['description'],
-            'adapters_used': json.loads(row['adapters_used']),
-            'fitness_score': row['fitness_score'],
-            'uses': row['uses'],
-            'successes': row['successes'],
-            'failures': row['failures'],
-            'recurrence_count': row.get('recurrence_count', 1),
-            'last_seen': row.get('last_seen'),
-            'tags': json.loads(row['tags']),
-            'created_at': row['created_at'],
-            'updated_at': row['updated_at'],
-            'metadata': json.loads(row['metadata']) if row['metadata'] else {}
+            'id': d['id'],
+            'pattern_type': d['pattern_type'],
+            'ainl_source': d['ainl_source'],
+            'description': d['description'],
+            'adapters_used': json.loads(d['adapters_used']),
+            'fitness_score': d['fitness_score'],
+            'uses': d['uses'],
+            'successes': d['successes'],
+            'failures': d['failures'],
+            'recurrence_count': d.get('recurrence_count', 1),
+            'last_seen': d.get('last_seen'),
+            'tags': json.loads(d['tags']),
+            'created_at': d['created_at'],
+            'updated_at': d['updated_at'],
+            'metadata': json.loads(d['metadata']) if d['metadata'] else {}
         }
 
     def consolidate_patterns(

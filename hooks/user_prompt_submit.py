@@ -562,6 +562,22 @@ def main():
         if prompt_compression_metrics and prompt_compression_metrics['tokens_saved'] > 0:
             result["prompt"] = compressed_prompt
             logger.info(f"✅ User prompt compressed: {prompt_compression_metrics['tokens_saved']} tokens saved ({prompt_compression_metrics['savings_pct']:.0f}%)")
+            # Buffer compression event so stop.py can update the auto-tune profile
+            try:
+                _inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
+                _inbox_dir.mkdir(parents=True, exist_ok=True)
+                _evt_file = _inbox_dir / f"{project_id}_compression_events.jsonl"
+                _orig = prompt_compression_metrics.get('original_tokens', 1) or 1
+                _savings_01 = prompt_compression_metrics['tokens_saved'] / _orig
+                with open(_evt_file, "a") as _f:
+                    _f.write(json.dumps({
+                        "mode": prompt_compression_metrics['mode'],
+                        "savings_pct": round(_savings_01, 4),
+                        "tokens_saved": prompt_compression_metrics['tokens_saved'],
+                        "ts": time.time(),
+                    }) + "\n")
+            except Exception as _buf_e:
+                logger.debug("Compression event buffer failed (non-fatal): %s", _buf_e)
 
         # Inject system message if we have anything
         assembled = "\n\n".join(system_parts)
