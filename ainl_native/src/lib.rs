@@ -7,6 +7,7 @@ mod convert;
 mod freshness;
 mod persona;
 mod procedure;
+mod reconcile;
 mod session;
 mod store;
 mod tagger;
@@ -42,6 +43,9 @@ fn ainl_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(session::finalize_session, m)?)?;
     m.add_function(wrap_pyfunction!(session::session_context, m)?)?;
     m.add_function(wrap_pyfunction!(session::recall_context, m)?)?;
+
+    // Environment snapshot reconciliation
+    m.add_function(wrap_pyfunction!(reconcile::reconcile_environment, m)?)?;
 
     Ok(())
 }

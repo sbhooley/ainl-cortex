@@ -461,6 +461,31 @@ def main():
             except Exception as _ae:
                 logger.debug(f"Anchored summary load failed (non-fatal): {_ae}")
 
+        # ── Environment snapshot reconciliation ───────────────────────────────
+        # Compares current plugin root / name / backend against the last stored
+        # snapshot and automatically flags stale references in graph memory.
+        try:
+            _recon_project_id = get_project_id(cwd)
+            if _backend == "native" and _NATIVE_OK:
+                _recon_db = str(db_path.parent / "ainl_native.db")
+                _recon = _ainl_native.reconcile_environment(
+                    _recon_db, _recon_project_id, str(root), _backend
+                )
+            else:
+                from memory_reconcile import reconcile as _mem_reconcile
+                from graph_store import get_graph_store as _get_gs
+                _recon = _mem_reconcile(
+                    _get_gs(db_path), _recon_project_id, str(root), _backend
+                )
+            if _recon.get("stale_found"):
+                _recon_lines = ["\n⚡ MEMORY RECONCILIATION — stale references corrected:"]
+                for _ch in _recon.get("changes", []):
+                    _recon_lines.append(f"  • {_ch}")
+                system_blocks.append("\n".join(_recon_lines))
+                logger.info("Memory reconciliation: %s", _recon.get("changes"))
+        except Exception as _re:
+            logger.debug("Memory reconciliation failed (non-fatal): %s", _re)
+
         system_message = "\n".join(system_blocks)
 
         additional = (
