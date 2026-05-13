@@ -317,19 +317,8 @@ def main():
             if result.get("persona_traits"):
                 content = f"{result['persona_traits']}\n\n{content}"
 
-            # Output suggestion as context injection
-            output = {
-                "contextInjection": {
-                    "priority": "medium",
-                    "content": content,
-                    "metadata": {
-                        "source": "ainl_detection",
-                        "confidence": result["confidence"],
-                        "use_case": result["use_case"],
-                        "reasons": result["reasons"]
-                    }
-                }
-            }
+            # UserPromptSubmit hooks inject context via systemMessage key
+            output = {"systemMessage": content}
             print(json.dumps(output))
 
     except Exception as e:
