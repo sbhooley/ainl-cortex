@@ -169,7 +169,7 @@ echo ""
 if [ "$FAIL" -eq 0 ]; then
   echo -e "  ${GREEN}✓ All checks passed.${NC}"
   echo ""
-  echo "  Next: restart Claude Code, then run /mcp to confirm ~24 ainl-cortex__ tools."
+  echo "  Next: restart Claude Code, then run /mcp to confirm ~30 ainl-cortex__ tools."
   echo ""
   echo "  After a few interactions you should see:"
   echo "    • Memory databases growing in ~/.claude/projects/*/graph_memory/"
