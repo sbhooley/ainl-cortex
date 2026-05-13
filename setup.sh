@@ -121,9 +121,18 @@ print(f"    {settings_path} updated")
 PYEOF
 echo "  [ok] Plugin registered"
 
+# ── Self-verification ──────────────────────────────────────────────────────
+echo "  Running self-verification..."
+echo ""
+
+# Structural check (files, venv, registration)
+bash "$PLUGIN_DIR/scripts/verify_activation.sh" || true
+
+# Runtime check (actually exercises all memory subsystems)
+bash "$PLUGIN_DIR/scripts/smoke_test.sh" || true
+
 # ── Done ───────────────────────────────────────────────────────────────────
 BACKEND=$(python3 -c "import json; print(json.load(open('$PLUGIN_DIR/config.json'))['memory']['store_backend'])")
-echo ""
 echo "=== Setup complete! ==="
 echo ""
 echo "  Plugin dir : $PLUGIN_DIR"
@@ -135,6 +144,4 @@ echo ""
 echo "You should see:"
 echo "  • [AINL Cortex] banner at session start"
 echo "  • ~24 new MCP tools under /mcp (memory + goals + ainl + a2a)"
-echo ""
-echo "To verify installation: bash $PLUGIN_DIR/scripts/verify_activation.sh"
 echo ""
