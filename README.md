@@ -1118,7 +1118,7 @@ Copyright 2026 AINativeLang, Inc.
 
 ### Does this send data to external services?
 
-**Almost no.** All memory is stored locally in SQLite databases. No external API calls for learning. The one exception is the **notification feed**: at each session start the plugin makes a read-only `GET` request to `ainativelang.com/notifications` to check for update notices. No user data is included — only the plugin version in the `User-Agent` header. You can disable this entirely by setting `"notifications": {"enabled": false}` in `config.json`.
+**No.** All memory is stored locally in SQLite databases. No user data — code, conversations, or context — is sent to any external service. Learning happens entirely on-device.
 
 ### How much disk space does it use?
 
