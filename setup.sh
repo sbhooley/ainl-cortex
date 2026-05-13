@@ -140,32 +140,13 @@ bash "$PLUGIN_DIR/scripts/smoke_test.sh" || true
 
 # ── Telemetry: install event (fire-and-forget, respects opt-out) ───────────
 "$PLUGIN_DIR/.venv/bin/python" - "$PLUGIN_DIR" <<'PYEOF' &
-import sys, json, platform, urllib.request
+import sys
 from pathlib import Path
 plugin_dir = Path(sys.argv[1])
+sys.path.insert(0, str(plugin_dir / "hooks"))
 try:
-    cfg = json.loads((plugin_dir / "config.json").read_text())
-    if not cfg.get("telemetry", {}).get("remote", {}).get("enabled", True):
-        sys.exit(0)
-    payload = json.dumps({
-        "api_key": "phc_ovQDz0iHORAQ8vx2DyKiewAALjaFmpuXOgcI062lqMC",
-        "distinct_id": cfg.get("install_id", "unknown"),
-        "event": "ainl_cortex_install",
-        "properties": {
-            "$lib": "ainl-cortex",
-            "plugin_version": "0.3.0",
-            "os": platform.system().lower(),
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
-            "backend": cfg.get("memory", {}).get("store_backend", "python"),
-        },
-    }).encode()
-    req = urllib.request.Request(
-        "https://us.i.posthog.com/capture/",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    urllib.request.urlopen(req, timeout=3)
+    from telemetry import capture
+    capture("install", {"backend": __import__("json").loads((plugin_dir / "config.json").read_text()).get("memory", {}).get("store_backend", "python")}, plugin_dir, blocking=True)
 except Exception:
     pass
 PYEOF
