@@ -264,6 +264,22 @@ def main():
             _backend = "python"
         if _backend == "native":
             native_status = _ensure_ainl_native(root)
+            # Detect unmigrated data: native configured but native DB empty while Python DB has data
+            try:
+                _native_db = db_path.parent / "ainl_native.db"
+                _py_db = db_path  # ainl_memory.db
+                if _py_db.exists() and _py_db.stat().st_size > 8192:
+                    import sqlite3 as _sq
+                    _native_empty = (
+                        not _native_db.exists()
+                        or _sq.connect(str(_native_db)).execute(
+                            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                        ).fetchone()[0] == 0
+                    )
+                    if _native_empty:
+                        native_status += " — ⚠️  unmigrated data detected: re-run setup.sh to migrate"
+            except Exception:
+                pass
         else:
             native_status = "skipped (python backend selected)"
         venv_file_status = append_venv_to_envfile(root)

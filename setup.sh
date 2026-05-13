@@ -11,6 +11,15 @@ MARKETPLACE="$HOME/.claude/ainl-local-marketplace"
 echo ""
 echo "=== AINL Cortex — Setup ==="
 echo ""
+echo "  What this script does:"
+echo "    1. Checks Python 3.10+"
+echo "    2. Installs Rust (enables the native backend with richer session memory)"
+echo "       → If Rust install fails, falls back to the Python backend automatically"
+echo "    3. Creates a Python venv and installs dependencies"
+echo "    4. Migrates any existing memory data if switching backends"
+echo "    5. Registers the plugin with Claude Code"
+echo "    6. Runs verification tests"
+echo ""
 
 # ── 1. Python check ────────────────────────────────────────────────────────
 if ! command -v python3 >/dev/null 2>&1; then
@@ -26,41 +35,73 @@ if [[ "$PY_MAJOR" -lt 3 ]] || { [[ "$PY_MAJOR" -eq 3 ]] && [[ "$PY_MINOR" -lt 10
 fi
 echo "  [ok] Python $PY_VER"
 
-# ── 2. Create venv + install dependencies ──────────────────────────────────
+# ── 2. Rust check + auto-install ───────────────────────────────────────────
+RUST_AVAILABLE=false
+if command -v rustc >/dev/null 2>&1; then
+    RUST_AVAILABLE=true
+    RUST_VER=$(rustc --version | cut -d' ' -f2)
+    echo "  [ok] Rust $RUST_VER (native backend available)"
+elif command -v curl >/dev/null 2>&1; then
+    echo "  Rust not found — installing via rustup (official installer from https://rustup.rs)..."
+    if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path 2>&1 | grep -E "^(info|warning|error|  Rust)"; then
+        source "$HOME/.cargo/env" 2>/dev/null || true
+        if command -v rustc >/dev/null 2>&1; then
+            RUST_AVAILABLE=true
+            echo "  [ok] Rust $(rustc --version | cut -d' ' -f2) installed"
+        fi
+    fi
+    if [ "$RUST_AVAILABLE" = "false" ]; then
+        echo "  [warn] Rust install failed — using Python backend (tip: install manually from https://rustup.rs)"
+    fi
+else
+    echo "  [warn] Rust not found and curl unavailable — using Python backend (tip: install from https://rustup.rs)"
+fi
+
+# ── 3. Create venv + install dependencies ──────────────────────────────────
 echo "  Creating Python venv..."
 python3 -m venv "$PLUGIN_DIR/.venv"
 "$PLUGIN_DIR/.venv/bin/pip" install --quiet --upgrade pip
 "$PLUGIN_DIR/.venv/bin/pip" install --quiet -r "$PLUGIN_DIR/requirements-ainl.txt"
 echo "  [ok] Dependencies installed"
 
-# ── 3. Configure config.json with safe defaults ────────────────────────────
+# ── 4. Configure config.json ───────────────────────────────────────────────
 echo "  Configuring plugin..."
-python3 - "$PLUGIN_DIR" <<'PYEOF'
+
+# Capture previous backend before any changes (for migration detection)
+PREV_BACKEND=$(python3 -c "
+import json, pathlib
+p = pathlib.Path('$PLUGIN_DIR') / 'config.json'
+try:
+    print(json.loads(p.read_text()).get('memory', {}).get('store_backend', 'python'))
+except:
+    print('python')
+")
+
+python3 - "$PLUGIN_DIR" "$RUST_AVAILABLE" <<'PYEOF'
 import json, pathlib, sys
 
 plugin_dir = pathlib.Path(sys.argv[1])
+rust_available = sys.argv[2] == "true"
 config_path = plugin_dir / "config.json"
 
 with open(config_path) as f:
     cfg = json.load(f)
 
-# Safe default: Python backend works for everyone
+# Safe default: Python backend
 cfg.setdefault("memory", {})["store_backend"] = "python"
 
-# A2A bridge is an advanced feature requiring separate setup — off by default
+# A2A bridge off by default (requires separate daemon setup)
 cfg.setdefault("a2a", {})["enabled"] = False
-cfg["a2a"].pop("bridge_script", None)  # remove any machine-specific path
+cfg["a2a"].pop("bridge_script", None)
 
-# Upgrade to native backend automatically if Rust toolchain is available
-# (ainl-* crates are published on crates.io — no local armaraos clone needed)
-import shutil as _shutil
-if _shutil.which("rustc"):
+if rust_available:
     cfg["memory"]["store_backend"] = "native"
     print("    rustc found — enabling native Rust backend (ainl-* crates from crates.io)")
 else:
     print("    python backend selected (install Rust from https://rustup.rs to enable native backend)")
 
-# Generate a stable anonymous install ID (once; preserved on re-runs)
+# Generate stable anonymous install ID (once; preserved on re-runs)
 import uuid as _uuid
 cfg.setdefault("install_id", str(_uuid.uuid4()))
 
@@ -73,7 +114,35 @@ print("    config.json written")
 PYEOF
 echo "  [ok] Config updated"
 
-# ── 4. Set up local marketplace (symlink so git pull takes effect immediately) ──
+# ── 5. Migrate memory if switching Python → Native ─────────────────────────
+NEW_BACKEND=$(python3 -c "import json; print(json.load(open('$PLUGIN_DIR/config.json'))['memory']['store_backend'])")
+
+if [ "$PREV_BACKEND" = "python" ] && [ "$NEW_BACKEND" = "native" ]; then
+    # Check if there's any existing Python memory data to migrate
+    HAS_DATA=$(python3 -c "
+import pathlib, glob
+dbs = list(pathlib.Path.home().glob('.claude/projects/*/graph_memory/ainl_memory.db'))
+print('yes' if dbs else 'no')
+")
+    if [ "$HAS_DATA" = "yes" ]; then
+        echo "  Existing memory data found — migrating to native backend..."
+        echo "  (Python DB kept as backup — no data will be lost)"
+        "$PLUGIN_DIR/.venv/bin/python" "$PLUGIN_DIR/migrate_to_native.py" || {
+            echo "  [warn] Migration encountered errors — reverting to Python backend"
+            python3 -c "
+import json; p='$PLUGIN_DIR/config.json'
+cfg=json.load(open(p)); cfg.setdefault('memory',{})['store_backend']='python'
+open(p,'w').write(json.dumps(cfg,indent=2))
+"
+            NEW_BACKEND="python"
+        }
+        echo "  [ok] Memory migrated to native backend"
+    else
+        echo "  No existing memory to migrate — starting fresh with native backend"
+    fi
+fi
+
+# ── 6. Set up local marketplace ────────────────────────────────────────────
 echo "  Setting up plugin marketplace..."
 mkdir -p "$MARKETPLACE/.claude-plugin"
 mkdir -p "$MARKETPLACE/plugins"
@@ -101,7 +170,7 @@ cat > "$MARKETPLACE/.claude-plugin/marketplace.json" <<JSONEOF
 JSONEOF
 echo "  [ok] Marketplace configured"
 
-# ── 5. Register plugin in ~/.claude/settings.json ──────────────────────────
+# ── 7. Register plugin in ~/.claude/settings.json ──────────────────────────
 echo "  Registering plugin with Claude Code..."
 python3 - "$SETTINGS" "$MARKETPLACE" <<'PYEOF'
 import json, pathlib, sys
@@ -129,17 +198,13 @@ print(f"    {settings_path} updated")
 PYEOF
 echo "  [ok] Plugin registered"
 
-# ── Self-verification ──────────────────────────────────────────────────────
+# ── 8. Self-verification ───────────────────────────────────────────────────
 echo "  Running self-verification..."
 echo ""
-
-# Structural check (files, venv, registration)
 bash "$PLUGIN_DIR/scripts/verify_activation.sh" || true
-
-# Runtime check (actually exercises all memory subsystems)
 bash "$PLUGIN_DIR/scripts/smoke_test.sh" || true
 
-# ── Telemetry: install event (fire-and-forget, respects opt-out) ───────────
+# ── 9. Telemetry: install event ────────────────────────────────────────────
 "$PLUGIN_DIR/.venv/bin/python" - "$PLUGIN_DIR" <<'PYEOF' &
 import sys
 from pathlib import Path
@@ -153,11 +218,10 @@ except Exception:
 PYEOF
 
 # ── Done ───────────────────────────────────────────────────────────────────
-BACKEND=$(python3 -c "import json; print(json.load(open('$PLUGIN_DIR/config.json'))['memory']['store_backend'])")
 echo "=== Setup complete! ==="
 echo ""
 echo "  Plugin dir : $PLUGIN_DIR"
-echo "  Backend    : $BACKEND"
+echo "  Backend    : $NEW_BACKEND"
 echo "  Venv       : $PLUGIN_DIR/.venv"
 echo ""
 echo "Next step: restart Claude Code."
