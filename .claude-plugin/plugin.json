@@ -1,7 +1,7 @@
 {
   "name": "ainl-cortex",
   "displayName": "AINL Cortex",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Graph-native memory, self-learning, and multi-agent coordination for Claude Code. Every session is captured, every pattern learned, every agent connected.",
   "author": { "name": "Steven Hooley" },
   "repository": "https://github.com/sbhooley/ainl-cortex",

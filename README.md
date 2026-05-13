@@ -1069,7 +1069,7 @@ Copyright 2026 AINativeLang, Inc.
 
 ## 🗺️ Roadmap
 
-### ✅ v0.2 (Current - COMPLETE)
+### ✅ v0.2 (COMPLETE)
 - ✅ Trajectory capture and analysis
 - ✅ Zero-LLM persona evolution
 - ✅ Failure learning and prevention
@@ -1078,7 +1078,7 @@ Copyright 2026 AINativeLang, Inc.
 - ✅ Context compilation
 - ✅ Closed-loop validation
 
-### ✅ v0.3 (COMPLETE)
+### ✅ v0.3 (Current - COMPLETE)
 - ✅ Native Rust backend (`ainl_native` PyO3 extension wrapping armaraos crates)
 - ✅ Full `ainl-*` crate integration: trajectory, persona, procedure learning, semantic tagger
 - ✅ Python ↔ Native backend switch via `config.json` (auto-fallback if build fails)
