@@ -125,7 +125,7 @@ bash setup.sh
 - Creates a Python venv at `.venv/` and installs all dependencies
 - Registers the plugin in `~/.claude/settings.json` under `enabledPlugins`
 - Registers it in the local marketplace at `~/.claude/ainl-local-marketplace/`
-- Detects whether the armaraos Rust workspace is available and sets the right storage backend
+- Detects whether Rust (`rustc`) is available and sets the right storage backend
 - Runs a smoke test to confirm the MCP server starts correctly
 
 ### Step 2 — Tell the user to restart Claude Code
@@ -149,7 +149,7 @@ After the user restarts, confirm the install worked by checking:
 | Only ~13 tools visible (no `ainl_` tools) | `cd ~/.claude/plugins/ainl-cortex && .venv/bin/pip install 'ainativelang[mcp]>=1.8.0'` |
 | No banner at session start | Check `~/.claude/settings.json` has `"ainl-cortex@ainl-local": true` under `enabledPlugins`; if missing, re-run `bash setup.sh` |
 | Banner shows `MCP stack: FAIL` | Run `cd ~/.claude/plugins/ainl-cortex && bash setup.sh` again — setup re-installs deps |
-| `ainl_native (Rust bindings): build failed` | Safe to ignore — plugin falls back to the Python backend automatically. Native backend requires Rust 1.75+ and the armaraos workspace (optional). |
+| `ainl_native (Rust bindings): build failed` | Safe to ignore — plugin falls back to the Python backend automatically. To enable native backend: install Rust 1.75+ from [rustup.rs](https://rustup.rs) then restart Claude Code. |
 
 ### What activates automatically (no config needed)
 
@@ -363,15 +363,7 @@ The plugin ships with two storage backends. You choose via a single line in `con
    .venv/bin/pip install maturin
    ```
 
-3. **armaraos source code** — the native extension is built from the armaraos Rust crates (`ainl-memory`, `ainl-trajectory`, `ainl-persona`, `ainl-procedure-learning`, `ainl-contracts`). Clone the repo to the conventional location:
-
-   ```bash
-   git clone https://ainativelang.com/armaraos ~/.armaraos/src/armaraos
-   ```
-
-   `setup.sh` auto-detects this path and enables the native backend. If you clone elsewhere, update the `[patch.crates-io]` paths in `ainl_native/Cargo.toml` to match.
-
-   > **Note:** The ArmaraOS desktop app (installed from [ainativelang.com/armaraos](https://ainativelang.com/armaraos)) uses `~/.armaraos` for its own data. The source clone above is a separate thing — the app alone is not sufficient to build the native extension.
+That's it. All `ainl-*` crates (`ainl-memory`, `ainl-trajectory`, `ainl-persona`, `ainl-procedure-learning`, `ainl-contracts`, etc.) are published on [crates.io](https://crates.io/users/sbhooley) and download automatically via Cargo. No local ArmaraOS clone required.
 
 #### Auto-Build at SessionStart
 
@@ -382,7 +374,7 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release \
   --manifest-path ainl_native/Cargo.toml
 ```
 
-If the build fails (missing Rust, missing armaraos, etc.), the plugin **silently falls back to the Python backend** — Claude Code continues working normally. The SessionStart banner shows the build status:
+If the build fails (missing Rust toolchain, etc.), the plugin **silently falls back to the Python backend** — Claude Code continues working normally. The SessionStart banner shows the build status:
 
 ```
 • ainl_native (Rust bindings): ok (already installed)   ← native active

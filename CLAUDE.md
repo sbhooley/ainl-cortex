@@ -22,7 +22,7 @@ bash setup.sh
 - Only ~13 tools (no ainl_ tools) → run `pip install ainativelang[mcp]>=1.7.0` inside `.venv`
 
 **Native Rust backend (optional, higher fidelity):**
-Requires armaraos source cloned to `~/.armaraos/src/armaraos` and Rust toolchain 1.75+. setup.sh detects this automatically and sets `store_backend: native` in config.json. The Rust extension (`ainl_native`) builds automatically at the next SessionStart.
+Requires Rust toolchain 1.75+. setup.sh detects `rustc` automatically and sets `store_backend: native` in config.json. The Rust extension (`ainl_native`) builds automatically at the next SessionStart using ainl-* crates from crates.io — no local ArmaraOS clone needed.
 
 ---
 
@@ -338,7 +338,7 @@ The plugin has two storage backends, switched via `config.json`:
 
 **Python backend** — works immediately, no Rust toolchain required. Full feature set except Rust-specific bindings.
 
-**Native backend** — wraps armaraos `ainl-memory`, `ainl-trajectory`, `ainl-persona`, `ainl-procedure-learning` crates via `ainl_native.so` (PyO3). Adds: `AinlTrajectoryBuilder`, `cluster_experiences → distill_procedure` pipeline, `AinlPersonaEngine`, `tag_turn`, `check_freshness/can_execute`, `score_reuse`, anchored summary compression.
+**Native backend** — wraps `ainl-memory`, `ainl-trajectory`, `ainl-persona`, `ainl-procedure-learning` crates (published on crates.io) via `ainl_native.so` (PyO3). Adds: `AinlTrajectoryBuilder`, `cluster_experiences → distill_procedure` pipeline, `AinlPersonaEngine`, `tag_turn`, `check_freshness/can_execute`, `score_reuse`, anchored summary compression.
 
 **Auto-build**: `hooks/startup.py:_ensure_ainl_native()` builds `ainl_native` at every SessionStart using maturin. Falls back silently to Python if build fails. Build command (run manually if needed):
 ```bash
@@ -348,7 +348,7 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
   --manifest-path ainl_native/Cargo.toml
 ```
 
-**Prerequisites for native**: Rust toolchain 1.75+, armaraos source cloned to `~/.armaraos/src/armaraos` (provides ainl-* crates). See README.md § Backend Selection for full details.
+**Prerequisites for native**: Rust toolchain 1.75+ (install from rustup.rs). All ainl-* crates are published on crates.io and download automatically via Cargo. See README.md § Backend Selection for full details.
 
 **Migrating Python → Native**: `python3 migrate_to_native.py --flip-config` migrates existing data and flips the config in one step.
 

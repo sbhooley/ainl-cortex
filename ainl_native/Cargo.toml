@@ -15,31 +15,23 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Core graph memory
-ainl-memory = { path = "../../../../.armaraos/src/armaraos/crates/ainl-memory" }
-ainl-contracts = { path = "../../../../.armaraos/src/armaraos/crates/ainl-contracts" }
+ainl-memory = "0.1.11-alpha"
+ainl-contracts = "0.1.2"
 
 # Persona evolution
-ainl-persona = { path = "../../../../.armaraos/src/armaraos/crates/ainl-persona" }
+ainl-persona = "0.1.8"
 
-# Semantic tagging (enable serde for SemanticTag serialization)
-ainl-semantic-tagger = { path = "../../../../.armaraos/src/armaraos/crates/ainl-semantic-tagger", features = ["serde"] }
+# Semantic tagging
+ainl-semantic-tagger = { version = "0.1.8", features = ["serde"] }
 
 # Failure learning
-ainl-failure-learning = { path = "../../../../.armaraos/src/armaraos/crates/ainl-failure-learning" }
+ainl-failure-learning = "0.1.1"
 
 # Procedure learning
-ainl-procedure-learning = { path = "../../../../.armaraos/src/armaraos/crates/ainl-procedure-learning" }
+ainl-procedure-learning = "0.1.0"
 
 # Context freshness
-ainl-context-freshness = { path = "../../../../.armaraos/src/armaraos/crates/ainl-context-freshness" }
+ainl-context-freshness = "0.1.1"
 
 # Trajectory
-ainl-trajectory = { path = "../../../../.armaraos/src/armaraos/crates/ainl-trajectory" }
-
-[patch.crates-io]
-ainl-graph-extractor = { path = "../../../../.armaraos/src/armaraos/crates/ainl-graph-extractor" }
-ainl-memory = { path = "../../../../.armaraos/src/armaraos/crates/ainl-memory" }
-ainl-persona = { path = "../../../../.armaraos/src/armaraos/crates/ainl-persona" }
-ainl-semantic-tagger = { path = "../../../../.armaraos/src/armaraos/crates/ainl-semantic-tagger" }
-ainl-runtime = { path = "../../../../.armaraos/src/armaraos/crates/ainl-runtime" }
-ainl-agent-snapshot = { path = "../../../../.armaraos/src/armaraos/crates/ainl-agent-snapshot" }
+ainl-trajectory = "0.1.1"

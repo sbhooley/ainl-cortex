@@ -51,13 +51,14 @@ cfg.setdefault("memory", {})["store_backend"] = "python"
 cfg.setdefault("a2a", {})["enabled"] = False
 cfg["a2a"].pop("bridge_script", None)  # remove any machine-specific path
 
-# Upgrade to native backend automatically if armaraos crates are present
-armaraos = pathlib.Path.home() / ".armaraos" / "src" / "armaraos"
-if armaraos.is_dir():
+# Upgrade to native backend automatically if Rust toolchain is available
+# (ainl-* crates are published on crates.io — no local armaraos clone needed)
+import shutil as _shutil
+if _shutil.which("rustc"):
     cfg["memory"]["store_backend"] = "native"
-    print("    armaraos source found at ~/.armaraos/src/armaraos — enabling native Rust backend")
+    print("    rustc found — enabling native Rust backend (ainl-* crates from crates.io)")
 else:
-    print("    python backend selected (clone armaraos to ~/.armaraos/src/armaraos to enable native Rust backend)")
+    print("    python backend selected (install Rust from https://rustup.rs to enable native backend)")
 
 # Generate a stable anonymous install ID (once; preserved on re-runs)
 import uuid as _uuid
