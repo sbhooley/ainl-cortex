@@ -6,7 +6,7 @@
   "author": { "name": "Steven Hooley" },
   "repository": "https://github.com/sbhooley/ainl-cortex",
   "keywords": ["memory", "graph", "ainl", "persistence", "agent", "coding-assistant", "a2a", "multi-agent", "goals"],
-  "license": "MIT OR Apache-2.0",
+  "license": "Apache-2.0",
   "compatibility": {
     "minClaudeCodeVersion": "0.1.0"
   },

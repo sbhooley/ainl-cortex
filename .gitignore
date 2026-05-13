@@ -60,6 +60,8 @@ inbox/
 a2a/self_inbox/
 a2a/openfang_url.json
 a2a/logs/
+a2a/bridge.pid
+a2a/notifications_seen.json
 
 # Rust build artifacts
 ainl_native/target/
