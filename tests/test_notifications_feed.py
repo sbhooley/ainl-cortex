@@ -45,6 +45,22 @@ def test_targets_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 "priority": 5,
             },
             {
+                "id": "n-ainativelang",
+                "title": "AINativeLang org notice",
+                "body": "a",
+                "severity": "info",
+                "targets": ["ainativelang"],
+                "published_at": "2026-05-12T01:00:00Z",
+            },
+            {
+                "id": "n-ainl",
+                "title": "AINL notice",
+                "body": "b",
+                "severity": "info",
+                "targets": ["ainl"],
+                "published_at": "2026-05-12T02:00:00Z",
+            },
+            {
                 "id": "n-armaraos",
                 "title": "Wrong target",
                 "body": "z",
@@ -65,6 +81,8 @@ def test_targets_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     ids = {n["id"] for n in new}
     assert "n-cortex" in ids
     assert "n-wild" in ids
+    assert "n-ainativelang" in ids
+    assert "n-ainl" in ids
     assert "n-armaraos" not in ids
 
 

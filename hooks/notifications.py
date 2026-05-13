@@ -8,7 +8,7 @@ applies auto-updates when the server marks a release safe.
 
 Client algorithm (matches server contract):
   1. Require schema_version == 1 (forward-compat: accept > 1 silently too).
-  2. Filter: targets must include "claude-code-plugin" or "*".
+  2. Filter: targets must include "claude-code-plugin", "ainativelang", "ainl", or "*".
   3. Drop: expires_at present and now > expires_at.
   4. Sort: priority desc (default 0), then published_at desc.
   5. Auto-update: enabled + artifact == "ainl-cortex" + version in range.
@@ -36,7 +36,7 @@ def _ssl_context() -> ssl.SSLContext:
 
 NOTIFICATIONS_URL = "https://www.ainativelang.com/notifications"
 PLUGIN_ARTIFACT = "ainl-cortex"
-OUR_TARGETS: frozenset = frozenset({"claude-code-plugin", "*"})
+OUR_TARGETS: frozenset = frozenset({"claude-code-plugin", "ainativelang", "ainl", "*"})
 SEEN_FILE_REL = Path("a2a") / "notifications_seen.json"
 PLUGIN_JSON_REL = Path(".claude-plugin") / "plugin.json"
 

@@ -82,7 +82,7 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 ### Notification Feed
 - 🔔 **Session-Start Polling** - Fetches `ainativelang.com/notifications` once per session; zero latency on cache hit
 - 👁️ **Seen-ID Persistence** - Already-shown notices are never repeated across sessions
-- 🎯 **Smart Filtering** - Only surfaces notices targeting `claude-code-plugin` or `*`; ignores expired entries
+- 🎯 **Smart Filtering** - Only surfaces notices targeting `claude-code-plugin`, `ainativelang`, `ainl`, or `*`; ignores expired entries
 - 📢 **Priority Ordering** - High-priority notices appear first in the SessionStart banner
 - 🔄 **Optional Auto-Update** - Can `git pull --ff-only` automatically when the server marks a release safe (opt-in)
 
@@ -657,7 +657,7 @@ Seen notice IDs are persisted in `a2a/notifications_seen.json` so the same notic
 ### How filtering works
 
 The plugin only shows notices that:
-- Target `"claude-code-plugin"` or `"*"` (broadcast)
+- Target `"claude-code-plugin"`, `"ainativelang"`, `"ainl"`, or `"*"` (broadcast)
 - Have not yet expired (`expires_at` in the future, or no expiry set)
 - Have not been seen in a previous session
 
