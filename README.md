@@ -9,6 +9,84 @@
 
 ---
 
+## ⚡ Install in 30 Seconds
+
+**If you are a human:** paste this into Claude Code chat and press Enter:
+
+```
+Install the plugin at https://github.com/sbhooley/ainl-cortex for me, then tell me when to restart.
+```
+
+Claude will clone, run setup, and tell you when to restart. Done.
+
+**If you prefer to run it yourself:**
+
+```bash
+git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-cortex
+cd ~/.claude/plugins/ainl-cortex
+bash setup.sh
+# restart Claude Code
+```
+
+---
+
+## 🤖 For AI Agents — Complete Install Instructions
+
+> **You are a Claude Code agent (or other AI agent) reading this on behalf of a user. Follow these steps exactly, in order.**
+
+### Step 1 — Clone and run setup
+
+```bash
+git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-cortex
+cd ~/.claude/plugins/ainl-cortex
+bash setup.sh
+```
+
+`setup.sh` is fully automated. It:
+- Creates a Python venv at `.venv/` and installs all dependencies
+- Registers the plugin in `~/.claude/settings.json` under `enabledPlugins`
+- Registers it in the local marketplace at `~/.claude/ainl-local-marketplace/`
+- Detects whether the armaraos Rust workspace is available and sets the right storage backend
+- Runs a smoke test to confirm the MCP server starts correctly
+
+### Step 2 — Tell the user to restart Claude Code
+
+The plugin activates on the **next session start**. Tell the user:
+
+> "Setup complete. Please restart Claude Code now. After restart you'll see an `[AINL Cortex]` banner and `/mcp` will list ~20 new tools."
+
+### Step 3 — Verify after restart
+
+After the user restarts, confirm the install worked by checking:
+
+1. The `[AINL Cortex]` banner appears at the top of the session — it shows graph DB status, compression mode, MCP stack health, and A2A bridge status.
+2. Running `/mcp` in Claude Code lists ~20 tools prefixed `ainl-cortex__` (7 memory tools + 6 AINL tools + 7 A2A tools).
+
+### Troubleshooting — fix these before reporting failure
+
+| Symptom | Fix |
+|---|---|
+| `python3: command not found` | Ask user to install Python 3.10+ from python.org, then re-run `bash setup.sh` |
+| Only ~13 tools visible (no `ainl_` tools) | `cd ~/.claude/plugins/ainl-cortex && .venv/bin/pip install 'ainativelang[mcp]>=1.7.0'` |
+| No banner at session start | Check `~/.claude/settings.json` has `"ainl-cortex@ainl-local": true` under `enabledPlugins`; if missing, re-run `bash setup.sh` |
+| Banner shows `MCP stack: FAIL` | Run `cd ~/.claude/plugins/ainl-cortex && bash setup.sh` again — setup re-installs deps |
+| `ainl_native (Rust bindings): build failed` | Safe to ignore — plugin falls back to the Python backend automatically. Native backend requires Rust 1.75+ and the armaraos workspace (optional). |
+
+### What activates automatically (no config needed)
+
+Once restarted, all of the following are on by default:
+
+- **Graph memory** — every session is recorded as typed nodes (Episode, Semantic, Procedural, Failure, Persona)
+- **Prompt compression** — memory context and user prompts compressed 40–60% before injection
+- **Goal tracking** — active goals auto-inferred from episode clusters, injected at every prompt
+- **Failure learning** — past failures surfaced as warnings before you repeat them
+- **Pattern promotion** — successful tool sequences promoted to reusable procedural patterns
+- **In-plugin notifications** — fetches update notices from ainativelang.com at each session start
+
+A2A multi-agent messaging is available but requires `"a2a": {"enabled": true}` in `config.json` and the ArmaraOS daemon running.
+
+---
+
 ## 🌟 What is This?
 
 AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant into a **self-learning system** that gets smarter with every interaction. It combines:
