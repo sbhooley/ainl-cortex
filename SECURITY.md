@@ -6,7 +6,7 @@ If you believe you have found a **security issue** in AINL Cortex (including the
 
 **Preferred:** Open a **[private security advisory](https://github.com/sbhooley/ainl-cortex/security/advisories/new)** (repository **Security** tab → **Report a vulnerability**). This allows coordinated disclosure, a private thread with maintainers, and an optional CVE or GitHub advisory once fixed. You need a GitHub account; the form accepts description, impact, and reproduction details.
 
-**Alternative:** Email `support@ainativelang.com` with subject line `[SECURITY] ainl-cortex` if you prefer not to use GitHub.
+**Alternative:** Email `hello@ainativelang.com` with subject line `[SECURITY] ainl-cortex` if you prefer not to use GitHub.
 
 **Include (when possible):**
 

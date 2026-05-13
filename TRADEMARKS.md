@@ -62,7 +62,7 @@ Nothing in this policy is intended to prohibit fair, nominative, or otherwise la
 For trademark, branding, naming, logo, certification, or official-use questions:
 
 - Open a GitHub issue or discussion requesting trademark contact.
-- Email `support@ainativelang.com` with subject line `[TRADEMARK]`.
+- Email `hello@ainativelang.com` with subject line `[TRADEMARK]`.
 - Avoid posting confidential trademark or licensing terms in public threads.
 
 ## Changes to This Policy

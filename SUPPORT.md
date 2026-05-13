@@ -8,7 +8,7 @@ AINL Cortex is maintained by AINativeLang, Inc. on a best-effort basis for the o
 |---------|---------|
 | **[GitHub Issues](https://github.com/sbhooley/ainl-cortex/issues)** | Bug reports, reproducible defects |
 | **[GitHub Discussions](https://github.com/sbhooley/ainl-cortex/discussions)** | Usage questions, feature ideas, general discussion |
-| **`support@ainativelang.com`** | Security issues (after following `SECURITY.md`), commercial inquiries |
+| **`hello@ainativelang.com`** | Security issues (after following `SECURITY.md`), commercial inquiries |
 
 ## What maintainers can usually help with
 

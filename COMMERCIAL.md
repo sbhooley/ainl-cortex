@@ -42,5 +42,5 @@ Use of AINL Cortex does not grant any right to:
 For commercial licensing, enterprise arrangements, OEM/embedded use, or custom terms:
 
 - Open a GitHub issue or discussion requesting commercial contact.
-- Email `support@ainativelang.com` with subject line `[COMMERCIAL]`.
+- Email `hello@ainativelang.com` with subject line `[COMMERCIAL]`.
 - Avoid posting confidential commercial terms in public threads.

@@ -1158,7 +1158,7 @@ Nothing is lost. The `PreCompact` hook flushes all buffered captures to the grap
 
 **Issues & Bugs:** https://github.com/sbhooley/ainl-cortex/issues  
 **Discussions:** https://github.com/sbhooley/ainl-cortex/discussions  
-**Email:** support@ainativelang.com
+**Email:** hello@ainativelang.com
 
 ---
 
