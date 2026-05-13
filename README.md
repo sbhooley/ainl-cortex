@@ -34,7 +34,7 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 
 ### Core Memory System
 - ✅ **Typed Graph Memory** - Episode, Semantic, Procedural, Persona, and Failure nodes
-- ✅ **Project Isolation** - Memories never leak between different codebases
+- ✅ **Per-Repo Project Isolation** - Each git repo has its own memory bucket (toplevel-anchored), opt-out via `memory.project_isolation_mode = "global"` for back-compat
 - ✅ **Context-Aware Retrieval** - Inject only relevant memories (ranked by confidence, recency, fitness)
 - ✅ **Graceful Degradation** - Hooks never break Claude Code, even on errors
 - ✅ **Inspectable** - CLI tools for debugging and exploration
@@ -98,14 +98,33 @@ Install the plugin at https://github.com/sbhooley/ainl-cortex for me, then tell 
 
 Claude will clone, run setup, and tell you when to restart. Done.
 
-**If you prefer to run it yourself:**
+**If you prefer to run it yourself, pick the variant that matches you:**
 
 ```bash
 git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-cortex
 cd ~/.claude/plugins/ainl-cortex
+
+# Variant A — interactive (asks before installing Rust if missing)
 bash setup.sh
-# restart Claude Code
+
+# Variant B — Python backend only, never touch Rust (recommended for CI/agents)
+bash setup.sh --python-only
+
+# Variant C — unattended Rust install via rustup (CI machines you control)
+bash setup.sh --auto-install-rust
+
+# Then restart Claude Code.
 ```
+
+`setup.sh` no longer flips the storage backend or migrates data automatically. To
+switch to the Rust native backend later, run:
+
+```bash
+bash scripts/migrate_python_to_native.sh   # 5 phases: dry-run → migrate → verify → flip
+```
+
+See [scripts/MIGRATION.md](scripts/MIGRATION.md) for the full migration flow,
+rollback options, and what the JSON reports under `logs/` mean.
 
 ---
 
@@ -121,12 +140,15 @@ cd ~/.claude/plugins/ainl-cortex
 bash setup.sh
 ```
 
-`setup.sh` is fully automated. It:
+`setup.sh` is opt-in for Rust. It:
 - Creates a Python venv at `.venv/` and installs all dependencies
 - Registers the plugin in `~/.claude/settings.json` under `enabledPlugins`
 - Registers it in the local marketplace at `~/.claude/ainl-local-marketplace/`
-- Detects whether Rust (`rustc`) is available and sets the right storage backend
+- **Default:** Python backend (`store_backend = "python"`). Setup never auto-installs Rust unless `--auto-install-rust` is passed (or you answer `1` to the interactive prompt). When stdin is not a tty (CI, agent invocation) the default is python-only — no surprise rustup.
+- If Rust is already on `PATH`, builds `ainl_native` so the optional native backend is ready, but does **not** flip `store_backend`.
 - Runs a smoke test to confirm the MCP server starts correctly
+
+To switch to the native backend after install, run `bash scripts/migrate_python_to_native.sh` — see [scripts/MIGRATION.md](scripts/MIGRATION.md).
 
 ### Step 2 — Tell the user to restart Claude Code
 
@@ -139,14 +161,19 @@ The plugin activates on the **next session start**. Tell the user:
 After the user restarts, confirm the install worked by checking:
 
 1. The `[AINL Cortex]` banner appears at the top of the session — it shows graph DB status, compression mode, MCP stack health, and A2A bridge status.
-2. Running `/mcp` in Claude Code lists ~30 tools prefixed `ainl-cortex__` (11 memory tools + 12 AINL tools + 7 A2A tools).
+2. Running `/mcp` in Claude Code lists tools prefixed `ainl-cortex__`. The exact count depends on installed extras and config:
+   - **30 tools** = 11 memory + 12 AINL + 7 A2A (default install with `ainativelang[mcp]` and `a2a.enabled = true`).
+   - **23 tools** = 11 memory + 12 AINL when A2A is disabled (`a2a.enabled = false` in `config.json`, the install default — A2A tools are hidden until you opt in).
+   - **18 tools** = 11 memory + 7 A2A when `ainativelang[mcp]` is missing (AINL tools silently disabled).
+   - **11 tools** = memory only (both AINL and A2A unavailable).
 
 ### Troubleshooting — fix these before reporting failure
 
 | Symptom | Fix |
 |---|---|
 | `python3: command not found` | Ask user to install Python 3.10+ from python.org, then re-run `bash setup.sh` |
-| Only ~13 tools visible (no `ainl_` tools) | `cd ~/.claude/plugins/ainl-cortex && .venv/bin/pip install 'ainativelang[mcp]>=1.8.0'` |
+| Fewer tools visible than expected (no `ainl_*` tools) | `cd ~/.claude/plugins/ainl-cortex && .venv/bin/pip install 'ainativelang[mcp]>=1.8.0'` then restart Claude Code |
+| No `a2a_*` tools visible | A2A is opt-in. Set `"a2a": {"enabled": true}` in `config.json` and restart Claude Code (the daemon must also be reachable). |
 | No banner at session start | Check `~/.claude/settings.json` has `"ainl-cortex@ainl-local": true` under `enabledPlugins`; if missing, re-run `bash setup.sh` |
 | Banner shows `MCP stack: FAIL` | Run `cd ~/.claude/plugins/ainl-cortex && bash setup.sh` again — setup re-installs deps |
 | `ainl_native (Rust bindings): build failed` | Safe to ignore — plugin falls back to the Python backend automatically. To enable native backend: install Rust 1.75+ from [rustup.rs](https://rustup.rs) then restart Claude Code. |
@@ -278,18 +305,27 @@ A2A multi-agent messaging is available but requires `"a2a": {"enabled": true}` i
 
 ### Installation
 
+Three flavors depending on whether you want Rust:
+
 ```bash
 git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-cortex
 cd ~/.claude/plugins/ainl-cortex
+
+# A) Interactive — prompts before installing Rust if missing (default for human terminals)
 bash setup.sh
+
+# B) Python only — never touches Rust (default when stdin is not a tty, e.g. CI)
+bash setup.sh --python-only
+
+# C) Unattended — auto-install Rust via rustup (CI machines you control)
+bash setup.sh --auto-install-rust
 ```
 
 Then **restart Claude Code**. That's it.
 
-`setup.sh` handles everything:
-- Creates a Python venv and installs all dependencies
-- Registers the plugin with Claude Code (marketplace + settings)
-- Detects your environment and selects the right backend automatically
+`setup.sh` always defaults `store_backend = "python"`. To switch to native after
+install, run `bash scripts/migrate_python_to_native.sh` — see
+[scripts/MIGRATION.md](scripts/MIGRATION.md) for the 5-phase flow with rollback.
 
 ### What you'll see
 
@@ -303,9 +339,50 @@ On your next session start, the `[AINL Cortex]` banner appears:
   ...
 ```
 
-And `/mcp` shows ~30 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, `ainl_propose_improvement`, `memory_set_goal`, etc.).
+And `/mcp` shows up to 30 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, `ainl_propose_improvement`, `memory_set_goal`, etc.) — see the *Tool count* table in **Verifying Activation** above for the exact totals per install variant.
 
 From that point on, memory accumulates automatically — no prompts, no configuration needed.
+
+---
+
+## 🗂️ Project Isolation
+
+Each Claude Code session is keyed to ONE memory bucket on disk, derived from
+the working directory:
+
+| `memory.project_isolation_mode` | Resolver |
+|---|---|
+| `per_repo` (default) | `git -C <cwd> rev-parse --show-toplevel` → `sha256(toplevel)[:16]`. Falls back to `sha256(cwd)[:16]` for non-git directories. Two clones of the same repo share state; two unrelated repos do not. |
+| `global` | Returns the legacy `sha256("~/.claude")[:16]` for back-compat. All projects share one bucket — this was the pre-0.4 default and is now an explicit opt-in. |
+
+**Read-fallback chain:** During the migration window, recall always queries the
+per-repo bucket *and* the legacy global bucket and merges results (deduplicated
+by node id). Nothing is ever lost — old memories surface alongside new ones
+until you run the backfill.
+
+**One-time backfill** (optional but recommended after upgrade):
+
+```bash
+.venv/bin/python scripts/repartition_by_repo.py --dry-run    # preview
+.venv/bin/python scripts/repartition_by_repo.py              # execute
+.venv/bin/python scripts/repartition_by_repo.py --purge-legacy  # after verify
+```
+
+The backfill assigns episodes/failures/semantics to the deepest matching repo
+toplevel (longest-prefix vote on `files_touched`), keeps personas in the legacy
+bucket (persona is global by design), and writes a `logs/repartition_report.json`
+with full per-node decisions.
+
+Configure isolation mode and additional repo search paths in `config.json`:
+
+```json
+{
+  "memory": {
+    "project_isolation_mode": "per_repo",
+    "repo_search_paths": ["~/code", "~/work"]
+  }
+}
+```
 
 ---
 

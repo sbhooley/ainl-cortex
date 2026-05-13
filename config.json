@@ -77,7 +77,7 @@
     "compress_memory_context": true,
     "compress_user_prompt": true,
     "compress_output": false,
-    "min_tokens_for_compression": 80,
+    "min_tokens_for_compression": 50,
     "adaptive_eco": {
       "enabled": true,
       "min_confidence": 0.7,
