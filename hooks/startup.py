@@ -362,13 +362,22 @@ def main():
 
         # ── Sticky upgrade notice (Python backend — every session until migrated) ──
         if _backend == "python":
+            _rust_installed = shutil.which("rustc") is not None
+            if _rust_installed:
+                _upgrade_how = (
+                    "Rust is already installed — just ask me to re-run setup.sh to upgrade (no downloads needed)."
+                )
+            else:
+                _upgrade_how = (
+                    "Ask me to upgrade and I'll install Rust automatically and migrate your memory."
+                )
             system_blocks.append(
                 "\n━━━ AINL CORTEX: NATIVE BACKEND UPGRADE AVAILABLE ━━━\n"
                 "Plugin is running on the Python backend. The native Rust backend adds:\n"
                 "  • Trajectory distillation — learns patterns across sessions\n"
                 "  • Procedure scoring — reuses your most successful workflows\n"
                 "  • Anchored memory compression — preserves key context under pressure\n"
-                "To upgrade: the user can ask you to upgrade to the native backend.\n"
+                f"{_upgrade_how}\n"
                 "You should proactively mention this upgrade is available at the start of this session.\n"
                 "━━━\n"
             )
