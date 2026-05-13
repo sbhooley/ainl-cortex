@@ -59,11 +59,11 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 - 📚 **Template Library** - 6 ready-to-use workflows (API, monitor, pipeline, blockchain, LLM, multi-step)
 
 ### A2A Multi-Agent Coordination
-- 🤝 **Agent Messaging** - Send messages and tasks to any registered A2A agent
-- 📝 **Note to Self** - Write a note that auto-surfaces in the *next* session's context
-- 👁️ **Condition Monitors** - Register file/URL watchers that push A2A notifications on trigger
-- ⏳ **Async Task Delegation** - Delegate work with `a2a_task_send`; poll status with `a2a_task_status`
-- 🔍 **Agent Discovery** - List and register agents in the ArmaraOS daemon network
+- 🤝 **Agent Messaging** - Send messages and tasks to any registered A2A agent *(requires ArmaraOS daemon)*
+- 📝 **Note to Self** - Write a note that auto-surfaces in the *next* session's context *(works without daemon)*
+- 👁️ **Condition Monitors** - Register file/URL watchers that push A2A notifications on trigger *(requires ArmaraOS daemon)*
+- ⏳ **Async Task Delegation** - Delegate work with `a2a_task_send`; poll status with `a2a_task_status` *(requires ArmaraOS daemon)*
+- 🔍 **Agent Discovery** - List and register agents in the ArmaraOS daemon network *(requires ArmaraOS daemon)*
 - 💾 **Graph-Backed History** - Every message and task is stored as a typed node for replay and audit
 
 ### Goal Tracking
@@ -139,7 +139,7 @@ The plugin activates on the **next session start**. Tell the user:
 After the user restarts, confirm the install worked by checking:
 
 1. The `[AINL Cortex]` banner appears at the top of the session — it shows graph DB status, compression mode, MCP stack health, and A2A bridge status.
-2. Running `/mcp` in Claude Code lists ~23 tools prefixed `ainl-cortex__` (7 memory tools + 9 AINL tools + 7 A2A tools).
+2. Running `/mcp` in Claude Code lists ~26 tools prefixed `ainl-cortex__` (7 memory tools + 12 AINL tools + 7 A2A tools).
 
 ### Troubleshooting — fix these before reporting failure
 
@@ -303,7 +303,7 @@ On your next session start, the `[AINL Cortex]` banner appears:
   ...
 ```
 
-And `/mcp` shows ~23 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, `ainl_get_started`, etc.).
+And `/mcp` shows ~26 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, `ainl_propose_improvement`, etc.).
 
 From that point on, memory accumulates automatically — no prompts, no configuration needed.
 

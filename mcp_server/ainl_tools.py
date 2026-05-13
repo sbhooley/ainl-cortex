@@ -64,6 +64,18 @@ class AINLTools:
         else:
             self.trajectory_store = None
 
+        # Initialize improvement proposal store (closed-loop validation)
+        try:
+            from .improvement_proposals import ImprovementProposalStore
+        except ImportError:
+            from improvement_proposals import ImprovementProposalStore
+        if memory_db_path:
+            self.proposal_store = ImprovementProposalStore(
+                memory_db_path.parent / "ainl_proposals.db"
+            )
+        else:
+            self.proposal_store = None
+
     def validate(
         self,
         source: str,
@@ -599,6 +611,91 @@ class AINLTools:
                 steps.append("Fix the error and re-validate")
 
         return steps
+
+    # ── Closed-loop validation (improvement proposals) ────────────────────────
+
+    def propose_improvement(
+        self,
+        source: str,
+        proposed_source: str,
+        improvement_type: str,
+        rationale: str,
+    ) -> Dict[str, Any]:
+        """
+        Validate a proposed AINL improvement and store it if valid.
+
+        Closed-loop: validate first, only persist if the proposed source
+        compiles cleanly. Returns proposal_id on success so the user can
+        accept or reject via ainl_accept_proposal.
+        """
+        if not self.proposal_store:
+            return {"ok": False, "error": "Proposal store not available"}
+
+        # Validate proposed source before storing
+        validation = self.validate(proposed_source, strict=True)
+        if not validation.get("valid"):
+            return {
+                "ok": False,
+                "validation_passed": False,
+                "errors": validation.get("errors", []),
+                "message": "Proposed improvement did not pass validation — fix errors before proposing.",
+            }
+
+        proposal_id = self.proposal_store.propose_improvement(
+            original_source=source,
+            proposed_source=proposed_source,
+            improvement_type=improvement_type,
+            rationale=rationale,
+            validation_result=validation,
+        )
+
+        confidence = self.proposal_store.get_confidence_adjustment(improvement_type)
+        return {
+            "ok": True,
+            "validation_passed": True,
+            "proposal_id": proposal_id,
+            "confidence": confidence,
+            "message": (
+                f"Improvement validated and stored (id={proposal_id[:8]}…). "
+                "Present it to the user and call ainl_accept_proposal with their answer."
+            ),
+        }
+
+    def accept_proposal(self, proposal_id: str, accepted: bool) -> Dict[str, Any]:
+        """Record whether the user accepted or rejected a proposed improvement."""
+        if not self.proposal_store:
+            return {"ok": False, "error": "Proposal store not available"}
+        self.proposal_store.mark_accepted(proposal_id, accepted)
+        return {
+            "ok": True,
+            "proposal_id": proposal_id,
+            "accepted": accepted,
+            "message": "Outcome recorded. Historical acceptance rate will influence future proposal confidence.",
+        }
+
+    def list_proposals(self, limit: int = 10) -> Dict[str, Any]:
+        """List recent improvement proposals and their acceptance status."""
+        if not self.proposal_store:
+            return {"ok": False, "error": "Proposal store not available"}
+        proposals = self.proposal_store.get_recent_proposals(limit=limit)
+        pending = [p for p in proposals if p.accepted is None and p.validation_passed]
+        reviewed = [p for p in proposals if p.accepted is not None]
+        success_rate = self.proposal_store.get_success_rate()
+        return {
+            "ok": True,
+            "pending_count": len(pending),
+            "pending": [
+                {
+                    "id": p.id,
+                    "improvement_type": p.improvement_type,
+                    "rationale": p.rationale,
+                    "created_at": p.created_at,
+                }
+                for p in pending
+            ],
+            "reviewed_count": len(reviewed),
+            "acceptance_rate": success_rate,
+        }
 
 
 def get_ainl_resources() -> Dict[str, str]:

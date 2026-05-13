@@ -35,7 +35,7 @@ except ImportError:
 logger = get_logger("startup")
 
 TOOL_COUNT_MEMORY = 7
-TOOL_COUNT_AINL = 9
+TOOL_COUNT_AINL = 12
 TOOL_COUNT_A2A = 7
 EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL + TOOL_COUNT_A2A
 
@@ -339,6 +339,27 @@ def main():
                 trig_lines.append(f"  • {t.get('message', str(t))}")
             trig_lines.append("━━━ END ALERTS ━━━\n")
             system_blocks.append("\n".join(trig_lines))
+
+        # ── Pending improvement proposals ────────────────────────────────────
+        try:
+            from mcp_server.improvement_proposals import ImprovementProposalStore
+            _prop_db = db_path.parent / "ainl_proposals.db"
+            _pstore = ImprovementProposalStore(_prop_db)
+            _pending = [p for p in _pstore.get_recent_proposals(limit=20)
+                        if p.accepted is None and p.validation_passed]
+            if _pending:
+                system_blocks.append(
+                    f"\n━━━ PENDING AINL IMPROVEMENT PROPOSALS ({len(_pending)}) ━━━\n"
+                    + "\n".join(
+                        f"  • [{p.improvement_type}] {p.rationale[:120]}  (id={p.id[:8]})"
+                        for p in _pending[:5]
+                    )
+                    + ("\n  … and more — call ainl_list_proposals to see all" if len(_pending) > 5 else "")
+                    + "\n  → Call ainl_accept_proposal(proposal_id, accepted=True/False) to review."
+                    + "\n━━━ END PROPOSALS ━━━\n"
+                )
+        except Exception as _pe:
+            logger.debug("Proposal surface error (non-fatal): %s", _pe)
 
         # ── Notification banner ───────────────────────────────────────────────
         notif_banner = _format_notif_banner(new_notifs, update_msgs)

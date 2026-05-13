@@ -13,6 +13,10 @@
         "type": "command",
         "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}:$PYTHONPATH\" .venv/bin/python hooks/user_prompt_submit.py",
         "timeout": 5
+      }, {
+        "type": "command",
+        "command": "cd \"${CLAUDE_PLUGIN_ROOT}\" && PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}:$PYTHONPATH\" .venv/bin/python hooks/ainl_detection.py",
+        "timeout": 3
       }]
     }],
     "UserPromptExpansion": [{

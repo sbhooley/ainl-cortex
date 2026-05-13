@@ -342,6 +342,51 @@ async def list_tools() -> list[Tool]:
                 "required": ["adapter"]
             }
         ),
+        # Closed-loop validation tools
+        Tool(
+            name="ainl_propose_improvement",
+            description=(
+                "Validate a proposed AINL workflow improvement and store it for user review. "
+                "The proposed source is validated first — only stored if it compiles cleanly. "
+                "Returns a proposal_id; present the diff to the user then call ainl_accept_proposal."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Original AINL source code"},
+                    "proposed_source": {"type": "string", "description": "Proposed improved AINL source"},
+                    "improvement_type": {
+                        "type": "string",
+                        "enum": ["optimize", "refactor", "fix", "enhance"],
+                        "description": "Category of improvement"
+                    },
+                    "rationale": {"type": "string", "description": "Why this improvement is beneficial"}
+                },
+                "required": ["source", "proposed_source", "improvement_type", "rationale"]
+            }
+        ),
+        Tool(
+            name="ainl_accept_proposal",
+            description="Record whether the user accepted or rejected an improvement proposal. Call after presenting the proposal diff to the user.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "proposal_id": {"type": "string", "description": "Proposal ID from ainl_propose_improvement"},
+                    "accepted": {"type": "boolean", "description": "True if user accepted, false if rejected"}
+                },
+                "required": ["proposal_id", "accepted"]
+            }
+        ),
+        Tool(
+            name="ainl_list_proposals",
+            description="List recent AINL improvement proposals. Shows pending (unreviewed) proposals and historical acceptance rate.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "number", "description": "Max proposals to return", "default": 10}
+                }
+            }
+        ),
         # A2A Tools
         Tool(
             name="a2a_send",
@@ -539,6 +584,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not memory_server.ainl_tools:
                 raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
             result = memory_server.ainl_tools.adapter_contract(**arguments)
+        elif name == "ainl_propose_improvement":
+            if not memory_server.ainl_tools:
+                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
+            result = memory_server.ainl_tools.propose_improvement(**arguments)
+        elif name == "ainl_accept_proposal":
+            if not memory_server.ainl_tools:
+                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
+            result = memory_server.ainl_tools.accept_proposal(**arguments)
+        elif name == "ainl_list_proposals":
+            if not memory_server.ainl_tools:
+                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
+            result = memory_server.ainl_tools.list_proposals(**arguments)
         # A2A tools
         elif name == "a2a_send":
             result = memory_server.a2a_tools.a2a_send(**arguments)
