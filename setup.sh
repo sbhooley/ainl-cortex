@@ -156,12 +156,6 @@ print('yes' if dbs else 'no')
             echo "  [warn] $ERRORS node(s)/edge(s) failed to migrate — partial migration, Python backup intact"
         else
             echo "  [ok] Memory migrated to native backend"
-            # Reset upgrade-hint counter so Python tip never appears on native
-            python3 -c "
-import json; p='$PLUGIN_DIR/config.json'
-cfg=json.load(open(p)); cfg.pop('python_upgrade_hint_shown', None)
-open(p,'w').write(json.dumps(cfg,indent=2))
-"
         fi
     else
         echo "  No existing memory to migrate — starting fresh with native backend"

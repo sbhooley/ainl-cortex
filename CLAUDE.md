@@ -504,3 +504,21 @@ Every goal you set should serve this. Prefer goals that are:
 - **Tied to work**: connected to actual episodes, not aspirational
 
 Do not set goals for things already complete. Do not set goals you cannot track.
+
+---
+
+## Native Backend Upgrade
+
+If the SessionStart banner includes a **"AINL CORTEX: NATIVE BACKEND UPGRADE AVAILABLE"** block:
+
+**At session start — proactively tell the user in your first response:**
+> "Quick heads-up: your AINL Cortex plugin is running on the Python backend. The native Rust backend adds trajectory distillation, procedure scoring, and anchored memory compression. Just ask me to upgrade and I'll handle it."
+
+Keep it to one or two sentences. Don't repeat it if the user dismisses it.
+
+**If the user asks to upgrade / install Rust / switch to native backend:**
+1. Run `bash ~/.claude/plugins/ainl-cortex/setup.sh` — this handles everything in one step: auto-installs Rust via rustup, builds the native extension, and migrates all existing memory
+2. If setup.sh succeeds, ask the user to restart Claude Code for the new backend to take effect
+3. If setup.sh reports Rust install failed, tell the user what went wrong and suggest they install Rust manually from https://rustup.rs then run `bash ~/.claude/plugins/ainl-cortex/setup.sh` again
+
+**Do not run setup.sh automatically without being asked.** The upgrade is optional — the Python backend is fully functional.
