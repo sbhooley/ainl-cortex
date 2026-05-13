@@ -64,12 +64,13 @@ def _do_send(event: str, properties: Dict[str, Any], install_id: str) -> None:
 
 
 def capture(event: str, properties: Dict[str, Any], plugin_root: Path, blocking: bool = False) -> None:
-    """Send a PostHog event. Non-blocking by default (daemon thread)."""
+    """Send a PostHog event. Event names are prefixed ainl_cortex_ automatically."""
     try:
         config = _load_config(plugin_root)
         if not _is_enabled(config):
             return
         iid = _install_id(config)
+        prefixed = f"ainl_cortex_{event}"
         base = {
             "plugin_version": "0.3.0",
             "os": platform.system().lower(),
@@ -77,9 +78,9 @@ def capture(event: str, properties: Dict[str, Any], plugin_root: Path, blocking:
             **properties,
         }
         if blocking:
-            _do_send(event, base, iid)
+            _do_send(prefixed, base, iid)
         else:
-            t = threading.Thread(target=_do_send, args=(event, base, iid), daemon=True)
+            t = threading.Thread(target=_do_send, args=(prefixed, base, iid), daemon=True)
             t.start()
     except Exception:
         pass

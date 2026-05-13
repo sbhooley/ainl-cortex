@@ -150,7 +150,7 @@ try:
     payload = json.dumps({
         "api_key": "phc_ovQDz0iHORAQ8vx2DyKiewAALjaFmpuXOgcI062lqMC",
         "distinct_id": cfg.get("install_id", "unknown"),
-        "event": "install",
+        "event": "ainl_cortex_install",
         "properties": {
             "$lib": "ainl-cortex",
             "plugin_version": "0.3.0",
