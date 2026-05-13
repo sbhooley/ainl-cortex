@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![AINL](https://img.shields.io/badge/AINL-v1.7.0+-orange.svg)](https://ainativelang.com)
+[![AINL](https://img.shields.io/badge/AINL-v1.8.0+-orange.svg)](https://ainativelang.com)
 [![Status](https://img.shields.io/badge/status-production--ready-green.svg)]()
 
 ---
@@ -60,14 +60,14 @@ The plugin activates on the **next session start**. Tell the user:
 After the user restarts, confirm the install worked by checking:
 
 1. The `[AINL Cortex]` banner appears at the top of the session — it shows graph DB status, compression mode, MCP stack health, and A2A bridge status.
-2. Running `/mcp` in Claude Code lists ~20 tools prefixed `ainl-cortex__` (7 memory tools + 6 AINL tools + 7 A2A tools).
+2. Running `/mcp` in Claude Code lists ~23 tools prefixed `ainl-cortex__` (7 memory tools + 9 AINL tools + 7 A2A tools).
 
 ### Troubleshooting — fix these before reporting failure
 
 | Symptom | Fix |
 |---|---|
 | `python3: command not found` | Ask user to install Python 3.10+ from python.org, then re-run `bash setup.sh` |
-| Only ~13 tools visible (no `ainl_` tools) | `cd ~/.claude/plugins/ainl-cortex && .venv/bin/pip install 'ainativelang[mcp]>=1.7.0'` |
+| Only ~13 tools visible (no `ainl_` tools) | `cd ~/.claude/plugins/ainl-cortex && .venv/bin/pip install 'ainativelang[mcp]>=1.8.0'` |
 | No banner at session start | Check `~/.claude/settings.json` has `"ainl-cortex@ainl-local": true` under `enabledPlugins`; if missing, re-run `bash setup.sh` |
 | Banner shows `MCP stack: FAIL` | Run `cd ~/.claude/plugins/ainl-cortex && bash setup.sh` again — setup re-installs deps |
 | `ainl_native (Rust bindings): build failed` | Safe to ignore — plugin falls back to the Python backend automatically. Native backend requires Rust 1.75+ and the armaraos workspace (optional). |
@@ -294,7 +294,7 @@ On your next session start, the `[AINL Cortex]` banner appears:
   ...
 ```
 
-And `/mcp` shows ~20 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, etc.).
+And `/mcp` shows ~23 new tools (`memory_store_episode`, `ainl_run`, `ainl_validate`, `ainl_get_started`, etc.).
 
 From that point on, memory accumulates automatically — no prompts, no configuration needed.
 

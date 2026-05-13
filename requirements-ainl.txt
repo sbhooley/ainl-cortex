@@ -8,7 +8,7 @@ pydantic>=2.0.0
 
 # AINL core package with MCP extras
 # Includes: compiler, runtime, all adapters, MCP server support
-ainativelang[mcp]>=1.7.0,<2.0.0
+ainativelang[mcp]>=1.8.0,<2.0.0
 
 # The [mcp] extra automatically installs:
 # - mcp>=1.0.0 (FastMCP framework)

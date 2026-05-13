@@ -299,6 +299,49 @@ async def list_tools() -> list[Tool]:
                 "required": ["source_a", "source_b"]
             }
         ),
+        Tool(
+            name="ainl_get_started",
+            description="Start AINL authoring from a plain-language goal. First tool to call before writing unfamiliar AINL. Returns an intent-to-syntax guide and the next discovery checkpoint. Pass wizard_state_json from a prior response to resume.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "Plain-language description of what the workflow should do"},
+                    "detail_level": {"type": "string", "enum": ["standard", "minimal", "verbose"], "default": "standard"},
+                    "existing_source": {"type": "string", "description": "Existing AINL source to refine (optional)"},
+                    "wizard_state_json": {"type": "object", "description": "State from a previous ainl_get_started response (optional, for continuity)"},
+                    "current_step": {"type": "string", "description": "Fetch examples for this step without advancing wizard state"},
+                    "request_examples_for": {"type": "string", "description": "Fetch examples for this adapter/topic (e.g. 'fs', 'http')"},
+                    "example_count": {"type": "integer", "default": 3}
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="ainl_step_examples",
+            description="Return code examples for a specific wizard step or adapter topic. Use after ainl_get_started when you want adapter-specific snippets without advancing wizard state.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "current_step": {"type": "string", "description": "Current wizard step name (e.g. 'write_output')"},
+                    "request_examples_for": {"type": "string", "description": "Adapter or topic to get examples for (e.g. 'fs', 'browser', 'http')"},
+                    "example_count": {"type": "integer", "default": 3},
+                    "include_corpus_references": {"type": "boolean", "default": True}
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="ainl_adapter_contract",
+            description="Return the argument and runtime contract for an AINL adapter. Call after ainl_get_started or ainl_capabilities, before writing adapter-specific AINL. Covers http, browser, fs, cache, core, sqlite, http_or_browser.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "adapter": {"type": "string", "description": "Adapter name (e.g. 'http', 'fs', 'browser', 'http_or_browser')"},
+                    "detail_level": {"type": "string", "enum": ["standard", "minimal", "verbose"], "default": "standard"}
+                },
+                "required": ["adapter"]
+            }
+        ),
         # A2A Tools
         Tool(
             name="a2a_send",
@@ -482,8 +525,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = memory_server.ainl_tools.security_report(**arguments)
         elif name == "ainl_ir_diff":
             if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]")
+                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
             result = memory_server.ainl_tools.ir_diff(**arguments)
+        elif name == "ainl_get_started":
+            if not memory_server.ainl_tools:
+                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
+            result = memory_server.ainl_tools.get_started(**arguments)
+        elif name == "ainl_step_examples":
+            if not memory_server.ainl_tools:
+                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
+            result = memory_server.ainl_tools.step_examples(**arguments)
+        elif name == "ainl_adapter_contract":
+            if not memory_server.ainl_tools:
+                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
+            result = memory_server.ainl_tools.adapter_contract(**arguments)
         # A2A tools
         elif name == "a2a_send":
             result = memory_server.a2a_tools.a2a_send(**arguments)

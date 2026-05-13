@@ -1,6 +1,6 @@
 """AINL MCP tools integration for Claude Code.
 
-Uses ainativelang package from PyPI (v1.7.0+).
+Uses ainativelang package from PyPI (v1.8.0+).
 """
 import json
 import hashlib
@@ -24,11 +24,17 @@ try:
     )
     from tooling.security_report import analyze_ir
     from tooling.graph_diff import graph_diff
+    # v1.8.0+: authoring wizard and adapter contracts
+    from tooling.ainl_get_started import (
+        get_started as _ainl_get_started_wizard,
+        step_examples as _ainl_step_examples,
+        adapter_contract as _ainl_adapter_contract_payload,
+    )
     _HAS_AINL = True
 except ImportError:
     _HAS_AINL = False
     print("Warning: ainativelang package not installed. AINL tools will not be available.")
-    print("Install with: pip install ainativelang[mcp]")
+    print("Install with: pip install ainativelang[mcp]>=1.8.0")
 
 
 try:
@@ -449,6 +455,102 @@ class AINLTools:
                 "error": str(e),
                 "error_type": type(e).__name__
             }
+
+    def get_started(
+        self,
+        goal: Optional[str] = None,
+        detail_level: str = "standard",
+        existing_source: Optional[str] = None,
+        path: Optional[str] = None,
+        diagnostics: Optional[Dict] = None,
+        capabilities_snapshot: Optional[Dict] = None,
+        adapter_contracts_snapshot: Optional[Dict] = None,
+        wizard_state_json: Optional[Dict] = None,
+        current_step: Optional[str] = None,
+        request_examples_for: Optional[str] = None,
+        example_count: int = 3,
+    ) -> Dict[str, Any]:
+        """
+        Start AINL authoring from a plain-language goal (v1.8.0+).
+
+        Pass wizard_state_json from a prior response to resume from the last
+        checkpoint. Use current_step or request_examples_for to fetch step-local
+        examples without advancing wizard state.
+        """
+        try:
+            if current_step or request_examples_for:
+                return _ainl_step_examples(
+                    current_step=current_step or request_examples_for or "",
+                    request_examples_for=request_examples_for,
+                    example_count=example_count,
+                )
+            if not goal or not str(goal).strip():
+                return {
+                    "ok": False,
+                    "error": "missing required argument: goal",
+                    "next_step": "Call ainl_get_started with a plain-language goal, e.g. {'goal': 'Monitor an API and alert on failure.'}",
+                }
+            return _ainl_get_started_wizard(
+                goal,
+                detail_level=detail_level,
+                existing_source=existing_source,
+                path=path,
+                diagnostics=diagnostics,
+                capabilities_snapshot=capabilities_snapshot,
+                adapter_contracts_snapshot=adapter_contracts_snapshot,
+                wizard_state_json=wizard_state_json,
+            )
+        except Exception as e:
+            return {"ok": False, "error": str(e), "error_type": type(e).__name__}
+
+    def step_examples(
+        self,
+        current_step: str = "",
+        request_examples_for: Optional[str] = None,
+        example_count: int = 3,
+        include_corpus_references: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Return code examples for a wizard step or adapter topic (v1.8.0+).
+
+        Use this after ainl_get_started when you want examples for a specific
+        adapter (fs, browser, http, cache, etc.) without advancing wizard state.
+        """
+        try:
+            result = _ainl_step_examples(
+                current_step=current_step,
+                request_examples_for=request_examples_for,
+                example_count=example_count,
+                include_corpus_references=include_corpus_references,
+            )
+            result.setdefault("ok", True)
+            result.setdefault("recommended_next_tools", ["ainl_validate", "ainl_compile"])
+            return result
+        except Exception as e:
+            return {"ok": False, "error": str(e), "error_type": type(e).__name__}
+
+    def adapter_contract(
+        self,
+        adapter: str,
+        detail_level: str = "standard",
+    ) -> Dict[str, Any]:
+        """
+        Return the argument and runtime contract for an AINL adapter (v1.8.0+).
+
+        Call this after ainl_get_started or ainl_capabilities and before writing
+        adapter-specific AINL. Covers http, browser, fs, cache, core, sqlite, and
+        composite choices like http_or_browser.
+        """
+        try:
+            if not adapter or not str(adapter).strip():
+                return {
+                    "ok": False,
+                    "error": "missing required argument: adapter",
+                    "next_step": "Call ainl_adapter_contract with an adapter name, e.g. {'adapter': 'http'}",
+                }
+            return _ainl_adapter_contract_payload(adapter, detail_level=detail_level)
+        except Exception as e:
+            return {"ok": False, "error": str(e), "error_type": type(e).__name__}
 
     # Helper methods
 
