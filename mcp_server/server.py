@@ -8,6 +8,7 @@ Exposes graph memory tools for Claude Code integration.
 
 import os
 import sys
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,15 +25,39 @@ def _plugin_root() -> Path:
         return Path(env)
     return Path(__file__).resolve().parent.parent
 
-# Configure logging
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
 log_dir = _plugin_root() / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
+
+# Bound the on-disk MCP-server log identically to hooks.log. Defaults: 5 MB
+# per file × 3 backups. Override via AINL_CORTEX_MCP_LOG_MAX_BYTES /
+# AINL_CORTEX_MCP_LOG_BACKUPS.
+from logging.handlers import RotatingFileHandler  # noqa: E402
+
+_MCP_LOG_MAX_BYTES = _env_int("AINL_CORTEX_MCP_LOG_MAX_BYTES", 5 * 1024 * 1024)
+_MCP_LOG_BACKUPS = _env_int("AINL_CORTEX_MCP_LOG_BACKUPS", 3)
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_dir / "mcp_server.log"),
+        RotatingFileHandler(
+            log_dir / "mcp_server.log",
+            maxBytes=_MCP_LOG_MAX_BYTES,
+            backupCount=_MCP_LOG_BACKUPS,
+            encoding="utf-8",
+        ),
         logging.StreamHandler(sys.stderr)
     ]
 )
@@ -95,9 +120,17 @@ class AINLGraphMemoryServer:
             config = _json.loads((plugin_root / "config.json").read_text())
         except Exception:
             config = {}
+        # Cached on the server so list_tools / call_tool can gate A2A tool
+        # advertisement and dispatch by config.a2a.enabled without re-reading
+        # config.json on every MCP call.
+        self.config = config
+        self._a2a_enabled = bool(config.get("a2a", {}).get("enabled", False))
         project_id = self._compute_project_hash(Path.cwd())
         self.a2a_tools = A2ATools(plugin_root, self.store, project_id, config)
-        logger.info("A2A tools initialized successfully")
+        logger.info(
+            "A2A tools initialized successfully (advertised to MCP: %s)",
+            self._a2a_enabled,
+        )
 
         self.goal_tracker = GoalTracker(self.store, project_id)
         logger.info("Goal tracker initialized")
@@ -105,7 +138,11 @@ class AINLGraphMemoryServer:
         logger.info(f"AINL Graph Memory Server initialized with DB: {self.db_path}")
 
     def _get_db_path(self) -> Path:
-        """Get database path (project-specific if possible)"""
+        """Get database path for the active project (per-repo by default).
+
+        Uses the shared resolver in hooks/shared/project_id.py so the MCP
+        server, hooks, and standalone scripts all agree on which bucket the
+        current cwd belongs to."""
         cwd = Path.cwd()
         project_hash = self._compute_project_hash(cwd)
         memory_dir = Path.home() / ".claude" / "projects" / project_hash / "graph_memory"
@@ -113,10 +150,19 @@ class AINLGraphMemoryServer:
         return memory_dir / "ainl_memory.db"
 
     def _compute_project_hash(self, cwd: Path) -> str:
-        """Compute stable global project hash (same bucket as hooks)."""
-        import hashlib
-        claude_dir = Path.home() / ".claude"
-        return hashlib.sha256(str(claude_dir.resolve()).encode()).hexdigest()[:16]
+        """Resolve the project ID via the shared per-repo resolver.
+
+        Kept as an instance method for back-compat with any caller that holds
+        a reference to it; it now delegates to hooks/shared/project_id.py
+        rather than recomputing the legacy global hash inline."""
+        # Lazy import: keep mcp_server importable from contexts where the
+        # hooks/ tree may not be on sys.path yet.
+        try:
+            from project_id import get_project_id  # type: ignore
+        except ImportError:
+            sys.path.insert(0, str(_plugin_root() / "hooks"))
+            from shared.project_id import get_project_id  # type: ignore
+        return get_project_id(cwd)
 
 
 # Create server instance
@@ -126,8 +172,13 @@ memory_server = AINLGraphMemoryServer()
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
-    """List available MCP tools"""
-    return [
+    """List available MCP tools.
+
+    A2A tools (``a2a_*``) are advertised only when ``config.a2a.enabled`` is
+    true; otherwise they are filtered out so the model does not see — and
+    cannot accidentally call — features that are intentionally disabled.
+    """
+    tools: list[Tool] = [
         Tool(
             name="memory_store_episode",
             description="Store a coding session episode with tool calls and outcomes",
@@ -526,6 +577,11 @@ async def list_tools() -> list[Tool]:
         )
     ]
 
+    if not getattr(memory_server, "_a2a_enabled", False):
+        tools = [t for t in tools if not t.name.startswith("a2a_")]
+
+    return tools
+
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
@@ -539,6 +595,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             _tel_capture("tool_used", {"tool": name}, _plugin_root())
         except Exception:
             pass
+
+        # Belt-and-suspenders A2A gate: list_tools already hides a2a_* names
+        # when the feature is disabled, but a non-conformant client could
+        # still attempt a direct call_tool dispatch. Return a structured
+        # error rather than executing or 500-ing.
+        if name.startswith("a2a_") and not getattr(memory_server, "_a2a_enabled", False):
+            return [TextContent(type="text", text=json.dumps({
+                "ok": False,
+                "error": "A2A messaging is disabled in this installation",
+                "error_type": "feature_disabled",
+                "hint": "Set 'a2a.enabled' to true in config.json and ensure the ArmaraOS daemon is running.",
+            }))]
 
         if name == "memory_store_episode":
             result = await memory_server.memory_store_episode(**arguments)
@@ -629,12 +697,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         else:
             raise ValueError(f"Unknown tool: {name}")
 
-        import json
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     except Exception as e:
         logger.error(f"Tool error: {e}", exc_info=True)
-        import json
         return [TextContent(type="text", text=json.dumps({"error": str(e)}, indent=2))]
 
 
@@ -794,12 +860,27 @@ async def memory_recall_context(
     files_mentioned: Optional[List[str]] = None,
     max_nodes: int = 50
 ) -> Dict[str, Any]:
-    """Recall memory context"""
+    """Recall memory context.
+
+    Always merges in the legacy global bucket (LEGACY_GLOBAL_PROJECT_ID) so
+    callers that pass a per-repo `project_id` still see pre-issue-1 memories
+    until `scripts/repartition_by_repo.py` has been run."""
     try:
+        try:
+            from project_id import LEGACY_GLOBAL_PROJECT_ID  # type: ignore
+        except ImportError:
+            sys.path.insert(0, str(_plugin_root() / "hooks"))
+            from shared.project_id import LEGACY_GLOBAL_PROJECT_ID  # type: ignore
+
+        chain = [project_id]
+        if LEGACY_GLOBAL_PROJECT_ID != project_id:
+            chain.append(LEGACY_GLOBAL_PROJECT_ID)
+
         context = RetrievalContext(
             project_id=project_id,
             current_task=current_task,
-            files_mentioned=files_mentioned or []
+            files_mentioned=files_mentioned or [],
+            project_id_chain=chain,
         )
         memory_context = memory_server.retrieval.compile_memory_context(context, max_nodes)
         return {

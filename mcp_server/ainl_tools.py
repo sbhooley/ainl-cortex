@@ -44,6 +44,152 @@ except ImportError:
     _HAS_CACHE_ADAPTER = False
 
 
+def _make_compiler_context(strict: bool):
+    """Build a CompilerContext that works across the ainativelang API shift.
+
+    ainativelang <1.7 accepted ``CompilerContext(strict=bool)``; 1.7+ removed
+    the kwarg and moved strictness onto the compiler instance via
+    ``AICodeCompiler.strict_mode``. We keep the legacy call path inside a
+    try/except so this module survives a hypothetical future revert without
+    behavior change.
+    """
+    try:
+        return CompilerContext(strict=strict)  # type: ignore[call-arg]
+    except TypeError:
+        return CompilerContext()
+
+
+def _diag_to_dict(diag: Any) -> Dict[str, Any]:
+    """Normalize a Diagnostic (1.7+ dataclass, older dict, or repr-only) into
+    a JSON-serializable dict.
+
+    Older ainativelang produced plain dicts on ``CompilationDiagnosticError``;
+    1.7+ ships a ``Diagnostic`` dataclass exposing ``to_dict()``. Both shapes
+    must be handled because the error envelope ends up in MCP tool JSON
+    responses (which must be serializable) and feeds ``_get_repair_steps``
+    (which calls ``.get()``).
+    """
+    if diag is None:
+        return {}
+    if isinstance(diag, dict):
+        return diag
+    to_dict = getattr(diag, "to_dict", None)
+    if callable(to_dict):
+        try:
+            return to_dict()
+        except Exception:
+            pass
+    try:
+        import dataclasses
+
+        if dataclasses.is_dataclass(diag):
+            return dataclasses.asdict(diag)
+    except Exception:
+        pass
+    return {
+        "kind": getattr(diag, "kind", type(diag).__name__),
+        "message": getattr(diag, "message", str(diag)),
+    }
+
+
+def _diags_to_list(diags: Any) -> List[Dict[str, Any]]:
+    """Normalize an iterable of Diagnostics into a list of dicts."""
+    if not diags:
+        return []
+    return [_diag_to_dict(d) for d in diags]
+
+
+def _graph_diff(ir_a, ir_b, *, labels: Optional[List[str]] = None):
+    """Call graph_diff across the labels=/label_id= rename in 1.7+.
+
+    The new signature accepts a single ``label_id``; we collapse a list to
+    its first element for parity, and fall back to the legacy plural
+    keyword if available.
+    """
+    label_id = labels[0] if labels else None
+    try:
+        return graph_diff(ir_a, ir_b, label_id=label_id)
+    except TypeError:
+        return graph_diff(ir_a, ir_b, labels=labels)  # type: ignore[call-arg]
+
+
+def _make_http_adapter(http_cfg: Dict[str, Any]):
+    """Construct a SimpleHttpAdapter across the timeout-kwarg rename.
+
+    1.7+ renamed ``timeout_s`` to ``default_timeout_s``. We accept both
+    spellings on the input config (``timeout_s`` wins for back-compat with
+    existing AINL workflow files) and try each kwarg in turn.
+    """
+    allow_hosts = http_cfg.get("allow_hosts")
+    timeout = http_cfg.get("timeout_s", http_cfg.get("default_timeout_s", 30))
+    try:
+        return SimpleHttpAdapter(
+            allow_hosts=allow_hosts,
+            default_timeout_s=timeout,
+        )
+    except TypeError:
+        return SimpleHttpAdapter(  # type: ignore[call-arg]
+            allow_hosts=allow_hosts,
+            timeout_s=timeout,
+        )
+
+
+def _make_engine(ir, *, registry, limits: Optional[Dict[str, Any]] = None):
+    """Construct a RuntimeEngine across the 1.6/1.7+ API shift.
+
+    1.7+ requires ``ir`` (and accepts ``adapters`` / ``limits``) at
+    construction time and removed the ``engine.registry`` mutable accessor.
+    Older versions allowed ``RuntimeEngine()`` followed by
+    ``engine.registry.register(...)`` — we keep that path as a fallback.
+    """
+    try:
+        return RuntimeEngine(ir, adapters=registry, limits=limits or None)
+    except TypeError:
+        engine = RuntimeEngine()  # legacy
+        if hasattr(engine, "registry") and registry is not None:
+            for name, adapter in getattr(registry, "adapters", {}).items():
+                engine.registry.register(name, adapter)
+        if limits:
+            if hasattr(engine, "max_steps"):
+                engine.max_steps = limits.get("max_steps", 500000)
+            if hasattr(engine, "max_adapter_calls"):
+                engine.max_adapter_calls = limits.get("max_adapter_calls", 50000)
+        return engine
+
+
+def _engine_run(engine, *, label: Optional[str], frame: Dict[str, Any]):
+    """Run an engine across the 1.6/1.7+ API shift.
+
+    1.7+ exposes ``run_label(label_id, frame=...)``; the older API used
+    ``engine.run(ir, frame=..., label=...)``.
+    """
+    if hasattr(engine, "run_label"):
+        target_label = label or engine.default_entry_label()
+        return engine.run_label(target_label, frame=frame)
+    # legacy: requires the original IR; engine has no public IR accessor in
+    # the new API, so this path only fires when run_label is missing.
+    return engine.run(frame=frame, label=label)  # type: ignore[call-arg]
+
+
+def _compile(compiler, source: str, *, strict: bool):
+    """Compile ``source`` with the given strict flag, regardless of upstream
+    ainativelang version.
+
+    The 1.7 release renamed the keyword argument from ``ctx=`` to
+    ``context=`` and dropped strictness from CompilerContext, so we set
+    ``compiler.strict_mode`` (when supported) and fall back through both
+    keyword spellings. Any explicit ``ctx=``/``context=`` call site can be
+    replaced by a single call to this helper.
+    """
+    if hasattr(compiler, "strict_mode"):
+        compiler.strict_mode = strict
+    ctx = _make_compiler_context(strict)
+    try:
+        return compiler.compile(source, context=ctx)
+    except TypeError:
+        return compiler.compile(source, ctx=ctx)
+
+
 class AINLTools:
     """AINL MCP tool implementations."""
 
@@ -100,8 +246,7 @@ class AINLTools:
             }
         """
         try:
-            ctx = CompilerContext(strict=strict)
-            ir = self.compiler.compile(source, ctx=ctx)
+            ir = _compile(self.compiler, source, strict=strict)
 
             return {
                 "valid": True,
@@ -119,7 +264,7 @@ class AINLTools:
                 ]
             }
         except CompilationDiagnosticError as e:
-            diagnostics = e.diagnostics if hasattr(e, 'diagnostics') else []
+            diagnostics = _diags_to_list(getattr(e, 'diagnostics', None))
             primary = diagnostics[0] if diagnostics else None
 
             return {
@@ -155,8 +300,21 @@ class AINLTools:
         Returns IR + frame hints for use with ainl_run.
         """
         try:
-            ctx = CompilerContext(strict=strict)
-            ir = self.compiler.compile(source, ctx=ctx)
+            ir = _compile(self.compiler, source, strict=strict)
+
+            # 1.7+ no longer raises CompilationDiagnosticError for input that
+            # produced zero labels (e.g. "INVALID AINL" — a bare token line is
+            # silently absorbed). In strict mode, treat empty/no-graph IR as
+            # a compile failure so callers see ``ok: false`` instead of valid
+            # garbage.
+            if strict and not ir.get("labels"):
+                return {
+                    "ok": False,
+                    "error": "Compiled IR has no labels (no graph defined). Source may be malformed.",
+                    "diagnostics": _diags_to_list(ir.get("diagnostics") or ir.get("structured_diagnostics")),
+                    "error_type": "empty_graph",
+                    "recommended_next_tools": ["ainl_validate"],
+                }
 
             result = {
                 "ok": True,
@@ -174,7 +332,7 @@ class AINLTools:
             return {
                 "ok": False,
                 "error": str(e),
-                "diagnostics": e.diagnostics if hasattr(e, 'diagnostics') else [],
+                "diagnostics": _diags_to_list(getattr(e, 'diagnostics', None)),
                 "recommended_next_tools": ["ainl_validate"]
             }
         except Exception as e:
@@ -220,53 +378,39 @@ class AINLTools:
         start_time = time.time()
 
         try:
-            # Compile
-            ctx = CompilerContext(strict=True)
-            ir = self.compiler.compile(source, ctx=ctx)
+            ir = _compile(self.compiler, source, strict=True)
 
-            # Create runtime
-            engine = RuntimeEngine()
+            registry = AdapterRegistry()
+            registry.register("core", CoreBuiltinAdapter())
 
-            # Register core adapter (always available)
-            engine.registry.register("core", CoreBuiltinAdapter())
-
-            # Register requested adapters
             if adapters:
                 enabled = adapters.get("enable", [])
 
                 if "http" in enabled:
                     http_cfg = adapters.get("http", {})
-                    engine.registry.register("http", SimpleHttpAdapter(
-                        allow_hosts=http_cfg.get("allow_hosts"),
-                        timeout_s=http_cfg.get("timeout_s", 30)
-                    ))
+                    registry.register("http", _make_http_adapter(http_cfg))
 
                 if "fs" in enabled:
                     fs_cfg = adapters.get("fs", {})
-                    engine.registry.register("fs", SandboxedFileSystemAdapter(
+                    registry.register("fs", SandboxedFileSystemAdapter(
                         root=fs_cfg.get("root", "/tmp"),
                         allow_extensions=fs_cfg.get("allow_extensions")
                     ))
 
                 if "cache" in enabled and _HAS_CACHE_ADAPTER:
                     cache_cfg = adapters.get("cache", {})
-                    engine.registry.register("cache", LocalFileCacheAdapter(
+                    registry.register("cache", LocalFileCacheAdapter(
                         path=cache_cfg.get("path", "cache.json")
                     ))
 
                 if "sqlite" in enabled:
                     sqlite_cfg = adapters.get("sqlite", {})
-                    engine.registry.register("sqlite", SimpleSqliteAdapter(
+                    registry.register("sqlite", SimpleSqliteAdapter(
                         db_path=sqlite_cfg.get("db_path")
                     ))
 
-            # Apply limits
-            if limits:
-                engine.max_steps = limits.get("max_steps", 500000)
-                engine.max_adapter_calls = limits.get("max_adapter_calls", 50000)
-
-            # Execute
-            result = engine.run(ir, frame=frame or {}, label=label)
+            engine = _make_engine(ir, registry=registry, limits=limits)
+            result = _engine_run(engine, label=label, frame=frame or {})
 
             # Calculate execution time
             duration_ms = (time.time() - start_time) * 1000
@@ -349,7 +493,7 @@ class AINLTools:
             return {
                 "ok": False,
                 "error": str(e),
-                "diagnostics": e.diagnostics if hasattr(e, 'diagnostics') else [],
+                "diagnostics": _diags_to_list(getattr(e, 'diagnostics', None)),
                 "error_type": "compilation_error",
                 "recommended_next_tools": ["ainl_validate"]
             }
@@ -413,8 +557,7 @@ class AINLTools:
         Analyze AINL source for security concerns.
         """
         try:
-            ctx = CompilerContext(strict=False)
-            ir = self.compiler.compile(source, ctx=ctx)
+            ir = _compile(self.compiler, source, strict=False)
 
             report = analyze_ir(ir)
 
@@ -446,11 +589,10 @@ class AINLTools:
         Shows blast radius of changes.
         """
         try:
-            ctx = CompilerContext(strict=False)
-            ir_a = self.compiler.compile(source_a, ctx=ctx)
-            ir_b = self.compiler.compile(source_b, ctx=ctx)
+            ir_a = _compile(self.compiler, source_a, strict=False)
+            ir_b = _compile(self.compiler, source_b, strict=False)
 
-            diff = graph_diff(ir_a, ir_b, labels=labels)
+            diff = _graph_diff(ir_a, ir_b, labels=labels)
 
             return {
                 "ok": True,
@@ -586,14 +728,19 @@ class AINLTools:
 
         return hints
 
-    def _get_repair_steps(self, diagnostic: Optional[Dict]) -> List[str]:
-        """Generate repair steps from diagnostic."""
+    def _get_repair_steps(self, diagnostic: Optional[Any]) -> List[str]:
+        """Generate repair steps from diagnostic.
+
+        Accepts either a dict (legacy ainativelang) or a Diagnostic dataclass
+        (1.7+); both are normalized via _diag_to_dict before introspection.
+        """
         if not diagnostic:
             return ["Check AINL syntax", "Run ainl_validate with strict=true"]
 
+        diagnostic = _diag_to_dict(diagnostic)
         steps = []
-        kind = diagnostic.get("kind", "")
-        msg = diagnostic.get("message", "")
+        kind = diagnostic.get("kind", "") or ""
+        msg = diagnostic.get("message", "") or ""
 
         if "unknown_adapter" in kind.lower() or "unknown adapter" in msg.lower():
             steps.append("Run ainl_capabilities to see available adapters")

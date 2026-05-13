@@ -29,17 +29,37 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RetrievalContext:
-    """Context for ranking relevance"""
+    """Context for ranking relevance.
+
+    `project_id` is the active per-repo bucket. `project_id_chain`, when set,
+    is the read-fallback list (typically `[project_id, LEGACY_GLOBAL_PROJECT_ID]`)
+    used to merge in pre-rewrite memories until backfill has run. When unset,
+    only `project_id` is queried (back-compat).
+    """
     project_id: str
     current_task: Optional[str] = None
     files_mentioned: List[str] = None
     topics: List[str] = None
+    project_id_chain: Optional[List[str]] = None
 
     def __post_init__(self):
         if self.files_mentioned is None:
             self.files_mentioned = []
         if self.topics is None:
             self.topics = []
+        # Default chain = single id, dedup-preserve-order.
+        if self.project_id_chain is None:
+            self.project_id_chain = [self.project_id]
+        else:
+            seen = set()
+            deduped = []
+            for pid in self.project_id_chain:
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    deduped.append(pid)
+            if not deduped:
+                deduped = [self.project_id]
+            self.project_id_chain = deduped
 
 
 class MemoryRetrieval:
@@ -114,11 +134,15 @@ class MemoryRetrieval:
         scored = []
         now = int(time.time())
 
+        chain = set(context.project_id_chain or [context.project_id])
+
         for node in nodes:
             score = 0.0
 
-            # Project match (critical)
-            if node.project_id == context.project_id:
+            # Project match (critical) — any id in the read-fallback chain
+            # counts so legacy nodes still earn the boost during the
+            # backfill grace period.
+            if node.project_id in chain:
                 score += self.PROJECT_MATCH_SCORE
 
             # Recency (decay over 30 days)
@@ -197,12 +221,38 @@ class MemoryRetrieval:
             " ".join(context.topics)
         ])).strip()
 
-        # Gather broad candidate pools — similarity re-ranks them so old-but-relevant
-        # nodes surface alongside recent ones
-        all_episodes = self.store.query_episodes_since(0, limit=100, project_id=context.project_id)
-        all_semantics = self.store.query_by_type(NodeType.SEMANTIC, context.project_id, limit=200, min_confidence=0.2)
-        all_procedurals = self.store.query_by_type(NodeType.PROCEDURAL, context.project_id, limit=100, min_confidence=0.2)
-        all_personas = self.store.query_by_type(NodeType.PERSONA, context.project_id, limit=100, min_confidence=0.1)
+        # Gather broad candidate pools across every project_id in the legacy
+        # read-fallback chain. After issue 1 lands, the chain is normally
+        # [per_repo_id, LEGACY_GLOBAL_PROJECT_ID] so users keep seeing memories
+        # that were captured before the per-repo rewrite. Dedup by node id.
+        chain = context.project_id_chain or [context.project_id]
+
+        def _query_chain(fn):
+            seen: Dict[str, GraphNode] = {}
+            for pid in chain:
+                for node in fn(pid):
+                    if node.id not in seen:
+                        seen[node.id] = node
+            return list(seen.values())
+
+        all_episodes = _query_chain(
+            lambda pid: self.store.query_episodes_since(0, limit=100, project_id=pid)
+        )
+        all_semantics = _query_chain(
+            lambda pid: self.store.query_by_type(
+                NodeType.SEMANTIC, pid, limit=200, min_confidence=0.2
+            )
+        )
+        all_procedurals = _query_chain(
+            lambda pid: self.store.query_by_type(
+                NodeType.PROCEDURAL, pid, limit=100, min_confidence=0.2
+            )
+        )
+        all_personas = _query_chain(
+            lambda pid: self.store.query_by_type(
+                NodeType.PERSONA, pid, limit=100, min_confidence=0.1
+            )
+        )
 
         # Pre-compute similarity scores across ALL candidates in one pass
         all_candidates = all_episodes + all_semantics + all_procedurals + all_personas
@@ -228,8 +278,13 @@ class MemoryRetrieval:
             if node.data.get('strength', 0) >= 0.1
         ]
 
-        # Failures — similarity-ranked unresolved failures for this project
-        failures = self.store.get_unresolved_failures(context.project_id, limit=50)
+        # Failures — similarity-ranked unresolved failures across the chain.
+        failures_seen: Dict[str, GraphNode] = {}
+        for pid in chain:
+            for node in self.store.get_unresolved_failures(pid, limit=50):
+                if node.id not in failures_seen:
+                    failures_seen[node.id] = node
+        failures = list(failures_seen.values())
         if query_text and failures:
             self.compute_similarity_scores(failures, query_text, context.project_id)
         ranked_failures = self.rank_nodes(failures, context)
