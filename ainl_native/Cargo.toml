@@ -15,23 +15,23 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Core graph memory
-ainl-memory = "0.1.11-alpha"
-ainl-contracts = "0.1.2"
+ainl-memory = "0.1.12-alpha"
+ainl-contracts = "0.1.3"
 
 # Persona evolution
-ainl-persona = "0.1.8"
+ainl-persona = "0.1.9"
 
 # Semantic tagging
-ainl-semantic-tagger = { version = "0.1.8", features = ["serde"] }
+ainl-semantic-tagger = { version = "0.1.9", features = ["serde"] }
 
 # Failure learning
-ainl-failure-learning = "0.1.1"
+ainl-failure-learning = "0.1.2"
 
 # Procedure learning
-ainl-procedure-learning = "0.1.0"
+ainl-procedure-learning = "0.1.1"
 
 # Context freshness
-ainl-context-freshness = "0.1.1"
+ainl-context-freshness = "0.1.2"
 
 # Trajectory
-ainl-trajectory = "0.1.1"
+ainl-trajectory = "0.1.2"
