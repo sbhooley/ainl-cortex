@@ -2,7 +2,7 @@
 """
 Notification poller for ainl-cortex.
 
-Fetches https://ainativelang.com/notifications once per session, filters for
+Fetches https://www.ainativelang.com/notifications once per session, filters for
 this plugin, surfaces unseen entries in the SessionStart banner, and optionally
 applies auto-updates when the server marks a release safe.
 
@@ -16,6 +16,7 @@ Client algorithm (matches server contract):
 
 import json
 import os
+import ssl
 import subprocess
 import urllib.error
 import urllib.request
@@ -23,7 +24,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-NOTIFICATIONS_URL = "https://ainativelang.com/notifications"
+
+def _ssl_context() -> ssl.SSLContext:
+    """Return an SSL context that works on macOS without system cert config."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    return ssl.create_default_context()
+
+NOTIFICATIONS_URL = "https://www.ainativelang.com/notifications"
 PLUGIN_ARTIFACT = "ainl-cortex"
 OUR_TARGETS: frozenset = frozenset({"claude-code-plugin", "*"})
 SEEN_FILE_REL = Path("a2a") / "notifications_seen.json"
@@ -93,7 +104,8 @@ def _fetch(url: str, version: str, timeout: float) -> Optional[Dict[str, Any]]:
     req.add_header("Accept", "application/json")
     req.add_header("User-Agent", f"ainl-cortex/{version}")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        ctx = _ssl_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             raw = resp.read().decode("utf-8")
             return json.loads(raw)
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
