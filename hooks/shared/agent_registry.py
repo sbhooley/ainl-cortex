@@ -91,11 +91,40 @@ def _is_pid_alive(pid: int) -> bool:
         return False
 
 
+def _find_claude_pid() -> int:
+    """
+    Walk up the process tree to find the long-lived Claude Code CLI process.
+    The hook script is a short-lived child; we want its grandparent (or higher)
+    that stays alive for the session.
+    """
+    pid = os.getpid()
+    try:
+        # Walk up: hook → python interpreter → Claude Code CLI
+        for _ in range(5):
+            ppid = int(subprocess.run(
+                ["ps", "-p", str(pid), "-o", "ppid="],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip())
+            if ppid <= 1:
+                break
+            # Stop at the first non-python, non-sh parent
+            name_out = subprocess.run(
+                ["ps", "-p", str(ppid), "-o", "comm="],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip().lower()
+            if name_out and not any(x in name_out for x in ("python", "sh", "bash", "zsh")):
+                return ppid
+            pid = ppid
+    except Exception:
+        pass
+    return os.getpid()
+
+
 def register_self(plugin_root: Path, name: str, cwd: Optional[Path] = None) -> None:
     """Write this instance's registry entry. Idempotent — safe on every SessionStart."""
     _atomic_write(_registry_file(plugin_root, name), {
         "name": name,
-        "pid": os.getpid(),
+        "pid": _find_claude_pid(),
         "project": str(cwd or Path.cwd()),
         "registered_at": int(time.time()),
         "type": "claude-code",
@@ -133,13 +162,24 @@ def list_live_agents(plugin_root: Path, cleanup_stale: bool = True) -> List[Dict
     return agents
 
 
-def is_local_agent(plugin_root: Path, name: str) -> bool:
-    """True if a live Claude Code instance with this name is registered."""
+def is_local_agent(plugin_root: Path, name: str, max_age_seconds: int = 86400) -> bool:
+    """
+    True if a Claude Code instance with this name appears to be active.
+
+    Checks PID liveness first; falls back to recency (registered within
+    max_age_seconds) so that sessions whose hook PID has already exited
+    still route correctly for local mailbox delivery.
+    """
     f = _registry_file(plugin_root, name)
     if not f.exists():
         return False
     try:
-        return _is_pid_alive(json.loads(f.read_text()).get("pid", 0))
+        data = json.loads(f.read_text())
+        if _is_pid_alive(data.get("pid", 0)):
+            return True
+        # Recency fallback: treat a recently-registered entry as live
+        age = time.time() - data.get("registered_at", 0)
+        return age < max_age_seconds
     except Exception:
         return False
 

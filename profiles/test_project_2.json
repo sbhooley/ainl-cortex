@@ -4,15 +4,15 @@
   "auto_detected": true,
   "stats_by_mode": {
     "balanced": {
-      "usage_count": 15,
-      "total_original_tokens": 120,
-      "total_compressed_tokens": 120,
+      "usage_count": 18,
+      "total_original_tokens": 144,
+      "total_compressed_tokens": 144,
       "total_tokens_saved": 0,
       "avg_savings_ratio": 0.0,
       "avg_quality_score": 1.0,
-      "last_used": 1778687403.46824
+      "last_used": 1778732352.019929
     }
   },
   "created_at": 1776753437.344421,
-  "updated_at": 1778687403.46824
+  "updated_at": 1778732352.019929
 }

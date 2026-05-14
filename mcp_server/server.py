@@ -605,7 +605,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "ok": False,
                 "error": "A2A messaging is disabled in this installation",
                 "error_type": "feature_disabled",
-                "hint": "Set 'a2a.enabled' to true in config.json and ensure the ArmaraOS daemon is running.",
+                "hint": "Set 'a2a.enabled' to true in config.json, then restart Claude Code.",
             }))]
 
         if name == "memory_store_episode":

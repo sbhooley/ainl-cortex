@@ -64,7 +64,7 @@ def test_register_creates_file(plugin_root):
     assert f.exists()
     data = json.loads(f.read_text())
     assert data["name"] == "test-agent"
-    assert data["pid"] == os.getpid()
+    assert data["pid"] > 0  # _find_claude_pid() walks up to the long-lived parent process
     assert data["type"] == "claude-code"
 
 

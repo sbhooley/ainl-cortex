@@ -34,7 +34,7 @@
     }
   },
   "a2a": {
-    "enabled": false,
+    "enabled": true,
     "daemon_json": "~/.armaraos/daemon.json",
     "bridge_port": 7860,
     "bridge_host": "127.0.0.1",
