@@ -794,12 +794,6 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             except Exception as e:
                 logger.warning(f"Goal write failed: {e}")
 
-            try:
-                from anchored_summary import update_anchored_summary
-                update_anchored_summary(store, project_id)
-            except Exception as e:
-                logger.warning(f"Anchored summary update failed: {e}")
-
     # Drain compression events and update auto-tune profile
     try:
         _inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
@@ -891,6 +885,7 @@ def main():
         plugin_root = Path(__file__).parent.parent
 
         logger.info(f"Finalizing session for project {project_id}")
+        _t0 = time.perf_counter()
 
         session_data = drain_session_inbox(project_id)
 
@@ -899,11 +894,17 @@ def main():
         else:
             logger.debug("No session data to finalize")
 
-        # Deregister from the local agent registry so other instances don't
-        # try to deliver to a dead mailbox.
         try:
-            from shared.agent_registry import get_agent_name, deregister_self
-            deregister_self(plugin_root, get_agent_name(cwd))
+            from shared.hook_metrics import append_hook_metric
+
+            append_hook_metric(
+                plugin_root,
+                "stop_finalize",
+                {
+                    "project_id": project_id,
+                    "stop_ms": round((time.perf_counter() - _t0) * 1000, 2),
+                },
+            )
         except Exception:
             pass
 

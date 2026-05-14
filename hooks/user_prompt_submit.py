@@ -9,12 +9,13 @@ Follows AINL retrieval pattern: compact, ranked, project-scoped.
 import sys
 import json
 import time
+import hashlib
 from pathlib import Path
 
 # Add shared module to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared.project_id import get_project_id, GLOBAL_PROJECT_ID, LEGACY_GLOBAL_PROJECT_ID
+from shared.project_id import get_project_id, LEGACY_GLOBAL_PROJECT_ID
 from shared.logger import log_event, log_error, get_logger
 from shared.a2a_inbox import read_inbox, clear_inbox
 from shared.a2a_log import append_log
@@ -30,157 +31,101 @@ except ImportError:
     _NATIVE_OK = False
 
 
-def format_memory_brief(context: dict, project_id: str, compress: bool = False, prebuilt_brief: str = None) -> tuple:
+def format_memory_brief(
+    context: dict,
+    project_id: str,
+    compress: bool = False,
+    prebuilt_brief: str = None,
+    budget=None,
+):
     """
-    Format memory context into compact text brief.
+    Format memory context into a bounded markdown brief (tiered summary/details).
 
-    Max ~800 tokens to preserve Claude Code context budget.
-
-    Returns: (brief_text, compression_metrics, pipeline_stats)
+    Returns:
+        (brief_text, compression_metrics, pipeline_stats, recall_pack_stats)
     """
-    if prebuilt_brief is not None:
-        brief = prebuilt_brief
-        compression_metrics = None
-        pipeline_stats = None
-        if compress:
-            try:
-                sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
-                from compression_pipeline import get_compression_pipeline
-                pipeline = get_compression_pipeline()
-                result = pipeline.compress_memory_context(brief, project_id)
-                brief = result.compressed_text
-                if result.compression_metrics:
-                    compression_metrics = {
-                        "mode": result.mode_used.value,
-                        "mode_source": result.mode_source,
-                        "original_tokens": result.compression_metrics.original_tokens,
-                        "compressed_tokens": result.compression_metrics.compressed_tokens,
-                        "tokens_saved": result.compression_metrics.tokens_saved,
-                        "savings_pct": result.compression_metrics.savings_ratio_pct,
-                    }
-            except Exception as e:
-                logger.warning(f"Compression pipeline failed, using original: {e}")
-        max_chars = 800 * 4
-        if len(brief) > max_chars:
-            brief = brief[:max_chars] + "\n\n[... truncated for context budget]"
-        return brief, compression_metrics, pipeline_stats
+    _mcp = str(Path(__file__).parent.parent / "mcp_server")
+    if _mcp not in sys.path:
+        sys.path.insert(0, _mcp)
+    from recall_budget import (
+        RecallBudget,
+        apply_char_ceiling,
+        format_memory_context_markdown,
+        memory_brief_has_content,
+        pack_native_brief,
+        recall_budget_from_memory_config,
+    )
 
-    lines = ["## Relevant Graph Memory", ""]
-
-    # Recent episodes
-    episodes = context.get('recent_episodes', [])
-    if episodes:
-        lines.append("**Recent Work:**")
-        for ep in episodes[:3]:
-            import time
-            timestamp = time.strftime('%Y-%m-%d', time.localtime(ep['created_at']))
-            task = ep['data']['task_description'][:60]
-            outcome = ep['data']['outcome']
-            lines.append(f"- [{timestamp}] {task} → {outcome}")
-        lines.append("")
-
-    # Relevant facts
-    facts = context.get('relevant_facts', [])
-    if facts:
-        lines.append("**Known Facts:**")
-        for fact in facts[:5]:
-            fact_text = fact['data']['fact'][:80]
-            confidence = fact['confidence']
-            lines.append(f"- {fact_text} (conf: {confidence:.2f})")
-        lines.append("")
-
-    # Applicable patterns
-    patterns = context.get('applicable_patterns', [])
-    if patterns:
-        lines.append("**Reusable Patterns:**")
-        for pat in patterns[:2]:
-            name = pat['data']['pattern_name']
-            sequence = ' → '.join(pat['data']['tool_sequence'][:4])
-            fitness = pat['data']['fitness']
-            lines.append(f"- \"{name}\": {sequence} (fitness: {fitness:.2f})")
-        lines.append("")
-
-    # Known failures
-    failures = context.get('known_failures', [])
-    if failures:
-        lines.append("**Known Issues:**")
-        for fail in failures[:3]:
-            file = fail['data'].get('file', 'unknown')
-            line_num = fail['data'].get('line', '?')
-            msg = fail['data'].get('error_message', '')[:60]
-            lines.append(f"- {file}:{line_num}: {msg}")
-        lines.append("")
-
-    # Persona traits
-    traits = context.get('persona_traits', [])
-    if traits:
-        trait_strs = []
-        for trait in traits[:3]:
-            name = trait['data']['trait_name']
-            strength = trait['data']['strength']
-            trait_strs.append(f"{name} ({strength:.2f})")
-
-        if trait_strs:
-            lines.append(f"**Project Style:** {', '.join(trait_strs)}")
-            lines.append("")
-
-    brief = "\n".join(lines)
-
-    compression_metrics = None
-    pipeline_stats = None
-
-    # Apply unified compression pipeline if enabled
-    if compress:
+    if budget is None:
         try:
-            # Import here to avoid circular dependency
-            sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+            from config import get_config
+            budget = recall_budget_from_memory_config(get_config().get_memory_block())
+        except Exception:
+            budget = recall_budget_from_memory_config({})
+
+    def _compress_block(text: str, pid: str):
+        try:
             from compression_pipeline import get_compression_pipeline
-
             pipeline = get_compression_pipeline()
-            result = pipeline.compress_memory_context(brief, project_id)
-
-            brief = result.compressed_text
-
+            result = pipeline.compress_memory_context(text, pid)
+            cm = None
+            ps = None
             if result.compression_metrics:
-                compression_metrics = {
+                cm = {
                     "mode": result.mode_used.value,
                     "mode_source": result.mode_source,
                     "original_tokens": result.compression_metrics.original_tokens,
                     "compressed_tokens": result.compression_metrics.compressed_tokens,
                     "tokens_saved": result.compression_metrics.tokens_saved,
-                    "savings_pct": result.compression_metrics.savings_ratio_pct
+                    "savings_pct": result.compression_metrics.savings_ratio_pct,
                 }
-
-                # Add quality score if available
                 if result.preservation_score:
-                    compression_metrics["quality_score"] = result.preservation_score.overall_score
-                    compression_metrics["key_term_retention"] = result.preservation_score.key_term_retention
-
-                logger.info(
-                    f"Compressed memory context: {result.compression_metrics.original_tokens} → "
-                    f"{result.compression_metrics.compressed_tokens} tokens "
-                    f"({result.compression_metrics.savings_ratio_pct:.1f}% savings, "
-                    f"mode: {result.mode_used.value}, source: {result.mode_source})"
-                )
-
-                # Log quality warnings if any
-                if result.warnings:
-                    for warning in result.warnings:
-                        logger.warning(warning)
-
+                    cm["quality_score"] = result.preservation_score.overall_score
+                    cm["key_term_retention"] = result.preservation_score.key_term_retention
+            return result.compressed_text, cm, ps
         except Exception as e:
             logger.warning(f"Compression pipeline failed, using original: {e}")
+            return text, None, None
 
-    # Fallback truncation if still over budget
-    max_chars = 800 * 4
-    if len(brief) > max_chars:
-        brief = brief[:max_chars] + "\n\n[... truncated for context budget]"
-        logger.warning(f"Memory brief truncated to {max_chars} chars")
+    if prebuilt_brief is not None:
+        brief, compression_metrics, pipeline_stats, pack_stats = pack_native_brief(
+            prebuilt_brief,
+            budget,
+            compress=compress,
+            project_id=project_id,
+            compress_fn=_compress_block,
+        )
+        return brief, compression_metrics, pipeline_stats, pack_stats
 
-    return brief, compression_metrics, pipeline_stats
+    brief, partial_stats = format_memory_context_markdown(
+        context, budget, apply_char_cap=False
+    )
+    compression_metrics = None
+    pipeline_stats = None
+    if compress and memory_brief_has_content(brief):
+        brief, compression_metrics, pipeline_stats = _compress_block(brief, project_id)
+        if compression_metrics:
+            logger.info(
+                f"Compressed memory context: {compression_metrics.get('original_tokens')} → "
+                f"{compression_metrics.get('compressed_tokens')} tokens "
+                f"({compression_metrics.get('savings_pct', 0):.1f}% savings)"
+            )
+
+    brief, truncated = apply_char_ceiling(brief, budget.max_chars)
+    pack_stats = {
+        **partial_stats,
+        "recall_budget_chars": budget.max_chars,
+        "recall_injected_chars": len(brief),
+        "recall_truncated": truncated,
+        "path": "python",
+    }
+    if truncated:
+        logger.warning(f"Memory brief truncated to {budget.max_chars} chars")
+
+    return brief, compression_metrics, pipeline_stats, pack_stats
 
 
-def recall_context(project_id: str, prompt: str) -> dict:
+def recall_context(project_id: str, prompt: str, max_nodes: int = 20) -> dict:
     """
     Recall context from graph memory database.
 
@@ -225,7 +170,7 @@ def recall_context(project_id: str, prompt: str) -> dict:
         )
 
         # Retrieve memory context
-        memory_context = retrieval.compile_memory_context(context, max_nodes=20)
+        memory_context = retrieval.compile_memory_context(context, max_nodes=max_nodes)
 
         # Score applicable procedural patterns against current prompt via Rust score_reuse
         try:
@@ -391,10 +336,9 @@ def main():
         project_id = get_project_id(cwd)
 
         logger.info(f"Processing prompt for project {project_id}")
-        plugin_root = Path(__file__).parent.parent
 
         # Load config for compression settings
-        sys.path.insert(0, str(plugin_root / "mcp_server"))
+        sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
         from config import get_config
         config = get_config()
 
@@ -407,77 +351,134 @@ def main():
             prompt_for_recall = compressed_prompt
         else:
             logger.debug("User prompt compression disabled")
+            compressed_prompt = prompt
             prompt_for_recall = prompt
 
         # Check if memory context compression should be used
         use_memory_compression = config.should_compress_memory_context()
 
-        # Gate: skip memory recall for very short prompts (follow-ups, acks, greetings).
-        # 15 tokens ≈ 60 chars — anything shorter is unlikely to benefit from retrieval.
-        _skip_memory = (len(prompt_for_recall) < 60)
+        plugin_root = Path(__file__).parent.parent
+        _mcp = str(plugin_root / "mcp_server")
+        if _mcp not in sys.path:
+            sys.path.insert(0, _mcp)
+        from recall_budget import recall_budget_from_memory_config, memory_brief_has_content
+        from shared.hook_metrics import append_hook_metric
 
-        # Gate (#7): skip FTS recall if an anchored summary was injected at SessionStart.
-        # The anchored summary already covers historical context; FTS is redundant until
-        # the session accumulates enough new data to change the brief.
+        mem_cfg = config.get_memory_block()
+        budget = recall_budget_from_memory_config(mem_cfg)
+        compile_max = config.get_recall_compile_max_nodes()
+
+        _skip_reason = None
+        _skip_memory = False
+        if len(prompt_for_recall) < budget.min_prompt_chars_for_recall:
+            _skip_memory = True
+            _skip_reason = "prompt_too_short"
         if not _skip_memory:
             try:
                 _anc_flag = plugin_root / "inbox" / f"{project_id}_anchored.flag"
                 if _anc_flag.exists():
-                    _flag_age = time.time() - float(_anc_flag.read_text().strip() or "0")
-                    if _flag_age < 28800:  # 8 hours — same session boundary
-                        _skip_memory = True
-                        logger.debug("Anchored summary active, skipping per-turn FTS recall")
+                    _skip_memory = True
+                    _skip_reason = "anchored_summary_active"
             except Exception:
                 pass
 
-        # Recall + format: try native Rust path first
+        if _skip_memory:
+            try:
+                from telemetry import capture
+                capture(
+                    "recall_skip",
+                    {"reason": _skip_reason or "unknown", "prompt_len": len(prompt_for_recall)},
+                    plugin_root,
+                )
+            except Exception:
+                pass
+
+        recall_pack_stats: dict = {}
+        recall_ms = 0.0
+        _t0 = time.perf_counter()
         brief = ""
         memory_compression_metrics = None
         pipeline_stats = None
         _used_native_recall = False
-        if _skip_memory:
-            logger.debug(f"Skipping memory recall: prompt too short or anchored summary active ({len(prompt_for_recall)} chars)")
-        elif _NATIVE_OK:
-            try:
-                _native_db = str(
-                    Path.home() / ".claude" / "projects" / project_id
-                    / "graph_memory" / "ainl_native.db"
-                )
-                _recall = _ainl_native.recall_context(_native_db, project_id, prompt_for_recall)
-                brief = _recall.get("brief", "")
-                logger.info(
-                    f"Native recall: {_recall.get('episode_count', 0)} episodes, "
-                    f"{_recall.get('fact_count', 0)} facts, "
-                    f"{_recall.get('pattern_count', 0)} patterns"
-                )
-                _used_native_recall = True
-                brief, memory_compression_metrics, pipeline_stats = format_memory_brief(
-                    {}, project_id, compress=use_memory_compression, prebuilt_brief=brief
-                )
-            except Exception as _re:
-                logger.debug(f"Native recall failed, falling back to Python: {_re}")
 
-        if not _skip_memory and not _used_native_recall:
-            context = recall_context(project_id, prompt_for_recall)
-            brief, memory_compression_metrics, pipeline_stats = format_memory_brief(
-                context, project_id, compress=use_memory_compression
+        if not _skip_memory:
+            if _NATIVE_OK:
+                try:
+                    _native_db = str(
+                        Path.home() / ".claude" / "projects" / project_id
+                        / "graph_memory" / "ainl_native.db"
+                    )
+                    _recall = _ainl_native.recall_context(_native_db, project_id, prompt_for_recall)
+                    brief = _recall.get("brief", "")
+                    logger.info(
+                        f"Native recall: {_recall.get('episode_count', 0)} episodes, "
+                        f"{_recall.get('fact_count', 0)} facts, "
+                        f"{_recall.get('pattern_count', 0)} patterns"
+                    )
+                    _used_native_recall = True
+                    brief, memory_compression_metrics, pipeline_stats, recall_pack_stats = format_memory_brief(
+                        {},
+                        project_id,
+                        compress=use_memory_compression,
+                        prebuilt_brief=brief,
+                        budget=budget,
+                    )
+                except Exception as _re:
+                    logger.debug(f"Native recall failed, falling back to Python: {_re}")
+
+            if not _used_native_recall:
+                context = recall_context(project_id, prompt_for_recall, max_nodes=compile_max)
+                brief, memory_compression_metrics, pipeline_stats, recall_pack_stats = format_memory_brief(
+                    context,
+                    project_id,
+                    compress=use_memory_compression,
+                    budget=budget,
+                )
+        else:
+            recall_pack_stats = {
+                "recall_injected_chars": 0,
+                "recall_budget_chars": budget.max_chars,
+                "path": "skipped",
+                "skip_reason": _skip_reason,
+            }
+
+        recall_ms = (time.perf_counter() - _t0) * 1000.0
+
+        if not _skip_memory and bool(mem_cfg.get("recall_skip_duplicate_brief", True)):
+            try:
+                if memory_brief_has_content(brief):
+                    sig = hashlib.sha256(brief.encode("utf-8")).hexdigest()
+                    sig_path = plugin_root / "inbox" / f"{project_id}_last_recall_brief.sha256"
+                    if sig_path.exists() and sig_path.read_text().strip() == sig:
+                        brief = ""
+                        recall_pack_stats = dict(recall_pack_stats or {})
+                        recall_pack_stats["skip_reason"] = "duplicate_brief"
+                        try:
+                            from telemetry import capture
+                            capture("recall_skip", {"reason": "duplicate_brief"}, plugin_root)
+                        except Exception:
+                            pass
+                    else:
+                        sig_path.parent.mkdir(parents=True, exist_ok=True)
+                        sig_path.write_text(sig)
+            except Exception as _dup_e:
+                logger.debug("duplicate brief gate failed (non-fatal): %s", _dup_e)
+
+        try:
+            append_hook_metric(
+                plugin_root,
+                "recall_cycle",
+                {
+                    "project_id": project_id,
+                    "recall_ms": round(recall_ms, 2),
+                    "skip_reason": _skip_reason or recall_pack_stats.get("skip_reason"),
+                    "used_native": _used_native_recall,
+                    "recall_injected_chars": recall_pack_stats.get("recall_injected_chars", len(brief)),
+                    "recall_budget_chars": recall_pack_stats.get("recall_budget_chars", budget.max_chars),
+                },
             )
-
-        # Gate (#8): skip re-injecting if brief is identical to the previous turn.
-        # Claude already has it in context — re-sending is pure token waste.
-        if brief.strip():
-            try:
-                import hashlib as _hl
-                _brief_hash = _hl.md5(brief.encode()).hexdigest()
-                _hash_file = plugin_root / "inbox" / f"{project_id}_brief.hash"
-                _last_hash = _hash_file.read_text().strip() if _hash_file.exists() else ""
-                if _brief_hash == _last_hash:
-                    logger.debug("Memory brief unchanged from last turn, skipping injection")
-                    brief = ""
-                else:
-                    _hash_file.write_text(_brief_hash)
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         # ── A2A inbox injection ───────────────────────────────────────────────
         a2a_blocks = {"critical": [], "normal": [], "low": []}
@@ -488,27 +489,10 @@ def main():
         except Exception:
             pass
 
-        # Drain local mailbox (messages from other Claude Code instances on this machine)
-        try:
-            from shared.agent_registry import get_agent_name as _get_name, drain_mailbox as _drain_mbox
-            _local_msgs = _drain_mbox(plugin_root, _get_name(cwd))
-            for _lm in _local_msgs:
-                _urgency = _lm.get("urgency", "normal")
-                _from = _lm.get("from", "unknown")
-                _tid = _lm.get("thread_id", "")
-                _entry = f"[LOCAL MESSAGE from {_from}]"
-                if _tid:
-                    _entry += f" (thread:{_tid[:8]})"
-                _entry += f"\n{_lm.get('message', '')}"
-                a2a_blocks[_urgency if _urgency in a2a_blocks else "normal"].append(_entry)
-            if _local_msgs:
-                logger.info("Injected %d local agent messages", len(_local_msgs))
-        except Exception:
-            pass
-
         if a2a_cfg.get("enabled", True):
             inbox_dir = plugin_root / "a2a" / "inbox"
-            db_path = Path.home() / ".claude" / "projects" / GLOBAL_PROJECT_ID / "graph_memory" / "ainl_memory.db"
+            a2a_db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
+            a2a_db_path.parent.mkdir(parents=True, exist_ok=True)
             messages = read_inbox(
                 inbox_dir,
                 max_messages=a2a_cfg.get("inbox_max_messages", 50),
@@ -525,22 +509,37 @@ def main():
                     msg_text = msg.get("message", "")
                     msg_type = msg.get("type", "message")
 
-                    # Graph write
+                    # Graph write — scoped to the active per-repo bucket (same as chat memory).
                     store_message_node(
-                        db_path, GLOBAL_PROJECT_ID,
-                        "inbound", from_agent, "claude-code",
-                        thread_id, urgency, msg_text,
+                        a2a_db_path,
+                        project_id,
+                        "inbound",
+                        from_agent,
+                        "claude-code",
+                        thread_id,
+                        urgency,
+                        msg_text,
                     )
                     # Log write
                     append_log(
-                        plugin_root, "IN", from_agent, "claude-code",
-                        thread_id or "none", urgency, msg_text[:120],
+                        plugin_root,
+                        "IN",
+                        from_agent,
+                        "claude-code",
+                        thread_id or "none",
+                        urgency,
+                        msg_text[:120],
                     )
 
                     # Thread history (recall once per unique thread)
                     thread_context = ""
                     if thread_id and thread_id not in seen_threads:
-                        history = query_thread_history(db_path, GLOBAL_PROJECT_ID, thread_id, n=a2a_cfg.get("thread_recall_n", 5))
+                        history = query_thread_history(
+                            a2a_db_path,
+                            project_id,
+                            thread_id,
+                            n=a2a_cfg.get("thread_recall_n", 5),
+                        )
                         if history:
                             lines = [f"  Prior context with {from_agent} (thread {thread_id[:8]}):"]
                             for h in history[:3]:
@@ -560,7 +559,10 @@ def main():
                     a2a_blocks[tier].append(entry)
 
                 clear_inbox(inbox_dir)
-                logger.info(f"Injected {len(messages)} A2A messages (critical:{len(a2a_blocks['critical'])} normal:{len(a2a_blocks['normal'])} low:{len(a2a_blocks['low'])})")
+                logger.info(
+                    f"Injected {len(messages)} A2A messages (critical:{len(a2a_blocks['critical'])} "
+                    f"normal:{len(a2a_blocks['normal'])} low:{len(a2a_blocks['low'])})"
+                )
 
         # ── Goal context + failure warnings (loaded once, used in assembly) ─────
         goal_context_text = ""
@@ -592,56 +594,23 @@ def main():
         except Exception as _ge:
             logger.debug(f"Goal/failure context failed (non-fatal): {_ge}")
 
-        # Gate (#9): skip goal re-injection if goals are unchanged AND the prompt
-        # has no keyword overlap with any active goal.  Goals only re-inject when
-        # something actually changed or the user is talking about them.
-        if goal_context_text:
-            try:
-                import hashlib as _hl
-                _goals_hash = _hl.md5(goal_context_text.encode()).hexdigest()
-                _goals_file = plugin_root / "inbox" / f"{project_id}_goals.hash"
-                _last_goals = _goals_file.read_text().strip() if _goals_file.exists() else ""
-                if _goals_hash == _last_goals:
-                    # Goals unchanged — only re-inject if prompt overlaps with them
-                    _has_overlap = False
-                    try:
-                        from goal_tracker import _keyword_overlap
-                        for _g in (_goals if '_goals' in dir() else []):
-                            _gtxt = f"{_g.data.get('title','')} {_g.data.get('description','')}"
-                            if _keyword_overlap(prompt, _gtxt) > 0.15:
-                                _has_overlap = True
-                                break
-                    except Exception:
-                        _has_overlap = True  # fail open
-                    if not _has_overlap:
-                        logger.debug("Goals unchanged and no prompt overlap, skipping goal injection")
-                        goal_context_text = ""
-                else:
-                    _goals_file.write_text(_goals_hash)
-            except Exception:
-                pass
-
         # ── Assemble system message ───────────────────────────────────────────
-        # Order: stable content first, dynamic content last — maximises prompt-cache hits.
-        # Critical A2A → goals (rarely change) → failure warnings (semi-stable) → memory
-        # brief (most dynamic, FTS result changes every turn).
         system_parts = []
 
         if a2a_blocks["critical"]:
             block = "\n\n".join(a2a_blocks["critical"])
             system_parts.append(f"━━━ CRITICAL A2A MESSAGES ━━━\n{block}\n━━━ END CRITICAL ━━━")
 
-        # Goals: semi-stable, frame everything that follows
+        # Goals go first — they frame everything that follows
         if goal_context_text:
             system_parts.append(goal_context_text)
 
-        # Failure warnings: semi-stable, before dynamic memory brief
+        if brief.strip() and memory_brief_has_content(brief):
+            system_parts.append(brief)
+
+        # Failure warnings after memory brief — salient but not overriding goals
         if failure_warning_text:
             system_parts.append(failure_warning_text)
-
-        # Memory brief: most dynamic — goes last so stable prefix can be cached
-        if brief.strip() and len(brief) > len("## Relevant Graph Memory\n\n"):
-            system_parts.append(brief)
 
         other_a2a = a2a_blocks["normal"] or a2a_blocks["low"]
         if other_a2a:
@@ -688,7 +657,10 @@ def main():
             "brief_length": len(brief),
             "injected": bool(result),
             "prompt_compression": prompt_compression_metrics,
-            "memory_compression": memory_compression_metrics
+            "memory_compression": memory_compression_metrics,
+            "recall_pack": recall_pack_stats,
+            "recall_ms": round(recall_ms, 2),
+            "recall_skip_reason": _skip_reason or recall_pack_stats.get("skip_reason"),
         })
 
         # Flush previous turn's captures to graph DB before processing new prompt.

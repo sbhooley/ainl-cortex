@@ -6,7 +6,7 @@ Handles plugin configuration including eco mode settings.
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import json
 import logging
 
@@ -90,6 +90,25 @@ DEFAULT_PLUGIN_CONFIG: dict = {
         "project_isolation": True,
         "enable_persona_evolution": True,
         "enable_pattern_extraction": True,
+        # Recall budget + gates (see mcp_server/recall_budget.py)
+        "recall_max_chars": None,
+        "recall_native_max_chars": None,
+        "recall_max_items_per_type": {
+            "episodes": 3,
+            "facts": 5,
+            "patterns": 2,
+            "failures": 3,
+            "persona": 3,
+        },
+        "recall_detail_level": "standard",
+        "recall_min_prompt_chars": 60,
+        "recall_compile_max_nodes": 20,
+        "repartition_search_paths": [],
+        "repartition_max_depth": 3,
+        "semantic_lexical_fallback": False,
+        "semantic_lexical_min_overlap": 3,
+        "semantic_lexical_time_window_days": 14,
+        "recall_skip_duplicate_brief": True,
     },
     "telemetry": {
         "track_compression_savings": True,
@@ -268,6 +287,24 @@ class PluginConfig:
             "min_length_tokens": 200,
             "show_badge": False
         }
+
+    def get_memory_block(self) -> dict:
+        m = self.config.get("memory")
+        return m if isinstance(m, dict) else {}
+
+    def get_recall_compile_max_nodes(self) -> int:
+        return int(self.get_memory_block().get("recall_compile_max_nodes", 20) or 20)
+
+    def get_repartition_search_paths(self) -> Optional[List[str]]:
+        """Optional extra workspace roots for repo discovery (strings). None = use script defaults only."""
+        raw = self.get_memory_block().get("repartition_search_paths")
+        if not isinstance(raw, list) or not raw:
+            return None
+        out = [str(p) for p in raw if p]
+        return out or None
+
+    def get_repartition_max_depth(self) -> int:
+        return int(self.get_memory_block().get("repartition_max_depth", 3) or 3)
 
 
 # Global config singleton

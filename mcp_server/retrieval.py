@@ -118,6 +118,24 @@ class MemoryRetrieval:
             idx = get_or_build_index(corpus, project_id, cache_dir, self._tfidf_ttl)
             for node_id, score in idx.query(query_text, top_k=len(corpus)):
                 self._sim_scores[node_id] = score
+            mode = "tfidf"
+            try:
+                from config import get_config
+                mode = str(
+                    (get_config().config.get("retrieval") or {}).get("retrieval_mode", "tfidf")
+                ).lower()
+            except Exception:
+                pass
+            if mode == "hybrid":
+                try:
+                    from similarity import lexical_jaccard_overlap
+                    for n in nodes:
+                        et = n.embedding_text or ""
+                        lex = lexical_jaccard_overlap(query_text, et)
+                        tid = self._sim_scores.get(n.id, 0.0)
+                        self._sim_scores[n.id] = min(1.0, 0.7 * tid + 0.3 * lex)
+                except Exception as ex:
+                    logger.debug(f"Hybrid similarity blend failed (non-fatal): {ex}")
         except Exception as e:
             logger.debug(f"Similarity scoring failed (non-fatal): {e}")
 
@@ -309,11 +327,20 @@ class MemoryRetrieval:
 
     def format_memory_brief(self, memory_context: Dict[str, Any], max_tokens: int = 800) -> str:
         """
-        Format memory context into compact text brief.
-
-        Returns markdown-formatted brief suitable for injection.
-        Max ~800 tokens to preserve Claude Code context budget.
+        Format memory context into compact markdown (same tiering as hook recall).
         """
+        try:
+            from dataclasses import replace
+
+            from recall_budget import format_memory_context_markdown, recall_budget_from_memory_config
+            from config import get_config
+
+            b = recall_budget_from_memory_config(get_config().get_memory_block())
+            b = replace(b, max_chars=max(256, int(max_tokens) * 4))
+            text, _stats = format_memory_context_markdown(memory_context, b)
+            return text
+        except Exception as e:
+            logger.debug(f"recall_budget format failed, legacy brief: {e}")
         lines = ["## Relevant Graph Memory", ""]
 
         # Recent episodes

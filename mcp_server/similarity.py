@@ -57,6 +57,19 @@ def _tfidf_vec(text: str, idf: Dict[str, float]) -> Dict[str, float]:
     return {term: (count / n) * idf.get(term, 0.0) for term, count in tf.items()}
 
 
+def lexical_jaccard_overlap(query: str, doc: str) -> float:
+    """Token-set Jaccard similarity in [0, 1], cheap hybrid signal vs TF-IDF alone."""
+    if not query or not doc:
+        return 0.0
+    a = set(_tokenize(query))
+    b = set(_tokenize(doc))
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return float(inter) / float(union) if union else 0.0
+
+
 def _cosine(a: Dict[str, float], b: Dict[str, float]) -> float:
     dot = sum(a.get(t, 0.0) * v for t, v in b.items())
     mag_a = math.sqrt(sum(v * v for v in a.values()))

@@ -252,6 +252,18 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="memory_expand_node",
+            description="Fetch one graph memory node by id (drill-down for progressive disclosure)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Project identifier"},
+                    "node_id": {"type": "string", "description": "Graph node UUID"},
+                },
+                "required": ["project_id", "node_id"],
+            },
+        ),
+        Tool(
             name="memory_search",
             description="Full-text search across graph memory",
             inputSchema={
@@ -605,7 +617,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "ok": False,
                 "error": "A2A messaging is disabled in this installation",
                 "error_type": "feature_disabled",
-                "hint": "Set 'a2a.enabled' to true in config.json, then restart Claude Code.",
+                "hint": "Set 'a2a.enabled' to true in config.json and ensure the ArmaraOS daemon is running.",
             }))]
 
         if name == "memory_store_episode":
@@ -618,6 +630,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await memory_server.memory_promote_pattern(**arguments)
         elif name == "memory_recall_context":
             result = await memory_server.memory_recall_context(**arguments)
+        elif name == "memory_expand_node":
+            result = await memory_server.memory_expand_node(**arguments)
         elif name == "memory_search":
             result = await memory_server.memory_search(**arguments)
         elif name == "memory_evolve_persona":
@@ -895,6 +909,19 @@ async def memory_recall_context(
         return {"error": str(e)}
 
 
+async def memory_expand_node(project_id: str, node_id: str) -> Dict[str, Any]:
+    """Return a single node payload for MCP drill-down."""
+    _ = project_id  # Echoed for tool contract symmetry; DB is cwd-scoped.
+    try:
+        node = memory_server.store.get_node(node_id)
+        if node is None:
+            return {"error": "node_not_found", "node_id": node_id}
+        return {"node": node.to_dict()}
+    except Exception as e:
+        logger.error(f"memory_expand_node failed: {e}")
+        return {"error": str(e)}
+
+
 async def memory_search(
     query: str,
     project_id: str,
@@ -1008,6 +1035,7 @@ memory_server.memory_store_semantic = memory_store_semantic
 memory_server.memory_store_failure = memory_store_failure
 memory_server.memory_promote_pattern = memory_promote_pattern
 memory_server.memory_recall_context = memory_recall_context
+memory_server.memory_expand_node = memory_expand_node
 memory_server.memory_search = memory_search
 memory_server.memory_evolve_persona = memory_evolve_persona
 memory_server.memory_set_goal = memory_set_goal
