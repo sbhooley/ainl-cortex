@@ -161,3 +161,13 @@ project isolation:
    The new project ids carry over byte-exact into `ainl_native.db`.
 3. Optional: `--purge-legacy` on repartition + `--purge-native` on rollback
    give you a clean slate if you change your mind.
+
+### Repartition decision tree (operator)
+
+1. **Preview always:** `python scripts/repartition_by_repo.py --dry-run` and read `logs/repartition_report.json`.
+2. **Backup:** the script copies the legacy DB to `*.repartition-backup.<UTC>` before writes; keep those files until you are satisfied.
+3. **When `--purge-legacy` is safe:** only after a successful full run, you have verified per-repo DBs with `python scripts/verify_repartition_integrity.py --all-under ~/.claude/projects`, and you no longer need unmigrated rows in the legacy global bucket.
+4. **Restore from backup:** replace `~/.claude/projects/<LEGACY>/graph_memory/ainl_memory.db` (and `-wal`/`-shm` if present) from the matching `.repartition-backup.*` siblings, then delete erroneous per-repo copies if needed.
+5. **Search paths:** add extra workspace roots in `config.json` → `memory.repartition_search_paths` (strings); tune `memory.repartition_max_depth`. CLI `--search-paths` and `--max-depth` override when passed.
+6. **Semantic lexical phase:** enable `memory.semantic_lexical_fallback` or pass `--semantic-lexical-fallback` for conservative moves when `DERIVES_FROM` is missing (see report keys `moved_lexical_extra`).
+7. **Integrity check:** `python scripts/verify_repartition_integrity.py path/to/ainl_memory.db` (exit 1 if orphan edges).

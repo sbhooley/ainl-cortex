@@ -10,8 +10,9 @@ After issue 1, sessions write to `~/.claude/projects/<per_repo>/graph_memory/`.
 
 This script reads the legacy bucket, decides which per-repo bucket each node
 belongs to (via files_touched longest-prefix match), and replicates it there.
-Edges whose endpoints both land in the same repo are replicated; cross-repo
-edges are dropped with a warning.
+Edges whose endpoints both land in the same repo are replicated; when only one
+endpoint was migrated, the other endpoint is copied into that repo so foreign
+keys stay valid. Cross-repo edges are dropped with a warning.
 
 The legacy bucket is left intact. Pass `--purge-legacy` to drop the original
 nodes after a successful run (no automatic purge).
@@ -44,6 +45,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -182,12 +184,18 @@ class Repartitioner:
         dry_run: bool = False,
         verbose: bool = False,
         purge_legacy: bool = False,
+        semantic_lexical_fallback: bool = False,
+        semantic_lexical_min_overlap: int = 3,
+        semantic_lexical_time_window_days: int = 14,
     ):
         self.legacy_db = legacy_db
         self.repos = repos
         self.dry_run = dry_run
         self.verbose = verbose
         self.purge_legacy = purge_legacy
+        self.semantic_lexical_fallback = semantic_lexical_fallback
+        self.semantic_lexical_min_overlap = semantic_lexical_min_overlap
+        self.semantic_lexical_time_window_days = semantic_lexical_time_window_days
         # repo_path → list of (legacy_node_id, new_node_id) pairs we wrote.
         self.assignments: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
         # node_id → target_repo_id, for downstream edge replication.
@@ -225,6 +233,8 @@ class Repartitioner:
             self._partition_episodes(legacy_conn)
             self._partition_failures(legacy_conn)
             self._partition_semantics(legacy_conn)
+            if self.semantic_lexical_fallback:
+                self._partition_semantics_lexical(legacy_conn)
             self._partition_procedurals(legacy_conn)
             # Persona + Goal: keep in legacy by design.
             self.report["by_node_type"]["persona"] = {
@@ -372,37 +382,188 @@ class Repartitioner:
             "kept_in_legacy": kept,
         }
 
+    def _tok_overlap_paths(self, text: str, files: List[str]) -> int:
+        tt = set(re.findall(r"[a-z0-9_]+", (text or "").lower()))
+        if not tt:
+            return 0
+        hit = 0
+        for f in files or []:
+            name = Path(f).name
+            for t in set(re.findall(r"[a-z0-9_]+", name.lower())):
+                if t in tt:
+                    hit += 1
+        return hit
+
+    def _partition_semantics_lexical(self, legacy_conn: sqlite3.Connection) -> None:
+        win_sec = self.semantic_lexical_time_window_days * 86400
+        sem_rows = list(self._iter_nodes(legacy_conn, "semantic"))
+        episodes: List[Tuple[sqlite3.Row, str]] = []
+        for row in legacy_conn.execute(
+            "SELECT id, created_at, data FROM ainl_graph_nodes WHERE node_type = ? AND project_id = ?",
+            ("episode", LEGACY_GLOBAL_PROJECT_ID),
+        ):
+            tid = self.node_to_target.get(row["id"])
+            if tid:
+                episodes.append((row, tid))
+        moved = 0
+        kept = 0
+        for row in sem_rows:
+            if self.node_to_target.get(row["id"]):
+                continue
+            has_derives = False
+            for tn in self._neighbors(legacy_conn, row["id"], "DERIVES_FROM"):
+                if self.node_to_target.get(tn):
+                    has_derives = True
+                    break
+            if has_derives:
+                continue
+            text = row["embedding_text"] or ""
+            data_j = json.loads(row["data"]) if row["data"] else {}
+            if not text and data_j.get("fact"):
+                text = str(data_j.get("fact"))
+            created_s = int(row["created_at"] or 0)
+            best: Optional[Tuple[int, str, Path]] = None
+            for erow, target_id in episodes:
+                if abs(int(erow["created_at"] or 0) - created_s) > win_sec:
+                    continue
+                ed = json.loads(erow["data"]) if erow["data"] else {}
+                overlap = self._tok_overlap_paths(text, ed.get("files_touched") or [])
+                if overlap < self.semantic_lexical_min_overlap:
+                    continue
+                repo = next((r for r in self.repos if _hash_anchor(r) == target_id), None)
+                if repo is None:
+                    continue
+                if best is None or overlap > best[0]:
+                    best = (overlap, target_id, repo)
+            if best is None:
+                kept += 1
+                continue
+            _, tid, trepo = best
+            self._replicate_node(row, tid, trepo)
+            moved += 1
+        sem = self.report["by_node_type"].setdefault("semantic", {})
+        sem["moved_lexical_extra"] = moved
+        sem["kept_lexical_pass"] = kept
+        self.report["by_node_type"]["semantic_lexical_note"] = (
+            "DERIVES_FROM phase runs first; lexical fallback is conservative (time window + token overlap)."
+        )
+
+    def _fetch_legacy_node_row(
+        self, conn: sqlite3.Connection, node_id: str
+    ) -> Optional[sqlite3.Row]:
+        return conn.execute("SELECT * FROM ainl_graph_nodes WHERE id = ?", (node_id,)).fetchone()
+
+    def _copy_node_row_into_target(
+        self,
+        row: sqlite3.Row,
+        target_repo_id: str,
+        target_repo: Path,
+        tag: str,
+    ) -> None:
+        """Copy a legacy node into a per-repo DB for FK closure (does not mark legacy repartitioned)."""
+        self.node_to_target[row["id"]] = target_repo_id
+        self.assignments[target_repo_id].append((row["id"], row["id"]))
+        if self.dry_run:
+            return
+        target_db = self._ensure_target_db(target_repo_id)
+        with sqlite3.connect(str(target_db)) as conn:
+            metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+            metadata.setdefault("backfilled_from_legacy", LEGACY_GLOBAL_PROJECT_ID)
+            metadata["edge_endpoint_replica"] = tag
+            metadata["backfilled_at"] = int(time.time())
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO ainl_graph_nodes
+                (id, node_type, project_id, agent_id, created_at, updated_at,
+                 confidence, data, metadata, embedding_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["node_type"],
+                    target_repo_id,
+                    row["agent_id"],
+                    row["created_at"],
+                    int(time.time()),
+                    row["confidence"],
+                    row["data"],
+                    json.dumps(metadata),
+                    row["embedding_text"],
+                ),
+            )
+            conn.commit()
+
+    def _ensure_neighbor_for_edge(
+        self, legacy_conn: sqlite3.Connection, node_id: str, target_repo_id: str
+    ) -> bool:
+        if self.node_to_target.get(node_id) == target_repo_id:
+            return True
+        row = self._fetch_legacy_node_row(legacy_conn, node_id)
+        if row is None:
+            return False
+        target_repo = next((r for r in self.repos if _hash_anchor(r) == target_repo_id), None)
+        if target_repo is None:
+            return False
+        self._copy_node_row_into_target(row, target_repo_id, target_repo, tag="edge_endpoint")
+        return True
+
     # ── edge replication ──────────────────────────────────────────────────
 
     def _replicate_edges(self, legacy_conn: sqlite3.Connection) -> None:
         cur = legacy_conn.execute("SELECT * FROM ainl_graph_edges")
         replicated = 0
+        replicated_with_copy = 0
         cross_repo = 0
         legacy_only = 0
         for edge in cur:
-            from_target = self.node_to_target.get(edge["from_node"])
-            to_target = self.node_to_target.get(edge["to_node"])
-            if from_target is None or to_target is None:
-                legacy_only += 1
+            ft = self.node_to_target.get(edge["from_node"])
+            tt = self.node_to_target.get(edge["to_node"])
+            if ft is not None and tt is not None and ft == tt:
+                target_repo = next(
+                    (r for r in self.repos if _hash_anchor(r) == ft), None
+                )
+                if target_repo is None:
+                    legacy_only += 1
+                    continue
+                self._write_edge_to_repo(edge, target_repo, ft)
+                replicated += 1
                 continue
-            if from_target != to_target:
+            if ft is not None and tt is None:
+                if self._ensure_neighbor_for_edge(legacy_conn, edge["to_node"], ft):
+                    target_repo = next((r for r in self.repos if _hash_anchor(r) == ft), None)
+                    if target_repo:
+                        self._write_edge_to_repo(edge, target_repo, ft)
+                        replicated += 1
+                        replicated_with_copy += 1
+                    else:
+                        legacy_only += 1
+                else:
+                    legacy_only += 1
+                continue
+            if tt is not None and ft is None:
+                if self._ensure_neighbor_for_edge(legacy_conn, edge["from_node"], tt):
+                    target_repo = next((r for r in self.repos if _hash_anchor(r) == tt), None)
+                    if target_repo:
+                        self._write_edge_to_repo(edge, target_repo, tt)
+                        replicated += 1
+                        replicated_with_copy += 1
+                    else:
+                        legacy_only += 1
+                else:
+                    legacy_only += 1
+                continue
+            if ft is None and tt is None:
+                legacy_only += 1
+            else:
                 cross_repo += 1
                 if self.verbose:
                     print(
                         f"  edge {edge['id']} crosses repos "
-                        f"({from_target[:8]} → {to_target[:8]}): dropping"
+                        f"({str(ft)[:8] if ft else '?'} → {str(tt)[:8] if tt else '?'}): dropping"
                     )
-                continue
-            target_repo = next(
-                (r for r in self.repos if _hash_anchor(r) == from_target), None
-            )
-            if target_repo is None:
-                legacy_only += 1
-                continue
-            self._write_edge_to_repo(edge, target_repo, from_target)
-            replicated += 1
         self.report["edges"] = {
             "replicated": replicated,
+            "replicated_with_endpoint_copy": replicated_with_copy,
             "dropped_cross_repo": cross_repo,
             "kept_in_legacy_only": legacy_only,
         }
@@ -589,6 +750,15 @@ class Repartitioner:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+
+def _plugin_memory_cfg() -> Dict[str, Any]:
+    try:
+        raw = json.loads((PLUGIN_ROOT / "config.json").read_text())
+        return raw.get("memory") or {}
+    except Exception:
+        return {}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="Plan only; no writes.")
@@ -606,10 +776,21 @@ def main() -> int:
     )
     parser.add_argument(
         "--search-paths",
-        nargs="+",
+        nargs="*",
         type=Path,
-        default=DEFAULT_SEARCH_PATHS,
-        help="Workspace dirs to walk when discovering repos.",
+        default=None,
+        help="Workspace dirs to walk when discovering repos (default: built-ins + config).",
+    )
+    parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        help="Override memory.repartition_max_depth from config.json.",
+    )
+    parser.add_argument(
+        "--semantic-lexical-fallback",
+        action="store_true",
+        help="Also run semantic routing via lexical overlap (see memory.semantic_lexical_*).",
     )
     args = parser.parse_args()
 
@@ -618,8 +799,27 @@ def main() -> int:
         format="%(message)s",
     )
 
-    print(f"Discovering repos under: {[str(p) for p in args.search_paths]}")
-    repos = discover_repos(args.search_paths)
+    mem = _plugin_memory_cfg()
+    paths: List[Path] = list(args.search_paths) if args.search_paths else list(DEFAULT_SEARCH_PATHS)
+    for p in mem.get("repartition_search_paths") or []:
+        paths.append(Path(str(p)).expanduser())
+    merged: List[Path] = []
+    seen: set[str] = set()
+    for p in paths:
+        key = str(p.resolve()) if p.exists() else str(p)
+        if key not in seen:
+            seen.add(key)
+            merged.append(p)
+
+    max_depth = (
+        args.max_depth
+        if args.max_depth is not None
+        else int(mem.get("repartition_max_depth", 3) or 3)
+    )
+    slx = bool(args.semantic_lexical_fallback) or bool(mem.get("semantic_lexical_fallback", False))
+
+    print(f"Discovering repos under: {[str(p) for p in merged]} (max_depth={max_depth})")
+    repos = discover_repos(merged, max_depth=max_depth)
     print(f"Found {len(repos)} git repos.")
     if args.report:
         for r in repos:
@@ -631,6 +831,11 @@ def main() -> int:
         dry_run=args.dry_run,
         verbose=args.report,
         purge_legacy=args.purge_legacy,
+        semantic_lexical_fallback=slx,
+        semantic_lexical_min_overlap=int(mem.get("semantic_lexical_min_overlap", 3) or 3),
+        semantic_lexical_time_window_days=int(
+            mem.get("semantic_lexical_time_window_days", 14) or 14
+        ),
     )
     rc = rp.run()
 
