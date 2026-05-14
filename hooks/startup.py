@@ -23,6 +23,7 @@ if _mcp_dir not in sys.path:
 from shared.logger import get_logger
 from shared.project_id import get_project_id, get_project_info, LEGACY_GLOBAL_PROJECT_ID
 from shared.a2a_inbox import read_self_inbox, clear_self_inbox
+from shared.agent_registry import get_agent_name, register_self, drain_mailbox
 from notifications import poll as _poll_notifications, format_banner as _format_notif_banner
 
 try:
@@ -342,6 +343,23 @@ def main():
             except Exception:
                 pass
 
+        # ── Local agent registration ──────────────────────────────────────────
+        _agent_name = get_agent_name(cwd)
+        try:
+            register_self(root, _agent_name, cwd)
+            logger.info("Registered as local agent: %s", _agent_name)
+        except Exception as _re:
+            logger.debug("Agent registration failed (non-fatal): %s", _re)
+
+        # ── Local agent mailbox drain ─────────────────────────────────────────
+        _local_messages = []
+        try:
+            _local_messages = drain_mailbox(root, _agent_name)
+            if _local_messages:
+                logger.info("Drained %d local messages for %s", len(_local_messages), _agent_name)
+        except Exception as _me:
+            logger.debug("Mailbox drain failed (non-fatal): %s", _me)
+
         # ── Self-inbox injection ──────────────────────────────────────────────
         self_notes = read_self_inbox(root)
         clear_self_inbox(root)
@@ -381,6 +399,7 @@ def main():
             f"  • MCP stack (same venv as server): {'OK' if mcp_ok else 'FAIL – ' + mcp_detail}\n"
             f"  • venv on PATH (child processes): {venv_file_status}\n"
             f"  • A2A bridge: {bridge_line}\n"
+            f"  • Agent name: {_agent_name}  (set AINL_AGENT_NAME env var to override)\n"
             f"  • When Claude spawns MCP, expect ~{EXPECTED_MCP_TOOLS} tools (ainl + memory + a2a); "
             f"if missing, /plugin -> Installed -> ainl-cortex and /mcp, or /reload-plugins.\n"
         )
@@ -432,6 +451,21 @@ def main():
             except Exception:
                 pass
             system_blocks.append(note_text)
+
+        if _local_messages:
+            import time as _t
+            _msg_lines = [f"\n━━━ MESSAGES FROM OTHER CLAUDE AGENTS ({len(_local_messages)}) ━━━"]
+            for _lm in _local_messages:
+                _ts = _t.strftime("%H:%M", _t.localtime(_lm.get("created_at", 0)))
+                _urg = _lm.get("urgency", "normal")
+                _frm = _lm.get("from", "unknown")
+                _tid = _lm.get("thread_id", "")
+                _urg_tag = f"[{_urg.upper()}] " if _urg != "normal" else ""
+                _thread_tag = f" (thread:{_tid[:8]})" if _tid else ""
+                _msg_lines.append(f"[{_ts}] {_urg_tag}From {_frm}{_thread_tag}:")
+                _msg_lines.append(f"  {_lm.get('message', '')}")
+            _msg_lines.append("━━━ END MESSAGES ━━━\n")
+            system_blocks.append("\n".join(_msg_lines))
 
         if monitor_triggers:
             trig_lines = ["\n━━━ PRE-SESSION MONITOR ALERTS ━━━"]

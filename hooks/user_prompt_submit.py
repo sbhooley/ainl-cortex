@@ -488,6 +488,24 @@ def main():
         except Exception:
             pass
 
+        # Drain local mailbox (messages from other Claude Code instances on this machine)
+        try:
+            from shared.agent_registry import get_agent_name as _get_name, drain_mailbox as _drain_mbox
+            _local_msgs = _drain_mbox(plugin_root, _get_name(cwd))
+            for _lm in _local_msgs:
+                _urgency = _lm.get("urgency", "normal")
+                _from = _lm.get("from", "unknown")
+                _tid = _lm.get("thread_id", "")
+                _entry = f"[LOCAL MESSAGE from {_from}]"
+                if _tid:
+                    _entry += f" (thread:{_tid[:8]})"
+                _entry += f"\n{_lm.get('message', '')}"
+                a2a_blocks[_urgency if _urgency in a2a_blocks else "normal"].append(_entry)
+            if _local_msgs:
+                logger.info("Injected %d local agent messages", len(_local_msgs))
+        except Exception:
+            pass
+
         if a2a_cfg.get("enabled", True):
             inbox_dir = plugin_root / "a2a" / "inbox"
             db_path = Path.home() / ".claude" / "projects" / GLOBAL_PROJECT_ID / "graph_memory" / "ainl_memory.db"

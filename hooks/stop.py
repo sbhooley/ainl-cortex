@@ -899,6 +899,14 @@ def main():
         else:
             logger.debug("No session data to finalize")
 
+        # Deregister from the local agent registry so other instances don't
+        # try to deliver to a dead mailbox.
+        try:
+            from shared.agent_registry import get_agent_name, deregister_self
+            deregister_self(plugin_root, get_agent_name(cwd))
+        except Exception:
+            pass
+
         print(json.dumps({}), file=sys.stdout)
 
     except Exception as e:

@@ -1,11 +1,12 @@
 """
-A2A MCP tool implementations using the ArmaraOS native A2A API.
+A2A MCP tool implementations.
 
-Provides 7 tools: a2a_send, a2a_list_agents, a2a_register_agent,
-a2a_note_to_self, a2a_register_monitor, a2a_task_send, a2a_task_status.
+Routing priority for a2a_send:
+  1. Local file-based mailbox  — target is another Claude Code instance with
+     ainl-cortex on this machine (discovered via registry/).
+  2. ArmaraOS bridge           — target is an ArmaraOS agent (ELF, etc.).
 
-ArmaraOS is the A2A bridge. The daemon URL is discovered from
-~/.armaraos/daemon.json at runtime.
+a2a_list_agents merges both local Claude instances and ArmaraOS agents.
 """
 
 import json
@@ -44,6 +45,13 @@ def _a2a_inbox():
     from shared.a2a_inbox import write_self_note
     return write_self_note
 
+def _local_registry():
+    from shared.agent_registry import (
+        get_agent_name, is_local_agent, write_message as write_local_message,
+        list_live_agents,
+    )
+    return get_agent_name, is_local_agent, write_local_message, list_live_agents
+
 def _a2a_client():
     from shared.a2a_client import (
         send_to_agent, list_a2a_agents, get_agent_card,
@@ -80,6 +88,11 @@ class A2ATools:
         self.registry_path = plugin_root / "a2a" / "agents" / "registry.json"
         self.tasks_dir = plugin_root / "a2a" / "tasks"
         self.monitors_path = plugin_root / "a2a" / "monitors" / "monitor_configs.json"
+        try:
+            get_agent_name, *_ = _local_registry()
+            self.agent_name = get_agent_name()
+        except Exception:
+            self.agent_name = "claude-code"
 
     def _registry(self) -> dict:
         data = _read_json(self.registry_path, {})
@@ -110,19 +123,49 @@ class A2ATools:
         thread_id: Optional[str] = None,
         urgency: str = "normal",
     ) -> Dict[str, Any]:
+        tid = thread_id or str(uuid.uuid4())
+
+        # ── Route 1: local Claude Code instance ───────────────────────────────
+        try:
+            _, is_local, write_local, _ = _local_registry()
+            if is_local(self.plugin_root, to):
+                msg_id = write_local(
+                    self.plugin_root, to, message, self.agent_name, urgency, tid
+                )
+                store_message_node(
+                    self.store, self.project_id, "outbound", self.agent_name, to, tid, urgency, message
+                )
+                _a2a_log()(self.plugin_root, "OUT", self.agent_name, to, tid, urgency, message[:120])
+                return {
+                    "sent": True, "route": "local", "to": to,
+                    "thread_id": tid, "urgency": urgency, "msg_id": msg_id,
+                }
+        except Exception:
+            pass
+
+        # ── Route 2: ArmaraOS bridge ──────────────────────────────────────────
         reg = self._registry()
         if to not in reg:
+            local_agents = []
+            try:
+                _, _, _, list_live = _local_registry()
+                local_agents = [a["name"] for a in list_live(self.plugin_root)]
+            except Exception:
+                pass
             return {
-                "error": f"Agent '{to}' not registered. Use a2a_register_agent first.",
-                "registered_agents": list(reg.keys()),
+                "error": (
+                    f"Agent '{to}' not found. "
+                    f"Local instances: {local_agents or '(none registered)'}. "
+                    f"ArmaraOS registry: {list(reg.keys()) or '(empty)'}. "
+                    "Use a2a_list_agents to see all reachable agents."
+                ),
             }
 
         agent = reg[to]
         agent_id = agent.get("agent_id") or agent.get("armaraos_id")
-        tid = thread_id or str(uuid.uuid4())
 
         full_text = (
-            f"X-From-Agent: claude-code\n"
+            f"X-From-Agent: {self.agent_name}\n"
             f"X-Thread-Id: {tid}\n"
             f"X-Urgency: {urgency}\n"
             f"{message}"
@@ -131,22 +174,21 @@ class A2ATools:
         result = _send(agent_id or to, full_text, self.daemon_json, self.daemon_cache, timeout=60.0)
 
         if result.get("error"):
-            _a2a_log()(self.plugin_root, "OUT", "claude-code", to, tid, urgency, message[:120], status="fail")
-            return {"sent": False, "error": result["error"], "thread_id": tid}
+            _a2a_log()(self.plugin_root, "OUT", self.agent_name, to, tid, urgency, message[:120], status="fail")
+            return {"sent": False, "route": "armaraos", "error": result["error"], "thread_id": tid}
 
-        store_message_node(self.store, self.project_id, "outbound", "claude-code", to, tid, urgency, message)
-        _a2a_log()(self.plugin_root, "OUT", "claude-code", to, tid, urgency, message[:120])
+        store_message_node(self.store, self.project_id, "outbound", self.agent_name, to, tid, urgency, message)
+        _a2a_log()(self.plugin_root, "OUT", self.agent_name, to, tid, urgency, message[:120])
 
-        # Store reply as inbound message node
         reply = result.get("response", "")
         if reply:
-            store_message_node(self.store, self.project_id, "inbound", to, "claude-code", tid, urgency, reply)
-            _a2a_log()(self.plugin_root, "IN", to, "claude-code", tid, urgency, reply[:120])
+            store_message_node(self.store, self.project_id, "inbound", to, self.agent_name, tid, urgency, reply)
+            _a2a_log()(self.plugin_root, "IN", to, self.agent_name, tid, urgency, reply[:120])
 
         reg[to]["last_seen_at"] = int(time.time())
         self._save_registry(reg)
 
-        out = {"sent": True, "to": to, "thread_id": tid, "urgency": urgency}
+        out = {"sent": True, "route": "armaraos", "to": to, "thread_id": tid, "urgency": urgency}
         if reply:
             out["reply"] = reply
         return out
@@ -154,37 +196,55 @@ class A2ATools:
     # ── a2a_list_agents ───────────────────────────────────────────────────────
 
     def a2a_list_agents(self) -> Dict[str, Any]:
+        # ── Local Claude Code instances ────────────────────────────────────────
+        local_agents = []
+        try:
+            _, _, _, list_live = _local_registry()
+            for entry in list_live(self.plugin_root):
+                local_agents.append({
+                    "name": entry["name"],
+                    "type": "local",
+                    "pid": entry.get("pid"),
+                    "project": entry.get("project"),
+                    "reachable": True,
+                    "registered_at": entry.get("registered_at"),
+                })
+        except Exception:
+            pass
+
+        # ── ArmaraOS agents ────────────────────────────────────────────────────
         reg = self._registry()
         _, list_armaraos_agents, _, _, _, _ = _a2a_client()
 
         daemon_url = self._daemon_url()
         daemon_running = daemon_url is not None
 
-        # Fetch live agent list from ArmaraOS
         armaraos_agents = {}
         if daemon_running:
-            result = list_armaraos_agents(daemon_json_path=self.daemon_json, cache_file=self.daemon_cache, timeout=3.0)
+            result = list_armaraos_agents(
+                daemon_json_path=self.daemon_json, cache_file=self.daemon_cache, timeout=3.0
+            )
             for ag in result.get("agents", []):
                 armaraos_agents[ag.get("name", ag.get("id", ""))] = ag
 
-        # Merge with local registry
-        agents = []
+        armaraos_list = []
         seen = set()
         for name, info in reg.items():
             entry = dict(info)
+            entry["type"] = "armaraos"
             live = armaraos_agents.get(name) or armaraos_agents.get(info.get("agent_id", ""))
             entry["reachable"] = live is not None
             if live:
                 entry["agent_id"] = live.get("id", info.get("agent_id"))
                 entry["capabilities"] = live.get("skills", info.get("capabilities", []))
-            agents.append(entry)
+            armaraos_list.append(entry)
             seen.add(name)
 
-        # Add ArmaraOS agents not in local registry
         for name, ag in armaraos_agents.items():
             if name not in seen:
-                agents.append({
+                armaraos_list.append({
                     "name": name,
+                    "type": "armaraos",
                     "agent_id": ag.get("id"),
                     "description": ag.get("description", ""),
                     "capabilities": ag.get("skills", []),
@@ -193,9 +253,12 @@ class A2ATools:
                     "last_seen_at": None,
                 })
 
+        all_agents = local_agents + armaraos_list
         return {
-            "agents": agents,
-            "count": len(agents),
+            "agents": all_agents,
+            "count": len(all_agents),
+            "local_count": len(local_agents),
+            "armaraos_count": len(armaraos_list),
             "daemon_running": daemon_running,
             "daemon_url": daemon_url,
         }
