@@ -35,6 +35,7 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 ### Core Memory System
 - ✅ **Typed Graph Memory** - Episode, Semantic, Procedural, Persona, and Failure nodes
 - ✅ **Per-Repo Project Isolation** - Each git repo has its own memory bucket (toplevel-anchored), opt-out via `memory.project_isolation_mode = "global"` for back-compat
+- ✅ **Recall budget + hook metrics** - Injected graph memory is char-capped (`memory.recall_*`); per-turn timings land in `logs/hook_metrics.jsonl`; repartition + integrity: `scripts/repartition_by_repo.py`, `scripts/verify_repartition_integrity.py` (see `scripts/MIGRATION.md`)
 - ✅ **Context-Aware Retrieval** - Inject only relevant memories (ranked by confidence, recency, fitness)
 - ✅ **Graceful Degradation** - Hooks never break Claude Code, even on errors
 - ✅ **Inspectable** - CLI tools for debugging and exploration
@@ -59,11 +60,11 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 - 📚 **Template Library** - 6 ready-to-use workflows (API, monitor, pipeline, blockchain, LLM, multi-step)
 
 ### A2A Multi-Agent Coordination
-- 🤝 **Agent Messaging** - Send messages to other local Claude Code instances via file-based mailbox *(no daemon needed)* or to any ArmaraOS agent *(requires daemon)*
+- 🤝 **Agent Messaging** - Send messages and tasks to any registered A2A agent *(requires ArmaraOS daemon)*
 - 📝 **Note to Self** - Write a note that auto-surfaces in the *next* session's context *(works without daemon)*
 - 👁️ **Condition Monitors** - Register file/URL watchers that push A2A notifications on trigger *(requires ArmaraOS daemon)*
 - ⏳ **Async Task Delegation** - Delegate work with `a2a_task_send`; poll status with `a2a_task_status` *(requires ArmaraOS daemon)*
-- 🔍 **Agent Discovery** - List and register agents; local Claude instances discovered automatically *(ArmaraOS daemon optional)*
+- 🔍 **Agent Discovery** - List and register agents in the ArmaraOS daemon network *(requires ArmaraOS daemon)*
 - 💾 **Graph-Backed History** - Every message and task is stored as a typed node for replay and audit
 
 ### Goal Tracking
@@ -173,7 +174,7 @@ After the user restarts, confirm the install worked by checking:
 |---|---|
 | `python3: command not found` | Ask user to install Python 3.10+ from python.org, then re-run `bash setup.sh` |
 | Fewer tools visible than expected (no `ainl_*` tools) | `cd ~/.claude/plugins/ainl-cortex && .venv/bin/pip install 'ainativelang[mcp]>=1.8.0'` then restart Claude Code |
-| No `a2a_*` tools visible | A2A is opt-in. Set `"a2a": {"enabled": true}` in `config.json` and restart Claude Code. Local Claude-to-Claude messaging works immediately; ArmaraOS agent messaging additionally requires the daemon. |
+| No `a2a_*` tools visible | A2A is opt-in. Set `"a2a": {"enabled": true}` in `config.json` and restart Claude Code (the daemon must also be reachable). |
 | No banner at session start | Check `~/.claude/settings.json` has `"ainl-cortex@ainl-local": true` under `enabledPlugins`; if missing, re-run `bash setup.sh` |
 | Banner shows `MCP stack: FAIL` | Run `cd ~/.claude/plugins/ainl-cortex && bash setup.sh` again — setup re-installs deps |
 | `ainl_native (Rust bindings): build failed` | Safe to ignore — plugin falls back to the Python backend automatically. To enable native backend: install Rust 1.75+ from [rustup.rs](https://rustup.rs) then restart Claude Code. |
@@ -189,7 +190,7 @@ Once restarted, all of the following are on by default:
 - **Pattern promotion** — successful tool sequences promoted to reusable procedural patterns
 - **In-plugin notifications** — fetches update notices from ainativelang.com at each session start; unseen notices appear in the banner; seen IDs are persisted so nothing repeats
 
-A2A multi-agent messaging is available with `"a2a": {"enabled": true}` in `config.json`. Local Claude-to-Claude messaging (via file-based mailbox) works immediately with no daemon. Messaging to ArmaraOS agents additionally requires the daemon running.
+A2A multi-agent messaging is available but requires `"a2a": {"enabled": true}` in `config.json` and the ArmaraOS daemon running.
 
 ---
 
@@ -1222,7 +1223,7 @@ The file-based memory in `~/.claude/projects/.../memory/` is for human-readable 
 
 ### Do I need ArmaraOS to use A2A features?
 
-`a2a_send` routes automatically: messages to other local Claude Code instances are delivered via a file-based mailbox with no daemon required. Messages to ArmaraOS agents require the daemon; without it the tool reports a clean "bridge offline" error and falls back gracefully. `a2a_note_to_self` always works — it writes to a local inbox file that surfaces at next SessionStart regardless of daemon status.
+You need the **ArmaraOS daemon** running locally for `a2a_send` / `a2a_task_send` to deliver messages. Without it the tools report a clean "bridge offline" error and fall back gracefully. `a2a_note_to_self` always works — it writes to a local inbox file that surfaces at next SessionStart regardless of daemon status.
 
 ### What happens to memory during context compaction?
 

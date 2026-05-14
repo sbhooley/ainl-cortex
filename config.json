@@ -22,7 +22,12 @@
     "project_isolation": true,
     "enable_persona_evolution": true,
     "enable_pattern_extraction": true,
-    "store_backend": "python"
+    "store_backend": "python",
+    "recall_detail_level": "standard",
+    "recall_min_prompt_chars": 60,
+    "recall_compile_max_nodes": 20,
+    "repartition_max_depth": 3,
+    "semantic_lexical_fallback": false
   },
   "telemetry": {
     "track_compression_savings": true,
@@ -52,6 +57,7 @@
   "retrieval": {
     "similarity_enabled": true,
     "similarity_backend": "auto",
+    "retrieval_mode": "tfidf",
     "tfidf_cache_ttl_seconds": 300,
     "min_similarity_score": 0.15,
     "candidate_pool_size": 100
