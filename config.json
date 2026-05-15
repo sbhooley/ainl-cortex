@@ -27,7 +27,10 @@
     "recall_min_prompt_chars": 60,
     "recall_compile_max_nodes": 20,
     "repartition_max_depth": 3,
-    "semantic_lexical_fallback": false
+    "semantic_lexical_fallback": false,
+    "confidence_decay_days": 90,
+    "confidence_decay_factor": 0.05,
+    "node_ttl_days": 365
   },
   "telemetry": {
     "track_compression_savings": true,

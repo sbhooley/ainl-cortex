@@ -250,7 +250,8 @@ async def list_tools() -> list[Tool]:
                     "project_id": {"type": "string", "description": "Project identifier"},
                     "current_task": {"type": "string", "description": "Current task description"},
                     "files_mentioned": {"type": "array", "items": {"type": "string"}, "description": "Files mentioned"},
-                    "max_nodes": {"type": "number", "description": "Maximum nodes to return", "default": 50}
+                    "max_nodes": {"type": "number", "description": "Maximum nodes to return", "default": 50},
+                    "git_branch": {"type": "string", "description": "Filter recent_episodes to this branch"}
                 },
                 "required": ["project_id"]
             }
@@ -275,9 +276,27 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
                     "project_id": {"type": "string", "description": "Project identifier"},
-                    "limit": {"type": "number", "description": "Max results", "default": 20}
+                    "limit": {"type": "number", "description": "Max results", "default": 20},
+                    "git_branch": {"type": "string", "description": "Filter episode nodes to this branch (other node types always included)"}
                 },
                 "required": ["query", "project_id"]
+            }
+        ),
+        Tool(
+            name="memory_session_history",
+            description=(
+                "Query the tamper-evident session delta log. Returns what nodes were written "
+                "in recent sessions — useful for auditing what the agent learned, verifying "
+                "memory integrity after context compaction, or reviewing cross-session activity."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Project identifier"},
+                    "limit": {"type": "number", "description": "Max sessions to return", "default": 10},
+                    "since_days": {"type": "number", "description": "Only include sessions from last N days", "default": 30}
+                },
+                "required": ["project_id"]
             }
         ),
         Tool(
@@ -638,6 +657,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await memory_server.memory_expand_node(**arguments)
         elif name == "memory_search":
             result = await memory_server.memory_search(**arguments)
+        elif name == "memory_session_history":
+            result = await memory_server.memory_session_history(**arguments)
         elif name == "memory_evolve_persona":
             result = await memory_server.memory_evolve_persona(**arguments)
         # AINL tools
@@ -889,7 +910,8 @@ async def memory_recall_context(
     project_id: str,
     current_task: Optional[str] = None,
     files_mentioned: Optional[List[str]] = None,
-    max_nodes: int = 50
+    max_nodes: int = 50,
+    git_branch: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Recall memory context.
 
@@ -914,6 +936,19 @@ async def memory_recall_context(
             project_id_chain=chain,
         )
         memory_context = memory_server.retrieval.compile_memory_context(context, max_nodes)
+
+        # Optional branch filter: restrict episodes to a specific git branch.
+        # Non-episode node types (facts, failures, patterns) are project-scoped
+        # and always included regardless of branch.
+        if git_branch:
+            def _ep_branch(ep):
+                d = ep.data if hasattr(ep, "data") else (ep if isinstance(ep, dict) else {})
+                return d.get("git_branch") if isinstance(d, dict) else None
+            memory_context["recent_episodes"] = [
+                ep for ep in memory_context.get("recent_episodes", [])
+                if _ep_branch(ep) == git_branch
+            ]
+
         return {
             "context": memory_context,
             "node_count": sum(
@@ -942,11 +977,19 @@ async def memory_expand_node(project_id: str, node_id: str) -> Dict[str, Any]:
 async def memory_search(
     query: str,
     project_id: str,
-    limit: int = 20
+    limit: int = 20,
+    git_branch: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search memory"""
     try:
         results = memory_server.store.search_fts(query, project_id, limit)
+        # Branch filter: applies only to episode nodes; all others pass through.
+        if git_branch:
+            results = [
+                n for n in results
+                if n.node_type.value != "episode"
+                or (n.data or {}).get("git_branch") == git_branch
+            ]
         return {
             "results": [node.to_dict() for node in results],
             "count": len(results)
@@ -1046,6 +1089,67 @@ async def memory_list_goals(
         return {"error": str(e)}
 
 
+async def memory_session_history(
+    project_id: str,
+    limit: int = 10,
+    since_days: int = 30,
+) -> Dict[str, Any]:
+    """Query the session delta audit log for a project."""
+    try:
+        import json as _json, time as _time
+        from pathlib import Path as _Path
+
+        plugin_root = _Path(__file__).resolve().parent.parent
+        delta_file = plugin_root / "logs" / "session_deltas.jsonl"
+
+        if not delta_file.exists():
+            return {"sessions": [], "total": 0, "note": "No session delta log found yet."}
+
+        cutoff = _time.time() - since_days * 86400
+        raw_lines = delta_file.read_text(encoding="utf-8").strip().splitlines()
+
+        sessions = []
+        for line in reversed(raw_lines):
+            if len(sessions) >= limit:
+                break
+            try:
+                r = _json.loads(line)
+            except Exception:
+                continue
+            if r.get("project_id") != project_id:
+                continue
+            if r.get("finalized_at", 0) < cutoff:
+                continue
+
+            # Summarise node types without returning full content hashes
+            type_tally: Dict[str, int] = {}
+            for n in r.get("nodes", []):
+                t = n.get("node_type", "unknown")
+                type_tally[t] = type_tally.get(t, 0) + 1
+
+            sessions.append({
+                "session_id": r.get("session_id", "?"),
+                "started_at": r.get("started_at"),
+                "finalized_at": r.get("finalized_at"),
+                "node_count": r.get("node_count", 0),
+                "node_types": type_tally,
+                "nodes": [
+                    {"node_id": n["node_id"], "node_type": n["node_type"], "content_hash": n["content_hash"]}
+                    for n in r.get("nodes", [])
+                ],
+            })
+
+        return {
+            "sessions": sessions,
+            "total": len(sessions),
+            "project_id": project_id,
+            "since_days": since_days,
+        }
+    except Exception as e:
+        logger.error(f"memory_session_history failed: {e}")
+        return {"error": str(e)}
+
+
 # Add methods to the server instance
 memory_server.memory_store_episode = memory_store_episode
 memory_server.memory_store_semantic = memory_store_semantic
@@ -1054,6 +1158,7 @@ memory_server.memory_promote_pattern = memory_promote_pattern
 memory_server.memory_recall_context = memory_recall_context
 memory_server.memory_expand_node = memory_expand_node
 memory_server.memory_search = memory_search
+memory_server.memory_session_history = memory_session_history
 memory_server.memory_evolve_persona = memory_evolve_persona
 memory_server.memory_set_goal = memory_set_goal
 memory_server.memory_update_goal = memory_update_goal
