@@ -803,6 +803,16 @@ async def memory_store_failure(
 ) -> Dict[str, Any]:
     """Store a failure node"""
     try:
+        # Auto-populate file from error_message when not explicitly provided
+        if not kwargs.get('file') and error_message:
+            import re as _re
+            _fp = _re.search(
+                r'[\w./\\-]+\.(?:py|ts|tsx|js|json|yaml|yml|sql|sh|ainl|lang|toml|cfg|txt)\b',
+                error_message,
+            )
+            if _fp:
+                kwargs['file'] = _fp.group(0)
+
         node = create_failure_node(
             project_id=project_id,
             error_type=error_type,

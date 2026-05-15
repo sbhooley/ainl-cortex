@@ -586,7 +586,7 @@ def main():
                     goal_context_text = _tracker.format_goal_context(_goals)
 
                 # Failure pre-warnings
-                _advisor = FailureAdvisor(_store, project_id)
+                _advisor = FailureAdvisor(_store, project_id, cache_dir=db_path.parent)
                 _warnings = _advisor.analyse_prompt(prompt)
                 if _warnings:
                     failure_warning_text = _advisor.format_warnings(_warnings)

@@ -361,7 +361,14 @@ def create_failure_node(
         **{k: v for k, v in kwargs.items() if k in FailureData.__annotations__}
     )
 
-    embedding_text = f"{error_type} {tool} {error_message}"
+    _embed_parts = [failure_data.error_type, failure_data.tool, failure_data.error_message]
+    if failure_data.file:
+        _embed_parts.append(failure_data.file)
+    if failure_data.command:
+        _embed_parts.append(failure_data.command)
+    if failure_data.stack_trace:
+        _embed_parts.append(failure_data.stack_trace[:200])
+    embedding_text = " ".join(p for p in _embed_parts if p)
 
     return GraphNode(
         id=str(uuid.uuid4()),
