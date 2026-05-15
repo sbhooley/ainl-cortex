@@ -696,3 +696,48 @@ class NativeGraphStore(GraphStore):
 
     def fetch_anchored_summary(self, agent_id: str) -> Optional[str]:
         return self._store.fetch_anchored_summary(agent_id)
+
+    # ── Maintenance stubs (Rust manages its own TTL/decay internally) ─────────
+
+    def decay_node_confidence(
+        self, project_id: str, older_than_days: int = 90,
+        factor: float = 0.05, node_types=None
+    ) -> int:
+        return 0
+
+    def delete_expired_nodes(
+        self, project_id: str, ttl_days: int = 365, min_confidence: float = 0.05
+    ) -> int:
+        return 0
+
+    def get_failure_trends(
+        self, project_id: str, since_days: int = 7, min_count: int = 2
+    ) -> List[Dict[str, Any]]:
+        # Delegate to the Python sidecar DB for trend aggregation
+        try:
+            import sqlite3 as _sq, json as _json, time as _time
+            from pathlib import Path as _Path
+            _py_db = _Path(str(self.db_path)).parent / "ainl_memory.db"
+            if not _py_db.exists():
+                return []
+            _since = int(_time.time()) - since_days * 86400
+            _conn = _sq.connect(str(_py_db))
+            try:
+                rows = _conn.execute(
+                    """SELECT json_extract(data,'$.error_type'),
+                              json_extract(data,'$.tool'),
+                              COUNT(*), MAX(created_at)
+                       FROM ainl_graph_nodes
+                       WHERE node_type='failure' AND project_id=? AND created_at>=?
+                       GROUP BY 1,2 HAVING COUNT(*)>=?
+                       ORDER BY 3 DESC""",
+                    (project_id, _since, min_count),
+                ).fetchall()
+                return [
+                    {'error_type': r[0], 'tool': r[1], 'count': r[2], 'most_recent': r[3]}
+                    for r in rows
+                ]
+            finally:
+                _conn.close()
+        except Exception:
+            return []

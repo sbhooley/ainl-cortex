@@ -67,6 +67,21 @@ def _hash_anchor(anchor: Path) -> str:
     return hashlib.sha256(str(anchor.resolve()).encode()).hexdigest()[:16]
 
 
+def get_git_branch(cwd: Optional[Path] = None) -> Optional[str]:
+    """Return the current git branch name, or None if not in a repo / detached HEAD."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd or Path.cwd()), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=2.0, check=False,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+            return branch if branch and branch != "HEAD" else None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
 def _git_toplevel(cwd: Path) -> Optional[Path]:
     """Return the git repo toplevel for `cwd`, or None if not a git repo / git missing.
 

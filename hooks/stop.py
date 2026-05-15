@@ -22,7 +22,7 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
-from shared.project_id import get_project_id, get_project_info
+from shared.project_id import get_project_id, get_project_info, get_git_branch
 from shared.logger import log_event, log_error, get_logger
 from shared.a2a_inbox import write_self_note
 from shared.config import is_strict_native
@@ -127,6 +127,7 @@ def write_episode(project_id: str, session_data: dict):
         "outcome": outcome,
         "duration_ms": 0,
         "git_commit": None,
+        "git_branch": session_data.get("git_branch"),
         "test_results": None,
         "session_id": _session_id,
         "error_message": None,
@@ -485,6 +486,31 @@ def write_semantics(store, project_id: str) -> int:
                         f"(across {n_p} prompts)",
                         0.8,
                     ))
+
+                # ── Decision extraction ───────────────────────────────────────
+                # Detect explicit decision/architecture language in prompt text.
+                _DECISION_PATS = [
+                    _re.compile(
+                        r'(?:going with|decided to|we\'ll use|switching to|'
+                        r'using \S.{2,30} instead|settled on|agreed on|'
+                        r'the plan is|architecture is|we\'re going with)\s+(.{10,120})',
+                        _re.IGNORECASE,
+                    ),
+                    _re.compile(
+                        r'(?:the|our)\s+(?:api|db|database|server|endpoint|'
+                        r'key|token|port|version|url|base.?url|path)\s+'
+                        r'(?:is|will be|should be|needs to be)\s+(.{5,80})',
+                        _re.IGNORECASE,
+                    ),
+                ]
+                for rec in prompt_records:
+                    text = rec.get("text", "")
+                    for pat in _DECISION_PATS:
+                        for m in pat.finditer(text):
+                            decision = m.group(0).strip()[:200]
+                            if len(decision) >= 20:
+                                candidates.append((f"Decision: {decision}", 0.7))
+
         except Exception as e:
             logger.debug(f"Prompt history mining failed (non-fatal): {e}")
 
@@ -632,6 +658,7 @@ def _build_episode_data_only(session_data: dict) -> dict:
         "outcome": "partial" if session_data.get("had_errors") else "success",
         "duration_ms": 0,
         "git_commit": None,
+        "git_branch": session_data.get("git_branch"),
     }
 
 
@@ -829,6 +856,29 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             except Exception as e:
                 logger.warning(f"Goal write failed: {e}")
 
+    # Confidence decay + node TTL maintenance (Python backend only)
+    if not _STRICT_NATIVE and 'store' in dir() and store is not None:
+        try:
+            import json as _dc_json
+            _dc_cfg = {}
+            try:
+                _dc_cfg = _dc_json.loads((plugin_root / "config.json").read_text()).get("memory", {})
+            except Exception:
+                pass
+            _decay_days = int(_dc_cfg.get("confidence_decay_days", 90))
+            _decay_factor = float(_dc_cfg.get("confidence_decay_factor", 0.05))
+            _ttl_days = int(_dc_cfg.get("node_ttl_days", 365))
+            if _decay_days > 0:
+                _decayed = store.decay_node_confidence(project_id, _decay_days, _decay_factor)
+                if _decayed:
+                    logger.debug(f"Confidence decay: updated {_decayed} node(s)")
+            if _ttl_days > 0:
+                _deleted = store.delete_expired_nodes(project_id, _ttl_days)
+                if _deleted:
+                    logger.info(f"TTL: deleted {_deleted} expired node(s)")
+        except Exception as _dc_e:
+            logger.debug(f"Confidence decay/TTL failed (non-fatal): {_dc_e}")
+
     # Drain compression events and update auto-tune profile
     try:
         _inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
@@ -932,6 +982,10 @@ def main():
         _t0 = time.perf_counter()
 
         session_data = drain_session_inbox(project_id)
+        try:
+            session_data["git_branch"] = get_git_branch(cwd)
+        except Exception:
+            session_data["git_branch"] = None
 
         if session_data["tool_captures"]:
             finalize_session(project_id, session_data, plugin_root)

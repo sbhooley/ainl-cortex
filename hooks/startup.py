@@ -22,7 +22,7 @@ if _mcp_dir not in sys.path:
     sys.path.insert(0, _mcp_dir)
 
 from shared.logger import get_logger
-from shared.project_id import get_project_id, get_project_info, LEGACY_GLOBAL_PROJECT_ID
+from shared.project_id import get_project_id, get_project_info, get_git_branch, LEGACY_GLOBAL_PROJECT_ID
 from shared.a2a_inbox import read_self_inbox, clear_self_inbox
 from notifications import poll as _poll_notifications, format_banner as _format_notif_banner
 
@@ -359,9 +359,11 @@ def main():
         # buckets and which legacy bucket the read-fallback chain still queries.
         try:
             _info = get_project_info(cwd)
+            _branch = get_git_branch(cwd)
+            _branch_str = f"  branch: {_branch}" if _branch else ""
             _project_line = (
                 f"  • Project: {_info['project_id']}  ({_info['isolation_mode']}, "
-                f"git={'yes' if _info['git_toplevel'] else 'no'})  cwd: {cwd}\n"
+                f"git={'yes' if _info['git_toplevel'] else 'no'}{_branch_str})  cwd: {cwd}\n"
                 f"  • Legacy fallback: {LEGACY_GLOBAL_PROJECT_ID} "
                 f"(read-only until backfill via scripts/repartition_by_repo.py)\n"
             )
@@ -467,6 +469,22 @@ def main():
         notif_banner = _format_notif_banner(new_notifs, update_msgs)
         if notif_banner:
             system_blocks.append(notif_banner)
+
+        # ── Compaction recovery brief (Python backend only) ───────────────────
+        # Native backend has its own anchored summary (richer); only inject the
+        # delta-based brief when Rust is not available.
+        if not _NATIVE_OK:
+            try:
+                from shared.session_delta import build_compaction_brief
+                _comp_brief = build_compaction_brief(root)
+                if _comp_brief:
+                    system_blocks.append(
+                        "\n━━━ COMPACTION RECOVERY — RECENT SESSION WRITES ━━━\n"
+                        + _comp_brief
+                        + "\n━━━ END RECOVERY ━━━\n"
+                    )
+            except Exception as _cb_e:
+                logger.debug("Compaction recovery brief failed (non-fatal): %s", _cb_e)
 
         # ── Anchored summary + freshness gate (prior-session context) ─────────
         if _NATIVE_OK:

@@ -91,6 +91,62 @@ def wrap_store_for_delta(store, delta_entries: List[Dict[str, Any]]):
     return store
 
 
+# ── Compaction recovery ───────────────────────────────────────────────────────
+
+def build_compaction_brief(
+    plugin_root: Path,
+    max_sessions: int = 3,
+    max_age_days: int = 30,
+) -> str:
+    """Build a recovery brief from the last N session delta records.
+
+    Returned string is injected into the startup systemMessage for Python backend
+    users so that context compaction does not erase awareness of recent writes.
+    Returns empty string when no recent deltas exist.
+    """
+    delta_file = plugin_root / "logs" / "session_deltas.jsonl"
+    if not delta_file.exists():
+        return ""
+
+    cutoff = time.time() - max_age_days * 86400
+    try:
+        raw_lines = delta_file.read_text(encoding="utf-8").strip().splitlines()
+    except OSError:
+        return ""
+
+    records: List[Dict[str, Any]] = []
+    for line in reversed(raw_lines):
+        try:
+            r = json.loads(line)
+            if r.get("finalized_at", 0) >= cutoff:
+                records.append(r)
+            if len(records) >= max_sessions:
+                break
+        except Exception:
+            pass
+
+    if not records:
+        return ""
+
+    out = ["**Prior Session Writes (compaction recovery):**"]
+    for r in records:
+        ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.get("finalized_at", 0)))
+        node_count = r.get("node_count", 0)
+        type_tally: Dict[str, int] = {}
+        for n in r.get("nodes", []):
+            t = n.get("node_type", "?")
+            type_tally[t] = type_tally.get(t, 0) + 1
+        type_summary = ", ".join(
+            f"{v}×{k}" for k, v in sorted(type_tally.items())
+        )
+        out.append(
+            f"- [{ts}] session {r.get('session_id', '?')[:8]}… "
+            f"→ {node_count} nodes ({type_summary or 'none'})"
+        )
+
+    return "\n".join(out)
+
+
 # ── Delta file writer ─────────────────────────────────────────────────────────
 
 def append_session_delta(

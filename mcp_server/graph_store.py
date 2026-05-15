@@ -11,6 +11,7 @@ from pathlib import Path
 import sqlite3
 import json
 import logging
+import time
 
 try:
     from .node_types import GraphNode, GraphEdge, NodeType, EdgeType
@@ -88,6 +89,31 @@ class GraphStore(ABC):
     @abstractmethod
     def query_goals(self, project_id: str, status: Optional[str] = None, limit: int = 50) -> List[GraphNode]:
         """Query goal nodes"""
+        pass
+
+    @abstractmethod
+    def decay_node_confidence(
+        self, project_id: str, older_than_days: int = 90,
+        factor: float = 0.05, node_types: Optional[List[str]] = None
+    ) -> int:
+        """Subtract factor from confidence of nodes older than older_than_days.
+        Only touches semantic, failure, procedural, persona by default.
+        Returns number of nodes updated."""
+        pass
+
+    @abstractmethod
+    def delete_expired_nodes(
+        self, project_id: str, ttl_days: int = 365, min_confidence: float = 0.05
+    ) -> int:
+        """Delete low-confidence nodes older than ttl_days. Returns count deleted."""
+        pass
+
+    @abstractmethod
+    def get_failure_trends(
+        self, project_id: str, since_days: int = 7, min_count: int = 2
+    ) -> List[Dict[str, Any]]:
+        """Return failure clusters grouped by (error_type, tool) with counts.
+        Each item: {error_type, tool, count, most_recent}."""
         pass
 
 
@@ -609,6 +635,69 @@ class SQLiteGraphStore(GraphStore):
                 (project_id, limit)
             )
         return [self._row_to_node(row) for row in cursor.fetchall()]
+
+    def decay_node_confidence(
+        self, project_id: str, older_than_days: int = 90,
+        factor: float = 0.05, node_types: Optional[List[str]] = None
+    ) -> int:
+        types = node_types or ['semantic', 'failure', 'procedural', 'persona']
+        cutoff = int(time.time()) - older_than_days * 86400
+        placeholders = ','.join('?' * len(types))
+        now = int(time.time())
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"""UPDATE ainl_graph_nodes
+                SET confidence = MAX(0.0, confidence - ?),
+                    updated_at = ?
+                WHERE project_id = ?
+                  AND created_at < ?
+                  AND node_type IN ({placeholders})
+                  AND confidence > ?""",
+            [factor, now, project_id, cutoff] + types + [factor],
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def delete_expired_nodes(
+        self, project_id: str, ttl_days: int = 365, min_confidence: float = 0.05
+    ) -> int:
+        cutoff = int(time.time()) - ttl_days * 86400
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """DELETE FROM ainl_graph_nodes
+               WHERE project_id = ?
+                 AND created_at < ?
+                 AND confidence <= ?
+                 AND node_type IN ('semantic', 'failure', 'procedural', 'persona')""",
+            (project_id, cutoff, min_confidence),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_failure_trends(
+        self, project_id: str, since_days: int = 7, min_count: int = 2
+    ) -> List[Dict[str, Any]]:
+        since = int(time.time()) - since_days * 86400
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT
+                   json_extract(data, '$.error_type') AS error_type,
+                   json_extract(data, '$.tool') AS tool,
+                   COUNT(*) AS cnt,
+                   MAX(created_at) AS most_recent
+               FROM ainl_graph_nodes
+               WHERE node_type = 'failure'
+                 AND project_id = ?
+                 AND created_at >= ?
+               GROUP BY error_type, tool
+               HAVING cnt >= ?
+               ORDER BY cnt DESC""",
+            (project_id, since, min_count),
+        )
+        return [
+            {'error_type': r[0], 'tool': r[1], 'count': r[2], 'most_recent': r[3]}
+            for r in cursor.fetchall()
+        ]
 
     def close(self) -> None:
         """Close database connection"""

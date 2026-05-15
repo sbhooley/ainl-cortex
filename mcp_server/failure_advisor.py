@@ -121,9 +121,19 @@ class FailureAdvisor:
             logger.debug(f"FailureAdvisor.analyse_prompt failed (non-fatal): {e}")
             return []
 
-    def format_warnings(self, warnings: List[FailureWarning]) -> str:
-        """Format warnings as a compact markdown block for context injection."""
-        if not warnings:
+    def get_trends(self, since_days: int = 7, min_count: int = 2) -> list:
+        """Return failure trend clusters for the last since_days days."""
+        try:
+            return self.store.get_failure_trends(
+                self.project_id, since_days=since_days, min_count=min_count
+            )
+        except Exception as e:
+            logger.debug(f"get_failure_trends failed (non-fatal): {e}")
+            return []
+
+    def format_warnings(self, warnings: List[FailureWarning], trends: list = None) -> str:
+        """Format warnings + trend summary as a compact markdown block."""
+        if not warnings and not trends:
             return ""
 
         lines = ["**⚠ Failure History — Relevant Cautions:**"]
@@ -138,6 +148,14 @@ class FailureAdvisor:
                 lines.append(f"  Fix applied previously: {w.resolution}")
             else:
                 lines.append(f"  Status: unresolved — proceed with care")
+
+        if trends:
+            lines.append("\n**📈 Failure Trends (last 7 days):**")
+            for t in trends[:3]:
+                lines.append(
+                    f"- `{t['error_type']}` via `{t['tool']}`: "
+                    f"{t['count']} occurrence{'s' if t['count'] != 1 else ''}"
+                )
 
         return "\n".join(lines)
 

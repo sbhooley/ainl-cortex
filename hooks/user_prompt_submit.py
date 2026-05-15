@@ -15,7 +15,7 @@ from pathlib import Path
 # Add shared module to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared.project_id import get_project_id, LEGACY_GLOBAL_PROJECT_ID
+from shared.project_id import get_project_id, get_git_branch, LEGACY_GLOBAL_PROJECT_ID
 from shared.logger import log_event, log_error, get_logger
 from shared.a2a_inbox import read_inbox, clear_inbox
 from shared.a2a_log import append_log
@@ -281,7 +281,7 @@ def compress_user_prompt(prompt: str, project_id: str, config) -> tuple:
         return prompt, None
 
 
-def record_prompt_summary(project_id: str, prompt: str) -> None:
+def record_prompt_summary(project_id: str, prompt: str, cwd: Path = None) -> None:
     """
     Append a condensed prompt record to the project's prompt history file.
 
@@ -305,6 +305,12 @@ def record_prompt_summary(project_id: str, prompt: str) -> None:
         prompt.lower()
     )
 
+    _branch = None
+    try:
+        _branch = get_git_branch(cwd if isinstance(cwd, Path) else None)
+    except Exception:
+        pass
+
     record = {
         "ts": int(time.time()),
         "text": prompt[:300],
@@ -312,6 +318,7 @@ def record_prompt_summary(project_id: str, prompt: str) -> None:
         "tech_ids": tech_ids,
         "action": action.group(1) if action else None,
         "length": len(prompt),
+        "git_branch": _branch,
     }
 
     try:
@@ -585,12 +592,14 @@ def main():
                 if _goals:
                     goal_context_text = _tracker.format_goal_context(_goals)
 
-                # Failure pre-warnings
+                # Failure pre-warnings + trend clustering
                 _advisor = FailureAdvisor(_store, project_id, cache_dir=db_path.parent)
                 _warnings = _advisor.analyse_prompt(prompt)
-                if _warnings:
-                    failure_warning_text = _advisor.format_warnings(_warnings)
-                    logger.info(f"Injecting {len(_warnings)} failure warning(s)")
+                _trends = _advisor.get_trends()
+                if _warnings or _trends:
+                    failure_warning_text = _advisor.format_warnings(_warnings, _trends)
+                    if _warnings:
+                        logger.info(f"Injecting {len(_warnings)} failure warning(s)")
         except Exception as _ge:
             logger.debug(f"Goal/failure context failed (non-fatal): {_ge}")
 
@@ -676,7 +685,7 @@ def main():
 
         # Record prompt summary for cross-session semantic mining
         try:
-            record_prompt_summary(project_id, prompt)
+            record_prompt_summary(project_id, prompt, cwd=cwd)
         except Exception:
             pass
 
