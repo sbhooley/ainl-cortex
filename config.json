@@ -80,6 +80,20 @@
     "inject_in_context": true,
     "link_threshold": 0.15
   },
+  "autonomous_mode": {
+    "enabled": true,
+    "allow_self_scheduling": true,
+    "inject_due_tasks_in_startup": true,
+    "due_tasks_lookahead_minutes": 60,
+    "max_self_scheduled_tasks": 10,
+    "approved_autonomous_actions": [
+      "goal_review",
+      "memory_decay",
+      "session_summary",
+      "pattern_extraction",
+      "failure_trend_review"
+    ]
+  },
   "compression": {
     "enabled": true,
     "mode": "balanced",

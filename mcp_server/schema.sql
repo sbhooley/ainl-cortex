@@ -76,3 +76,30 @@ CREATE TABLE IF NOT EXISTS session_inbox (
 
 CREATE INDEX IF NOT EXISTS idx_inbox_project ON session_inbox(project_id);
 CREATE INDEX IF NOT EXISTS idx_inbox_active ON session_inbox(last_active DESC);
+
+-- Autonomous task queue (AI self-scheduling and user-directed schedules)
+CREATE TABLE IF NOT EXISTS autonomous_tasks (
+    task_id         TEXT    PRIMARY KEY,
+    project_id      TEXT    NOT NULL,
+    description     TEXT    NOT NULL,
+    schedule        TEXT,               -- cron expr or NULL for one-shot
+    trigger_type    TEXT    NOT NULL DEFAULT 'scheduled',
+    next_run_at     REAL,               -- Unix timestamp; NULL = not yet scheduled
+    last_run_at     REAL,
+    last_run_status TEXT,               -- 'success' | 'failed' | 'skipped'
+    last_run_note   TEXT,
+    status          TEXT    NOT NULL DEFAULT 'active',
+    created_at      REAL    NOT NULL,
+    created_by      TEXT    NOT NULL DEFAULT 'user',
+    max_runs        INTEGER,            -- NULL = unlimited
+    run_count       INTEGER NOT NULL DEFAULT 0,
+    priority        INTEGER NOT NULL DEFAULT 5,
+    CONSTRAINT valid_task_status   CHECK (status       IN ('active','paused','cancelled','completed')),
+    CONSTRAINT valid_trigger_type  CHECK (trigger_type IN ('scheduled','one_shot','goal_complete','threshold')),
+    CONSTRAINT valid_priority      CHECK (priority BETWEEN 1 AND 10)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_project     ON autonomous_tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status      ON autonomous_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_next_run    ON autonomous_tasks(next_run_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority    ON autonomous_tasks(project_id, status, priority DESC, next_run_at);

@@ -311,6 +311,86 @@ async def list_tools() -> list[Tool]:
                 "required": ["project_id", "episode_data"]
             }
         ),
+        Tool(
+            name="memory_schedule_task",
+            description=(
+                "Register an autonomous task in the persistent task queue. "
+                "For recurring tasks, also call CronCreate so Claude Code wakes you up on schedule. "
+                "Schedules: +Nm/h/d/w (e.g. '+6h', '+1d'), @hourly/@daily/@weekly/@monthly, "
+                "or 5-field cron ('0 9 * * 1' = 9am every Monday). "
+                "Leave schedule blank for one-shot tasks."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id":    {"type": "string", "description": "Project identifier"},
+                    "description":   {"type": "string", "description": "What to do when this task fires"},
+                    "schedule":      {"type": "string", "description": "Schedule expression or omit for one-shot"},
+                    "trigger_type":  {"type": "string", "enum": ["scheduled", "one_shot", "goal_complete", "threshold"], "default": "scheduled"},
+                    "priority":      {"type": "integer", "minimum": 1, "maximum": 10, "default": 5, "description": "1 (low) to 10 (critical)"},
+                    "max_runs":      {"type": "integer", "description": "Stop recurring after N runs (omit for unlimited)"},
+                    "created_by":    {"type": "string", "enum": ["user", "claude"], "default": "user"},
+                    "run_now":       {"type": "boolean", "default": False, "description": "Set next_run_at to now so task fires immediately on next session start"}
+                },
+                "required": ["project_id", "description"]
+            }
+        ),
+        Tool(
+            name="memory_list_scheduled_tasks",
+            description="List autonomous tasks for a project. Use due_only=true to see what's ready to execute now.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Project identifier"},
+                    "status":     {"type": "string", "enum": ["active", "paused", "cancelled", "completed"], "default": "active"},
+                    "due_only":   {"type": "boolean", "default": False, "description": "Only return tasks past their next_run_at"}
+                },
+                "required": ["project_id"]
+            }
+        ),
+        Tool(
+            name="memory_complete_task",
+            description=(
+                "Mark a task execution as successful. For recurring tasks, automatically "
+                "computes and sets the next next_run_at from the schedule. "
+                "Always call this after executing an autonomous task."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id":    {"type": "string", "description": "Task UUID from memory_schedule_task or memory_list_scheduled_tasks"},
+                    "note":       {"type": "string", "description": "Brief note about what was done"},
+                    "reschedule": {"type": "boolean", "default": True, "description": "Auto-compute next_run_at for recurring tasks"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="memory_cancel_task",
+            description="Cancel an autonomous task (sets status='cancelled'). Cannot be undone.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task UUID to cancel"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="memory_update_task",
+            description="Update a task's description, schedule, priority, or status (e.g. pause/resume).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id":     {"type": "string", "description": "Task UUID to update"},
+                    "description": {"type": "string", "description": "New description"},
+                    "schedule":    {"type": "string", "description": "New schedule expression (recalculates next_run_at)"},
+                    "priority":    {"type": "integer", "minimum": 1, "maximum": 10},
+                    "status":      {"type": "string", "enum": ["active", "paused", "cancelled", "completed"]}
+                },
+                "required": ["task_id"]
+            }
+        ),
         # AINL Tools
         Tool(
             name="ainl_validate",
@@ -661,6 +741,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await memory_server.memory_session_history(**arguments)
         elif name == "memory_evolve_persona":
             result = await memory_server.memory_evolve_persona(**arguments)
+        elif name == "memory_schedule_task":
+            result = await memory_server.memory_schedule_task(**arguments)
+        elif name == "memory_list_scheduled_tasks":
+            result = await memory_server.memory_list_scheduled_tasks(**arguments)
+        elif name == "memory_complete_task":
+            result = await memory_server.memory_complete_task(**arguments)
+        elif name == "memory_cancel_task":
+            result = await memory_server.memory_cancel_task(**arguments)
+        elif name == "memory_update_task":
+            result = await memory_server.memory_update_task(**arguments)
         # AINL tools
         elif name == "ainl_validate":
             if not memory_server.ainl_tools:
@@ -1150,6 +1240,175 @@ async def memory_session_history(
         return {"error": str(e)}
 
 
+async def memory_schedule_task(
+    project_id: str,
+    description: str,
+    schedule: Optional[str] = None,
+    trigger_type: str = 'scheduled',
+    priority: int = 5,
+    max_runs: Optional[int] = None,
+    created_by: str = 'user',
+    run_now: bool = False,
+) -> Dict[str, Any]:
+    """Register an autonomous task in the persistent queue."""
+    try:
+        import uuid as _uuid, time as _time
+        try:
+            from .autonomous_scheduler import parse_next_run, is_valid_schedule, describe_schedule
+        except ImportError:
+            from autonomous_scheduler import parse_next_run, is_valid_schedule, describe_schedule
+
+        if schedule and not is_valid_schedule(schedule):
+            return {
+                "error": (
+                    f"Invalid schedule expression: {schedule!r}. "
+                    "Use +Nm/h/d/w, @hourly, @daily, @weekly, @monthly, or 5-field cron."
+                )
+            }
+
+        task_id = str(_uuid.uuid4())
+        now = _time.time()
+
+        if run_now:
+            next_run_at: Optional[float] = now
+        elif schedule:
+            next_run_at = parse_next_run(schedule, since=now)
+        else:
+            next_run_at = None
+
+        memory_server.store.create_autonomous_task(
+            task_id=task_id, project_id=project_id, description=description,
+            schedule=schedule, trigger_type=trigger_type, next_run_at=next_run_at,
+            created_by=created_by, max_runs=max_runs, priority=priority,
+        )
+
+        hint = (
+            "Task registered. For recurring wakeups also call CronCreate with a matching interval."
+            if schedule
+            else "One-shot task registered — call memory_complete_task(task_id, note=…) when done."
+        )
+        return {
+            "task_id": task_id,
+            "description": description,
+            "schedule": schedule,
+            "schedule_description": describe_schedule(schedule) if schedule else "one-shot",
+            "next_run_at": next_run_at,
+            "priority": priority,
+            "status": "active",
+            "hint": hint,
+        }
+    except Exception as e:
+        logger.error("memory_schedule_task failed: %s", e)
+        return {"error": str(e)}
+
+
+async def memory_list_scheduled_tasks(
+    project_id: str,
+    status: str = 'active',
+    due_only: bool = False,
+) -> Dict[str, Any]:
+    """List autonomous tasks for a project."""
+    try:
+        import time as _t
+        tasks = memory_server.store.list_autonomous_tasks(
+            project_id=project_id, status=status, due_only=due_only,
+        )
+        now = _t.time()
+        for task in tasks:
+            nra = task.get('next_run_at')
+            task['seconds_until_due'] = round(nra - now) if nra is not None else None
+        return {"tasks": tasks, "count": len(tasks), "status_filter": status, "due_only": due_only}
+    except Exception as e:
+        logger.error("memory_list_scheduled_tasks failed: %s", e)
+        return {"error": str(e)}
+
+
+async def memory_complete_task(
+    task_id: str,
+    note: Optional[str] = None,
+    reschedule: bool = True,
+) -> Dict[str, Any]:
+    """Mark a task execution successful and advance next_run_at for recurring tasks."""
+    try:
+        import time as _t
+        task = memory_server.store.get_autonomous_task(task_id)
+        if not task:
+            return {"error": "task_not_found", "task_id": task_id}
+
+        next_run_at = None
+        if reschedule and task.get('schedule'):
+            try:
+                from .autonomous_scheduler import parse_next_run
+            except ImportError:
+                from autonomous_scheduler import parse_next_run
+            next_run_at = parse_next_run(task['schedule'], since=_t.time())
+
+        ok = memory_server.store.mark_task_run(
+            task_id=task_id, run_status='success', note=note, next_run_at=next_run_at,
+        )
+        return {
+            "completed": ok,
+            "task_id": task_id,
+            "next_run_at": next_run_at,
+            "rescheduled": next_run_at is not None,
+        }
+    except Exception as e:
+        logger.error("memory_complete_task failed: %s", e)
+        return {"error": str(e)}
+
+
+async def memory_cancel_task(task_id: str) -> Dict[str, Any]:
+    """Cancel an autonomous task."""
+    try:
+        ok = memory_server.store.cancel_autonomous_task(task_id)
+        return {"cancelled": ok, "task_id": task_id}
+    except Exception as e:
+        logger.error("memory_cancel_task failed: %s", e)
+        return {"error": str(e)}
+
+
+async def memory_update_task(
+    task_id: str,
+    description: Optional[str] = None,
+    schedule: Optional[str] = None,
+    priority: Optional[int] = None,
+    status: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Update a task's description, schedule, priority, or status."""
+    try:
+        task = memory_server.store.get_autonomous_task(task_id)
+        if not task:
+            return {"error": "task_not_found", "task_id": task_id}
+
+        updates: Dict[str, Any] = {}
+        if description is not None:
+            updates['description'] = description
+        if priority is not None:
+            if not (1 <= priority <= 10):
+                return {"error": "priority must be between 1 and 10"}
+            updates['priority'] = priority
+        if status is not None:
+            if status not in ('active', 'paused', 'cancelled', 'completed'):
+                return {"error": f"Invalid status: {status!r}. Must be active/paused/cancelled/completed"}
+            updates['status'] = status
+        if schedule is not None:
+            try:
+                from .autonomous_scheduler import parse_next_run, is_valid_schedule
+            except ImportError:
+                from autonomous_scheduler import parse_next_run, is_valid_schedule
+            if not is_valid_schedule(schedule):
+                return {"error": f"Invalid schedule expression: {schedule!r}"}
+            updates['schedule'] = schedule
+            import time as _t
+            updates['next_run_at'] = parse_next_run(schedule, since=_t.time())
+
+        ok = memory_server.store.update_autonomous_task(task_id, **updates)
+        return {"updated": ok, "task_id": task_id, "changes": list(updates.keys())}
+    except Exception as e:
+        logger.error("memory_update_task failed: %s", e)
+        return {"error": str(e)}
+
+
 # Add methods to the server instance
 memory_server.memory_store_episode = memory_store_episode
 memory_server.memory_store_semantic = memory_store_semantic
@@ -1164,6 +1423,11 @@ memory_server.memory_set_goal = memory_set_goal
 memory_server.memory_update_goal = memory_update_goal
 memory_server.memory_complete_goal = memory_complete_goal
 memory_server.memory_list_goals = memory_list_goals
+memory_server.memory_schedule_task = memory_schedule_task
+memory_server.memory_list_scheduled_tasks = memory_list_scheduled_tasks
+memory_server.memory_complete_task = memory_complete_task
+memory_server.memory_cancel_task = memory_cancel_task
+memory_server.memory_update_task = memory_update_task
 
 
 async def main():

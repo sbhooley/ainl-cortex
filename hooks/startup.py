@@ -35,7 +35,7 @@ except ImportError:
 
 logger = get_logger("startup")
 
-TOOL_COUNT_MEMORY = 12  # 7 core + 4 goal management + memory_expand_node
+TOOL_COUNT_MEMORY = 18  # 7 core + session_history + evolve_persona + expand_node + 4 goals + 5 autonomous
 TOOL_COUNT_AINL = 12
 TOOL_COUNT_A2A = 7
 EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL + TOOL_COUNT_A2A
@@ -485,6 +485,57 @@ def main():
                     )
             except Exception as _cb_e:
                 logger.debug("Compaction recovery brief failed (non-fatal): %s", _cb_e)
+
+        # ── Autonomous tasks due ──────────────────────────────────────────────
+        try:
+            import json as _at_json
+            _at_cfg = _at_json.loads((root / "config.json").read_text()).get("autonomous_mode", {})
+            if _at_cfg.get("enabled", False) and _at_cfg.get("inject_due_tasks_in_startup", True):
+                from graph_store import get_graph_store as _get_at_gs
+                _at_project_id = get_project_id(cwd)
+                _at_store = _get_at_gs(db_path)
+                _lookahead_s = _at_cfg.get("due_tasks_lookahead_minutes", 60) * 60
+                _due_tasks = _at_store.list_autonomous_tasks(
+                    project_id=_at_project_id,
+                    status='active',
+                    due_only=True,
+                    due_before=time.time() + _lookahead_s,
+                )
+                if _due_tasks:
+                    def _fmt_due(ts):
+                        if ts is None:
+                            return "now"
+                        delta = ts - time.time()
+                        if delta <= 60:
+                            return "OVERDUE" if delta < 0 else "now"
+                        if delta < 3600:
+                            return f"in {int(delta / 60)}m"
+                        return f"in {int(delta / 3600)}h {int((delta % 3600) / 60)}m"
+
+                    _sorted = sorted(
+                        _due_tasks,
+                        key=lambda x: (-x.get('priority', 5), x.get('next_run_at') or 0),
+                    )[:10]
+                    _task_lines = [
+                        f"  [{t.get('priority', 5):2d}] {t['description']}"
+                        f"  [{t.get('trigger_type', 'scheduled')}]"
+                        f"  {_fmt_due(t.get('next_run_at'))}"
+                        f"  id={t['task_id']}"
+                        for t in _sorted
+                    ]
+                    system_blocks.append(
+                        "\n━━━ AUTONOMOUS TASKS DUE ━━━\n"
+                        + "\n".join(_task_lines) + "\n\n"
+                        + "Execute each task in priority order before responding to the user "
+                        "(unless their first message is clearly urgent). "
+                        "Call memory_complete_task(task_id=…, note=…) after each one.\n"
+                        "━━━ END AUTONOMOUS TASKS ━━━\n"
+                    )
+                    logger.info(
+                        "Injected %d autonomous task(s) due in startup", len(_due_tasks)
+                    )
+        except Exception as _at_e:
+            logger.debug("Autonomous task injection failed (non-fatal): %s", _at_e)
 
         # ── Anchored summary + freshness gate (prior-session context) ─────────
         if _NATIVE_OK:

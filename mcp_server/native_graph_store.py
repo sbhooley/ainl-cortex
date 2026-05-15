@@ -741,3 +741,63 @@ class NativeGraphStore(GraphStore):
                 _conn.close()
         except Exception:
             return []
+
+    # ── Autonomous task queue — delegate to Python sidecar ────────────────────
+    # The autonomous_tasks table lives in ainl_memory.db (Python sidecar) so
+    # the same data is visible regardless of which backend is active.
+
+    def _sidecar_store(self):
+        """Open a SQLiteGraphStore against the Python sidecar DB."""
+        from pathlib import Path as _P
+        try:
+            from graph_store import SQLiteGraphStore as _S
+        except ImportError:
+            import sys as _sys
+            _sys.path.insert(0, str(_P(__file__).parent))
+            from graph_store import SQLiteGraphStore as _S
+        _py_db = _P(str(self.db_path)).parent / "ainl_memory.db"
+        return _S(_py_db)
+
+    def create_autonomous_task(self, task_id, project_id, description,
+                               schedule=None, trigger_type='scheduled',
+                               next_run_at=None, created_by='user',
+                               max_runs=None, priority=5):
+        try:
+            return self._sidecar_store().create_autonomous_task(
+                task_id, project_id, description, schedule, trigger_type,
+                next_run_at, created_by, max_runs, priority)
+        except Exception:
+            return {}
+
+    def list_autonomous_tasks(self, project_id, status='active',
+                              due_only=False, due_before=None, limit=50):
+        try:
+            return self._sidecar_store().list_autonomous_tasks(
+                project_id, status, due_only, due_before, limit)
+        except Exception:
+            return []
+
+    def get_autonomous_task(self, task_id):
+        try:
+            return self._sidecar_store().get_autonomous_task(task_id)
+        except Exception:
+            return None
+
+    def update_autonomous_task(self, task_id, **kwargs):
+        try:
+            return self._sidecar_store().update_autonomous_task(task_id, **kwargs)
+        except Exception:
+            return False
+
+    def mark_task_run(self, task_id, run_status, note=None, next_run_at=None):
+        try:
+            return self._sidecar_store().mark_task_run(
+                task_id, run_status, note, next_run_at)
+        except Exception:
+            return False
+
+    def cancel_autonomous_task(self, task_id):
+        try:
+            return self._sidecar_store().cancel_autonomous_task(task_id)
+        except Exception:
+            return False

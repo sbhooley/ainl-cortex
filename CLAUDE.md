@@ -91,6 +91,55 @@ Factory: always use `mcp_server/graph_store.py:get_graph_store(db_path)`, never 
 
 ---
 
+## Autonomous Mode
+
+You have a persistent task queue (`autonomous_tasks` table) that survives across sessions. When the SessionStart banner shows an **AUTONOMOUS TASKS DUE** block, you have tasks that are ready to run.
+
+### On session start with due tasks
+
+1. Read the task list from the banner (id, description, priority, trigger_type).
+2. Execute each task in **priority order** (highest first) before responding to the user, unless the user's opening message is clearly urgent.
+3. After completing each task call `memory_complete_task(task_id=…, note=…)` — this advances `next_run_at` for recurring tasks automatically.
+4. If a task fails, call `memory_update_task(task_id=…, status="paused")` and explain why in the note.
+
+### Scheduling tasks proactively
+
+Call `memory_schedule_task` when:
+- A multi-session goal needs a follow-up check ("review goal progress in 3 days")
+- The user asks for something on a schedule ("remind me to run the nightly digest every day")
+- You detect a pattern worth monitoring periodically
+- You want to queue a deferred action for yourself
+
+**Schedule formats:**
+- Relative: `+30m`, `+6h`, `+1d`, `+2w`
+- Named: `@hourly`, `@daily`, `@weekly`, `@monthly`
+- 5-field cron: `"0 9 * * 1"` = 9 am every Monday (weekday: 0=Sunday)
+
+**For recurring tasks**, pair `memory_schedule_task` with **`CronCreate`** so Claude Code actually wakes you up:
+```
+1. memory_schedule_task(project_id, description, schedule="+1d", created_by="claude")
+2. CronCreate(interval_minutes=1440, prompt="Check autonomous task queue and execute due tasks.")
+```
+
+### Safety constraints
+
+- Only execute tasks autonomously if they are in `approved_autonomous_actions` OR were explicitly created by the user (`created_by: "user"`).
+- Never modify files, push to git, delete data, or send external messages autonomously without prior explicit user authorization captured in the task description or a goal.
+- Claude-created tasks (`created_by: "claude"`) require `allow_self_scheduling: true` in `config.json` (it is `true` by default).
+- Cap self-scheduled recurring tasks at `max_self_scheduled_tasks` (default 10). Check `memory_list_scheduled_tasks` before creating new ones.
+
+### Task management tools
+
+| Tool | When to use |
+|---|---|
+| `memory_schedule_task` | Create a new task (one-shot or recurring) |
+| `memory_list_scheduled_tasks` | See what's in the queue; use `due_only=true` for what needs running |
+| `memory_complete_task` | After executing — advances next_run_at for recurring tasks |
+| `memory_update_task` | Pause, resume, change schedule or description |
+| `memory_cancel_task` | Permanently remove a task |
+
+---
+
 ## Autonomous Goal Management
 
 You have full authority to set, update, and complete goals on your own judgment. **Do not wait to be asked.**

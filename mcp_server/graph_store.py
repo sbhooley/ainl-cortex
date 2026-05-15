@@ -116,6 +116,63 @@ class GraphStore(ABC):
         Each item: {error_type, tool, count, most_recent}."""
         pass
 
+    # ── Autonomous task queue ─────────────────────────────────────────────────
+
+    @abstractmethod
+    def create_autonomous_task(
+        self,
+        task_id: str,
+        project_id: str,
+        description: str,
+        schedule: Optional[str] = None,
+        trigger_type: str = 'scheduled',
+        next_run_at: Optional[float] = None,
+        created_by: str = 'user',
+        max_runs: Optional[int] = None,
+        priority: int = 5,
+    ) -> Dict[str, Any]:
+        """Insert a new autonomous task. Returns the created task dict."""
+        pass
+
+    @abstractmethod
+    def list_autonomous_tasks(
+        self,
+        project_id: str,
+        status: str = 'active',
+        due_only: bool = False,
+        due_before: Optional[float] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List tasks for a project, ordered by priority DESC then next_run_at ASC."""
+        pass
+
+    @abstractmethod
+    def get_autonomous_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single task by ID, or None if not found."""
+        pass
+
+    @abstractmethod
+    def update_autonomous_task(self, task_id: str, **kwargs) -> bool:
+        """Update allowed fields on a task. Returns True if a row was modified."""
+        pass
+
+    @abstractmethod
+    def mark_task_run(
+        self,
+        task_id: str,
+        run_status: str,
+        note: Optional[str] = None,
+        next_run_at: Optional[float] = None,
+    ) -> bool:
+        """Record a task execution: bump run_count, set last_run_at/status/note,
+        update next_run_at, and auto-complete when one-shot or max_runs reached."""
+        pass
+
+    @abstractmethod
+    def cancel_autonomous_task(self, task_id: str) -> bool:
+        """Set status='cancelled'. Returns True if a row was modified."""
+        pass
+
 
 class SQLiteGraphStore(GraphStore):
     """
@@ -698,6 +755,128 @@ class SQLiteGraphStore(GraphStore):
             {'error_type': r[0], 'tool': r[1], 'count': r[2], 'most_recent': r[3]}
             for r in cursor.fetchall()
         ]
+
+    # ── Autonomous task queue ─────────────────────────────────────────────────
+
+    def create_autonomous_task(
+        self,
+        task_id: str,
+        project_id: str,
+        description: str,
+        schedule: Optional[str] = None,
+        trigger_type: str = 'scheduled',
+        next_run_at: Optional[float] = None,
+        created_by: str = 'user',
+        max_runs: Optional[int] = None,
+        priority: int = 5,
+    ) -> Dict[str, Any]:
+        now = time.time()
+        self.conn.execute(
+            """INSERT INTO autonomous_tasks
+               (task_id, project_id, description, schedule, trigger_type,
+                next_run_at, last_run_at, last_run_status, last_run_note,
+                status, created_at, created_by, max_runs, run_count, priority)
+               VALUES (?,?,?,?,?,?,NULL,NULL,NULL,'active',?,?,?,0,?)""",
+            (task_id, project_id, description, schedule, trigger_type,
+             next_run_at, now, created_by, max_runs, priority),
+        )
+        self.conn.commit()
+        return {
+            'task_id': task_id, 'project_id': project_id, 'description': description,
+            'schedule': schedule, 'trigger_type': trigger_type, 'next_run_at': next_run_at,
+            'last_run_at': None, 'last_run_status': None, 'last_run_note': None,
+            'status': 'active', 'created_at': now, 'created_by': created_by,
+            'max_runs': max_runs, 'run_count': 0, 'priority': priority,
+        }
+
+    def list_autonomous_tasks(
+        self,
+        project_id: str,
+        status: str = 'active',
+        due_only: bool = False,
+        due_before: Optional[float] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        cutoff = due_before if due_before is not None else time.time()
+        if due_only:
+            rows = self.conn.execute(
+                """SELECT * FROM autonomous_tasks
+                   WHERE project_id = ? AND status = ? AND next_run_at <= ?
+                   ORDER BY priority DESC, next_run_at ASC
+                   LIMIT ?""",
+                (project_id, status, cutoff, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT * FROM autonomous_tasks
+                   WHERE project_id = ? AND status = ?
+                   ORDER BY priority DESC, next_run_at ASC
+                   LIMIT ?""",
+                (project_id, status, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_autonomous_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM autonomous_tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_autonomous_task(self, task_id: str, **kwargs) -> bool:
+        _ALLOWED = {
+            'description', 'schedule', 'trigger_type', 'next_run_at',
+            'status', 'priority', 'max_runs', 'last_run_note',
+        }
+        updates = {k: v for k, v in kwargs.items() if k in _ALLOWED}
+        if not updates:
+            return False
+        sets = ', '.join(f"{k} = ?" for k in updates)
+        vals = list(updates.values()) + [task_id]
+        cur = self.conn.execute(
+            f"UPDATE autonomous_tasks SET {sets} WHERE task_id = ?", vals
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def mark_task_run(
+        self,
+        task_id: str,
+        run_status: str,
+        note: Optional[str] = None,
+        next_run_at: Optional[float] = None,
+    ) -> bool:
+        task = self.get_autonomous_task(task_id)
+        if not task:
+            return False
+        new_count = task['run_count'] + 1
+        max_runs  = task['max_runs']
+        schedule  = task.get('schedule')
+
+        # Auto-complete when one-shot or run limit reached
+        if (next_run_at is None and not schedule) or (
+            max_runs is not None and new_count >= max_runs
+        ):
+            new_status = 'completed'
+        else:
+            new_status = task['status']
+
+        self.conn.execute(
+            """UPDATE autonomous_tasks
+               SET last_run_at = ?, last_run_status = ?, last_run_note = ?,
+                   run_count = ?, next_run_at = ?, status = ?
+               WHERE task_id = ?""",
+            (time.time(), run_status, note, new_count, next_run_at, new_status, task_id),
+        )
+        self.conn.commit()
+        return True
+
+    def cancel_autonomous_task(self, task_id: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE autonomous_tasks SET status = 'cancelled' WHERE task_id = ?",
+            (task_id,),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def close(self) -> None:
         """Close database connection"""
