@@ -152,20 +152,26 @@ def write_episode(project_id: str, session_data: dict):
 
 def write_failures(store, project_id: str, session_data: dict) -> int:
     """Write a failure node for every errored tool capture in the session."""
-    from node_types import create_failure_node
+    from node_types import create_failure_node, failure_content_id
 
     count = 0
     for capture in session_data.get("tool_captures", []):
         if capture.get("success", True):
             continue
+        # Prefer specific AINL error kind over generic capture type
+        error_type = capture.get("ainl_error_kind") or capture.get("type", "tool_error")
+        tool = capture.get("tool", "unknown")
+        error_message = capture.get("error", "")[:500]
         node = create_failure_node(
             project_id=project_id,
-            error_type=capture.get("type", "tool_error"),
-            tool=capture.get("tool", "unknown"),
-            error_message=capture.get("error", "")[:500],
+            error_type=error_type,
+            tool=tool,
+            error_message=error_message,
             file=capture.get("file"),
             command=capture.get("command", "")[:200] if capture.get("command") else None,
         )
+        # Deterministic ID deduplicates identical errors via INSERT OR REPLACE
+        node.id = failure_content_id(project_id, error_type, tool, error_message)
         store.write_node(node)
         count += 1
 

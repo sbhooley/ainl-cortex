@@ -210,14 +210,18 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="memory_store_failure",
-            description="Store a failure node for learning from errors",
+            description="Store a failure node for learning from errors. Identical errors are deduplicated automatically.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "project_id": {"type": "string", "description": "Project identifier"},
-                    "error_type": {"type": "string", "description": "Type of error"},
-                    "tool": {"type": "string", "description": "Tool that failed"},
-                    "error_message": {"type": "string", "description": "Error message"}
+                    "error_type": {"type": "string", "description": "Short error category, e.g. 'adapter_registration_error'"},
+                    "tool": {"type": "string", "description": "Tool or MCP tool name that failed, e.g. 'ainl_run'"},
+                    "error_message": {"type": "string", "description": "Full error message or primary diagnostic"},
+                    "file": {"type": "string", "description": "File path involved in the failure, e.g. 'intelligence/workflow.ainl'. Powers file-match signal in failure advisor."},
+                    "command": {"type": "string", "description": "Shell command or AINL tool invocation that triggered the failure"},
+                    "stack_trace": {"type": "string", "description": "Stack trace or extended error detail (first 200 chars indexed for semantic matching)"},
+                    "resolution": {"type": "string", "description": "How the failure was fixed, if already known"}
                 },
                 "required": ["project_id", "error_type", "tool", "error_message"]
             }
@@ -820,6 +824,9 @@ async def memory_store_failure(
             error_message=error_message,
             **kwargs
         )
+        # Deterministic ID deduplicates identical errors via INSERT OR REPLACE
+        from node_types import failure_content_id
+        node.id = failure_content_id(project_id, error_type, tool, error_message)
         memory_server.store.write_node(node)
         return {
             "node_id": node.id,

@@ -8,6 +8,7 @@ Each node type has a well-defined JSON schema in the data field.
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, List, Optional, Literal
 from enum import Enum
+import hashlib
 import uuid
 import time
 
@@ -380,6 +381,18 @@ def create_failure_node(
         data=asdict(failure_data),
         embedding_text=embedding_text
     )
+
+
+def failure_content_id(project_id: str, error_type: str, tool: str, error_message: str) -> str:
+    """Deterministic node ID for deduplication of identical failure records.
+
+    Using a stable hash means write_node's INSERT OR REPLACE naturally
+    coalesces repeated identical errors rather than creating duplicate nodes.
+    Truncates error_message to 200 chars so minor suffix differences don't
+    generate distinct records for what is functionally the same error.
+    """
+    key = f"{project_id}:{error_type}:{tool}:{error_message[:200]}"
+    return "fail-" + hashlib.sha1(key.encode()).hexdigest()[:16]
 
 
 def create_goal_node(

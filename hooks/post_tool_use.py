@@ -34,6 +34,18 @@ except ImportError:
 _STRICT_NATIVE = is_strict_native(_NATIVE_OK)
 
 
+# AINL MCP tools whose structured error JSON should be auto-captured as failures.
+# Matched as a substring so mcp__ainl-cortex__ainl_run and ainl_run both hit.
+_AINL_ERROR_TOOLS = frozenset({'ainl_run', 'ainl_validate', 'ainl_compile', 'ainl_security_report'})
+# error_kind values that are user input issues, not runtime failures worth storing
+_AINL_USER_ERRORS = frozenset({'empty_source', 'path_not_found', 'path_not_a_file'})
+
+
+def _is_ainl_tool(tool: str) -> bool:
+    t = tool.lower()
+    return any(name in t for name in _AINL_ERROR_TOOLS)
+
+
 # Tool canonicalization (matches extractor.py)
 TOOL_CANON = {
     'Bash': 'bash', 'Shell': 'bash', 'sh': 'bash',
@@ -175,6 +187,27 @@ def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
         capture['type'] = 'search'
         capture['pattern'] = tool_input.get('pattern', '')
         capture['success'] = True
+
+    elif _is_ainl_tool(tool):
+        capture['type'] = 'ainl_tool'
+        r = result if isinstance(result, dict) else {}
+        error_kind = r.get('error_kind')
+        if error_kind and error_kind not in _AINL_USER_ERRORS:
+            # Structured AINL runtime / compile / adapter failure
+            capture['success'] = False
+            capture['ainl_error_kind'] = error_kind
+            capture['error'] = (
+                r.get('primary_diagnostic') or r.get('message') or error_kind
+            )[:400]
+            capture['file'] = (
+                r.get('source_path') or tool_input.get('path') or tool_input.get('file')
+            )
+        elif r.get('type') == 'tool_error':
+            # MCP-level tool error (network, schema, etc.)
+            capture['success'] = False
+            capture['error'] = _bash_output(r)[:400] or 'tool_error'
+        else:
+            capture['success'] = True
 
     else:
         # Generic capture
