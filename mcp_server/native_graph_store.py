@@ -405,6 +405,23 @@ def _ainl_to_node(raw: dict) -> GraphNode:
         data.pop("py_node_type", None)
         node_type = NodeType.SEMANTIC
 
+    # Reconstruct embedding_text for failure nodes — not stored in the Rust schema
+    # but needed for TF-IDF semantic matching in FailureAdvisor.
+    embedding_text = None
+    if node_type == NodeType.FAILURE:
+        _parts = [
+            data.get("error_type", ""),
+            data.get("tool", ""),
+            data.get("error_message", ""),
+        ]
+        if data.get("file"):
+            _parts.append(str(data["file"]))
+        if data.get("command"):
+            _parts.append(str(data["command"]))
+        if data.get("stack_trace"):
+            _parts.append(str(data["stack_trace"])[:200])
+        embedding_text = " ".join(p for p in _parts if p) or None
+
     return GraphNode(
         id=node_id,
         node_type=node_type,
@@ -415,7 +432,7 @@ def _ainl_to_node(raw: dict) -> GraphNode:
         data=data,
         agent_id=agent_id,
         metadata=None,
-        embedding_text=None,
+        embedding_text=embedding_text,
     )
 
 
