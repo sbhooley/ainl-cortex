@@ -110,16 +110,25 @@ def write_episode(project_id: str, session_data: dict):
 
     store = get_graph_store(db_path)
 
+    # Read the session UUID stamped by startup (falls back to a fresh UUID if
+    # startup did not run, so stop always produces a valid session_id).
+    plugin_root = Path(__file__).resolve().parent.parent
+    try:
+        from shared.session_delta import read_session_id as _read_sid
+        _session_id = _read_sid(project_id, plugin_root)
+    except Exception:
+        _session_id = str(uuid.uuid4())
+
     episode_data = {
         "turn_id": str(uuid.uuid4()),
         "task_description": task_summary,
-        "tool_calls": session_data["tools_used"],
-        "files_touched": session_data["files_touched"],
+        "tool_calls": sorted(session_data["tools_used"]) if isinstance(session_data["tools_used"], set) else session_data["tools_used"],
+        "files_touched": sorted(session_data["files_touched"]) if isinstance(session_data["files_touched"], set) else session_data["files_touched"],
         "outcome": outcome,
         "duration_ms": 0,
         "git_commit": None,
         "test_results": None,
-        "session_id": None,
+        "session_id": _session_id,
         "error_message": None,
     }
 
@@ -738,6 +747,22 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
     outcome = "partial" if session_data["had_errors"] else "success"
     capture_count = len(session_data.get("tool_captures", []))
 
+    # Audit delta: collect every node written this session for the delta log
+    delta_entries: list = []
+    try:
+        from shared.session_delta import (
+            read_session_id as _read_sid,
+            session_started_at as _sess_started,
+            wrap_store_for_delta as _wrap_delta,
+            append_session_delta as _append_delta,
+        )
+        _delta_session_id = _read_sid(project_id, plugin_root)
+        _delta_started_at = _sess_started(project_id, plugin_root)
+    except Exception:
+        _read_sid = _sess_started = _wrap_delta = _append_delta = None
+        _delta_session_id = str(uuid.uuid4())
+        _delta_started_at = time.time()
+
     if _STRICT_NATIVE:
         # Strict-native: Rust handles the bulk of the pipeline. Python sidecar
         # only writes failures + goals to ainl_memory.db.
@@ -749,6 +774,8 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             logger.warning(f"Python sidecar open failed: {e}")
 
         if sidecar_store:
+            if _wrap_delta:
+                _wrap_delta(sidecar_store, delta_entries)
             try:
                 write_failures(sidecar_store, project_id, session_data)
             except Exception as e:
@@ -767,6 +794,8 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             logger.warning(f"Episode write failed: {e}")
 
         if store:
+            if _wrap_delta:
+                _wrap_delta(store, delta_entries)
             try:
                 write_failures(store, project_id, session_data)
             except Exception as e:
@@ -867,6 +896,14 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
                 f"summary={result.get('summary_saved', False)}"
             )
 
+    # Append session delta record (non-fatal — must never break session close)
+    try:
+        if _append_delta and delta_entries:
+            _append_delta(plugin_root, _delta_session_id, project_id, _delta_started_at, delta_entries)
+            logger.debug(f"Session delta written: {len(delta_entries)} node(s) for session {_delta_session_id[:8]}")
+    except Exception as _de:
+        logger.debug(f"Session delta write failed (non-fatal): {_de}")
+
     log_event("session_finalized", {
         "project_id": project_id,
         "task_summary": task_summary,
@@ -875,6 +912,7 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
         "outcome": outcome,
         "capture_count": len(session_data["tool_captures"]),
         "strict_native": _STRICT_NATIVE,
+        "session_id": _delta_session_id,
     })
 
 

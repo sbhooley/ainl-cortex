@@ -257,6 +257,14 @@ def main():
         except OSError as e:
             db_s = f"error: {e}"
 
+        # Generate and persist a session UUID for audit delta tracking
+        try:
+            from shared.session_delta import write_session_id
+            _project_id_for_sid = get_project_id(cwd)
+            write_session_id(_project_id_for_sid, root)
+        except Exception:
+            pass
+
         mcp_ok, mcp_detail = verify_mcp_imports(root)
         # Only attempt native build when config explicitly requests it
         try:
