@@ -217,9 +217,13 @@ class FailureAdvisor:
             matched_on = "file"
 
         # Signal 2: command or tool name match (+0.30)
+        # Also check the base name before the first underscore so that "ainl" in
+        # the prompt matches stored tools like "ainl_run" / "ainl_validate".
         fail_cmd = (data.get('command') or '').lower()
         fail_tool = (data.get('tool') or '').lower()
-        if fail_tool in ctx_cmds or any(c in fail_cmd for c in ctx_cmds if c):
+        fail_tool_base = fail_tool.split('_')[0] if '_' in fail_tool else fail_tool
+        if (fail_tool in ctx_cmds or fail_tool_base in ctx_cmds
+                or any(c in fail_cmd for c in ctx_cmds if c)):
             score += 0.30
             matched_on = matched_on if matched_on == "file" else "command"
 

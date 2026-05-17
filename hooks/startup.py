@@ -242,6 +242,108 @@ def _ensure_ainl_native(plugin_root: Path) -> str:
         return f"build error: {e}"
 
 
+def _inject_autonomous_blocks(
+    system_blocks: list,
+    store,
+    project_id: str,
+    cwd: str,
+    at_cfg: dict,
+) -> None:
+    """
+    Query the task store and append DUE / PENDING-APPROVAL blocks to system_blocks.
+    Extracted from main() so it can be called and tested independently.
+    """
+    import json as _inj_json
+    lookahead_s = at_cfg.get("due_tasks_lookahead_minutes", 60) * 60
+    all_active = store.list_autonomous_tasks(project_id=project_id, status='active', due_only=False)
+
+    due_tasks = []
+    pending_approval = []
+    for t in all_active:
+        # Gap 3: path_scope filter — skip tasks whose cwd restriction doesn't match
+        scope_raw = t.get('path_scope')
+        if scope_raw:
+            try:
+                scope_paths = _inj_json.loads(scope_raw) if isinstance(scope_raw, str) else scope_raw
+                if not any(cwd.startswith(sp) for sp in scope_paths):
+                    continue
+            except Exception:
+                pass
+        tier = t.get('risk_tier', 'read_only')
+        approved = t.get('approved_by')
+        nra = t.get('next_run_at')
+        is_due = nra is not None and nra <= time.time() + lookahead_s
+        if tier != 'read_only' and not approved:
+            pending_approval.append(t)
+        elif is_due:
+            due_tasks.append(t)
+
+    def _fmt_due(ts):
+        if ts is None:
+            return "now"
+        delta = ts - time.time()
+        if delta <= 60:
+            return "OVERDUE" if delta < 0 else "now"
+        if delta < 3600:
+            return f"in {int(delta / 60)}m"
+        return f"in {int(delta / 3600)}h {int((delta % 3600) / 60)}m"
+
+    def _fmt_actions(raw):
+        if raw is None:
+            return ""
+        try:
+            acts = _inj_json.loads(raw) if isinstance(raw, str) else raw
+            return f"  → authorized: {', '.join(acts)}" if acts else ""
+        except Exception:
+            return ""
+
+    if due_tasks:
+        sorted_due = sorted(
+            due_tasks,
+            key=lambda x: (-x.get('priority', 5), x.get('next_run_at') or 0),
+        )[:10]
+        task_lines = []
+        for t in sorted_due:
+            tier = t.get('risk_tier', 'read_only')
+            line = (
+                f"  [{t.get('priority', 5):2d}] {t['description']}"
+                f"  [{t.get('trigger_type', 'scheduled')}|{tier}]"
+                f"  {_fmt_due(t.get('next_run_at'))}"
+                f"  id={t['task_id']}"
+            )
+            acts = _fmt_actions(t.get('allowed_actions'))
+            if acts:
+                line += f"\n{acts}"
+            task_lines.append(line)
+        system_blocks.append(
+            "\n━━━ AUTONOMOUS TASKS DUE ━━━\n"
+            + "\n".join(task_lines) + "\n\n"
+            + "Before executing each task call memory_begin_task_execution(task_id, project_id) "
+            "to activate the scope lock, then execute in priority order, "
+            "then call memory_complete_task(task_id=…, note=…).\n"
+            "━━━ END AUTONOMOUS TASKS ━━━\n"
+        )
+        logger.info("Injected %d autonomous task(s) due in startup", len(due_tasks))
+
+    if pending_approval:
+        appr_lines = []
+        for t in pending_approval[:5]:
+            appr_lines.append(
+                f"  [{t.get('priority', 5):2d}] {t['description']}"
+                f"  [risk={t.get('risk_tier','?')}]"
+                f"  id={t['task_id']}"
+            )
+        system_blocks.append(
+            "\n━━━ TASKS AWAITING YOUR APPROVAL ━━━\n"
+            + "\n".join(appr_lines) + "\n\n"
+            + "These tasks have risk_tier != 'read_only' and require explicit user approval "
+            "before they will fire. Present them to the user and call "
+            "memory_approve_task(task_id) if they consent.\n"
+            "━━━ END PENDING APPROVAL ━━━\n"
+        )
+        logger.info("Flagged %d task(s) awaiting approval", len(pending_approval))
+
+
 def main():
     try:
         _ss_t0 = time.perf_counter()
@@ -494,100 +596,7 @@ def main():
                 from graph_store import get_graph_store as _get_at_gs
                 _at_project_id = get_project_id(cwd)
                 _at_store = _get_at_gs(db_path)
-                _lookahead_s = _at_cfg.get("due_tasks_lookahead_minutes", 60) * 60
-                _all_active = _at_store.list_autonomous_tasks(
-                    project_id=_at_project_id,
-                    status='active',
-                    due_only=False,
-                )
-                # Gap 1: separate approved-due from pending-approval
-                _due_tasks = []
-                _pending_approval = []
-                for _t in _all_active:
-                    import json as _psj
-                    # Gap 3: path_scope filter — skip if cwd doesn't match any listed prefix
-                    _scope_raw = _t.get('path_scope')
-                    if _scope_raw:
-                        try:
-                            _scope_paths = _psj.loads(_scope_raw) if isinstance(_scope_raw, str) else _scope_raw
-                            if not any(cwd.startswith(_sp) for _sp in _scope_paths):
-                                continue
-                        except Exception:
-                            pass
-                    _tier = _t.get('risk_tier', 'read_only')
-                    _approved = _t.get('approved_by')
-                    _nra = _t.get('next_run_at')
-                    _is_due = _nra is not None and _nra <= time.time() + _lookahead_s
-                    if _tier != 'read_only' and not _approved:
-                        _pending_approval.append(_t)
-                    elif _is_due:
-                        _due_tasks.append(_t)
-                if _due_tasks or _pending_approval:
-                    def _fmt_due(ts):
-                        if ts is None:
-                            return "now"
-                        delta = ts - time.time()
-                        if delta <= 60:
-                            return "OVERDUE" if delta < 0 else "now"
-                        if delta < 3600:
-                            return f"in {int(delta / 60)}m"
-                        return f"in {int(delta / 3600)}h {int((delta % 3600) / 60)}m"
-
-                    def _fmt_actions(raw):
-                        import json as _aj
-                        if raw is None:
-                            return ""
-                        try:
-                            acts = _aj.loads(raw) if isinstance(raw, str) else raw
-                            return f"  → authorized: {', '.join(acts)}" if acts else ""
-                        except Exception:
-                            return ""
-
-                    if _due_tasks:
-                        _sorted = sorted(
-                            _due_tasks,
-                            key=lambda x: (-x.get('priority', 5), x.get('next_run_at') or 0),
-                        )[:10]
-                        _task_lines = []
-                        for t in _sorted:
-                            _tier = t.get('risk_tier', 'read_only')
-                            _line = (
-                                f"  [{t.get('priority', 5):2d}] {t['description']}"
-                                f"  [{t.get('trigger_type', 'scheduled')}|{_tier}]"
-                                f"  {_fmt_due(t.get('next_run_at'))}"
-                                f"  id={t['task_id']}"
-                            )
-                            _acts = _fmt_actions(t.get('allowed_actions'))
-                            if _acts:
-                                _line += f"\n{_acts}"
-                            _task_lines.append(_line)
-                        system_blocks.append(
-                            "\n━━━ AUTONOMOUS TASKS DUE ━━━\n"
-                            + "\n".join(_task_lines) + "\n\n"
-                            + "Before executing each task call memory_begin_task_execution(task_id, project_id) "
-                            "to activate the scope lock, then execute in priority order, "
-                            "then call memory_complete_task(task_id=…, note=…).\n"
-                            "━━━ END AUTONOMOUS TASKS ━━━\n"
-                        )
-                        logger.info("Injected %d autonomous task(s) due in startup", len(_due_tasks))
-
-                    if _pending_approval:
-                        _appr_lines = []
-                        for t in _pending_approval[:5]:
-                            _appr_lines.append(
-                                f"  [{t.get('priority', 5):2d}] {t['description']}"
-                                f"  [risk={t.get('risk_tier','?')}]"
-                                f"  id={t['task_id']}"
-                            )
-                        system_blocks.append(
-                            "\n━━━ TASKS AWAITING YOUR APPROVAL ━━━\n"
-                            + "\n".join(_appr_lines) + "\n\n"
-                            + "These tasks have risk_tier != 'read_only' and require explicit user approval "
-                            "before they will fire. Present them to the user and call "
-                            "memory_approve_task(task_id) if they consent.\n"
-                            "━━━ END PENDING APPROVAL ━━━\n"
-                        )
-                        logger.info("Flagged %d task(s) awaiting approval", len(_pending_approval))
+                _inject_autonomous_blocks(system_blocks, _at_store, _at_project_id, str(cwd), _at_cfg)
         except Exception as _at_e:
             logger.debug("Autonomous task injection failed (non-fatal): %s", _at_e)
 

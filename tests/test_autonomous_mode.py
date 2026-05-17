@@ -1107,3 +1107,145 @@ class TestPathScope:
         text = (PLUGIN_ROOT / "CLAUDE.md").read_text()
         assert 'path_scope' in text
         assert 'working director' in text.lower()
+
+
+# ── P. Startup hook integration — _inject_autonomous_blocks() ─────────────────
+
+class TestStartupInjectionIntegration:
+    """
+    Call _inject_autonomous_blocks() directly (the refactored helper from startup.py)
+    against a real SQLite store to verify the full injection logic without running
+    the entire startup hook.
+    """
+
+    def _make_store(self, tmp_path):
+        return SQLiteGraphStore(tmp_path / "test.db")
+
+    def _at_cfg(self, lookahead_minutes=60):
+        return {"enabled": True, "inject_due_tasks_in_startup": True,
+                "due_tasks_lookahead_minutes": lookahead_minutes}
+
+    def test_due_read_only_task_appears_in_due_block(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        store = self._make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="daily review",
+            next_run_at=time.time() - 60,  # overdue
+        )
+        blocks = []
+        _inject_autonomous_blocks(blocks, store, "p", "/any/path", self._at_cfg())
+        joined = "\n".join(blocks)
+        assert "AUTONOMOUS TASKS DUE" in joined
+        assert "daily review" in joined
+        assert tid in joined
+
+    def test_unapproved_memory_ops_task_not_in_due_block(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        store = self._make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="write memory",
+            risk_tier="memory_ops", next_run_at=time.time() - 60,
+        )
+        blocks = []
+        _inject_autonomous_blocks(blocks, store, "p", "/any/path", self._at_cfg())
+        joined = "\n".join(blocks)
+        assert "AUTONOMOUS TASKS DUE" not in joined or "write memory" not in joined
+
+    def test_unapproved_task_appears_in_approval_block(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        store = self._make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="needs user ok",
+            risk_tier="file_write", next_run_at=time.time() - 60,
+        )
+        blocks = []
+        _inject_autonomous_blocks(blocks, store, "p", "/any/path", self._at_cfg())
+        joined = "\n".join(blocks)
+        assert "AWAITING YOUR APPROVAL" in joined
+        assert "needs user ok" in joined
+
+    def test_approved_memory_ops_task_appears_in_due_block(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        store = self._make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="approved write",
+            risk_tier="memory_ops", next_run_at=time.time() - 60,
+        )
+        store.update_autonomous_task(tid, approved_by="user")
+        blocks = []
+        _inject_autonomous_blocks(blocks, store, "p", "/any/path", self._at_cfg())
+        joined = "\n".join(blocks)
+        assert "AUTONOMOUS TASKS DUE" in joined
+        assert "approved write" in joined
+
+    def test_path_scope_mismatch_excludes_task(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        import json as _j
+        store = self._make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="scoped task",
+            next_run_at=time.time() - 60,
+            path_scope=["/home/user/other-project"],
+        )
+        blocks = []
+        _inject_autonomous_blocks(
+            blocks, store, "p", "/home/user/my-project", self._at_cfg()
+        )
+        joined = "\n".join(blocks)
+        assert "scoped task" not in joined
+
+    def test_path_scope_match_includes_task(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        import json as _j
+        store = self._make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="path-scoped review",
+            next_run_at=time.time() - 60,
+            path_scope=["/home/user/my-project"],
+        )
+        blocks = []
+        _inject_autonomous_blocks(
+            blocks, store, "p", "/home/user/my-project/src", self._at_cfg()
+        )
+        joined = "\n".join(blocks)
+        assert "path-scoped review" in joined
+
+    def test_empty_store_produces_no_blocks(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        store = self._make_store(tmp_path)
+        blocks = []
+        _inject_autonomous_blocks(blocks, store, "p", "/any/path", self._at_cfg())
+        assert blocks == []
+
+    def test_future_task_not_injected_outside_lookahead(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        store = self._make_store(tmp_path)
+        store.create_autonomous_task(
+            task_id=str(uuid.uuid4()), project_id="p", description="far future",
+            next_run_at=time.time() + 9999,  # way in the future
+        )
+        blocks = []
+        _inject_autonomous_blocks(
+            blocks, store, "p", "/any", self._at_cfg(lookahead_minutes=60)
+        )
+        joined = "\n".join(blocks)
+        assert "far future" not in joined
+
+    def test_priority_order_in_due_block(self, tmp_path):
+        from startup import _inject_autonomous_blocks
+        store = self._make_store(tmp_path)
+        for pri, desc in [(3, "low-pri"), (9, "high-pri"), (5, "mid-pri")]:
+            store.create_autonomous_task(
+                task_id=str(uuid.uuid4()), project_id="p", description=desc,
+                priority=pri, next_run_at=time.time() - 60,
+            )
+        blocks = []
+        _inject_autonomous_blocks(blocks, store, "p", "/any", self._at_cfg())
+        joined = "\n".join(blocks)
+        assert joined.index("high-pri") < joined.index("mid-pri") < joined.index("low-pri")
