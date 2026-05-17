@@ -70,7 +70,7 @@ try:
     from .node_types import (
         create_episode_node, create_semantic_node, create_procedural_node,
         create_persona_node, create_failure_node, create_edge,
-        NodeType, EdgeType
+        NodeType, EdgeType, failure_content_id
     )
     from .retrieval import MemoryRetrieval, RetrievalContext
     from .persona_engine import PersonaEvolutionEngine
@@ -85,7 +85,7 @@ except ImportError:
     from node_types import (
         create_episode_node, create_semantic_node, create_procedural_node,
         create_persona_node, create_failure_node, create_edge,
-        NodeType, EdgeType
+        NodeType, EdgeType, failure_content_id
     )
     from retrieval import MemoryRetrieval, RetrievalContext
     from persona_engine import PersonaEvolutionEngine
@@ -1038,7 +1038,6 @@ async def memory_store_failure(
             **kwargs
         )
         # Deterministic ID deduplicates identical errors via INSERT OR REPLACE
-        from node_types import failure_content_id
         node.id = failure_content_id(project_id, error_type, tool, error_message)
         memory_server.store.write_node(node)
         return {
