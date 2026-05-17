@@ -11,6 +11,11 @@ Sections:
   B. memory_store_failure auto-extract file
   C. memory_list_autonomous_executions (audit log)
   D. Tool-call interceptor end-to-end (begin → block → complete → clear)
+  E. Core memory tools — call-level smoke tests (11 previously uncovered)
+  F. Stale scope-lock auto-recovery
+  G. Dynamic TOOL_COUNT cross-check
+  H. AINL tools absent-package response
+  I. SQLite WAL + busy_timeout configuration
 """
 
 import asyncio
@@ -746,3 +751,116 @@ class TestToolCountConsistency:
         assert a2a_tools == expected_a2a, (
             f"TOOL_COUNT_A2A={expected_a2a} but {a2a_tools} a2a tools declared in list_tools"
         )
+
+
+# ── H. AINL tools absent-package response ─────────────────────────────────────
+# These tests force ainl_tools=None (package not installed) and verify that every
+# AINL tool returns a structured, user-actionable error instead of crashing.
+
+class TestAINLToolsAbsentPackage:
+
+    @pytest.fixture()
+    def no_ainl(self, ctx, monkeypatch):
+        store, tmp, pid = ctx
+        monkeypatch.setattr(srv.memory_server, "ainl_tools", None)
+        return store, tmp, pid
+
+    def _call_ainl(self, tool_name, args=None):
+        result = run(srv.call_tool(tool_name, args or {}))
+        return json.loads(result[0].text)
+
+    def test_ainl_validate_returns_structured_error(self, no_ainl):
+        data = self._call_ainl("ainl_validate", {"code": "step: x\n  do: nothing"})
+        assert data.get("ok") is False
+        assert "error" in data
+        assert "ainativelang" in data.get("error", "") or "not installed" in data.get("error", "")
+
+    def test_ainl_compile_includes_install_key(self, no_ainl):
+        data = self._call_ainl("ainl_compile", {"code": "step: x\n  do: nothing"})
+        assert "install" in data, "Error response must include an 'install' key for user guidance"
+        assert "pip install" in data.get("install", "")
+
+    def test_ainl_run_returns_ok_false(self, no_ainl):
+        data = self._call_ainl("ainl_run", {"file": "workflow.ainl"})
+        assert data.get("ok") is False
+
+    def test_ainl_get_started_error_has_hint(self, no_ainl):
+        data = self._call_ainl("ainl_get_started", {})
+        assert "hint" in data or "install" in data
+
+    def test_all_ainl_tools_return_dict_not_exception(self, no_ainl):
+        """No AINL tool should raise an unhandled exception when package is absent."""
+        tools = [
+            ("ainl_validate", {"code": "x"}),
+            ("ainl_compile", {"code": "x"}),
+            ("ainl_run", {"file": "x.ainl"}),
+            ("ainl_capabilities", {}),
+            ("ainl_security_report", {}),
+            ("ainl_get_started", {}),
+            ("ainl_step_examples", {}),
+            ("ainl_adapter_contract", {}),
+        ]
+        for tool_name, args in tools:
+            result = run(srv.call_tool(tool_name, args))
+            data = json.loads(result[0].text)
+            assert isinstance(data, dict), f"{tool_name} returned non-dict: {result}"
+            assert data.get("ok") is False, f"{tool_name} should report ok=False when package absent"
+
+
+# ── I. SQLite WAL + busy_timeout ──────────────────────────────────────────────
+
+class TestSQLiteConfiguration:
+
+    def test_wal_mode_enabled(self, tmp_path):
+        from mcp_server.graph_store import SQLiteGraphStore
+        store = SQLiteGraphStore(tmp_path / "wal_test.db")
+        row = store.conn.execute("PRAGMA journal_mode").fetchone()
+        assert row[0] == "wal", "journal_mode must be WAL for concurrent read safety"
+
+    def test_busy_timeout_set(self, tmp_path):
+        from mcp_server.graph_store import SQLiteGraphStore
+        store = SQLiteGraphStore(tmp_path / "bt_test.db")
+        row = store.conn.execute("PRAGMA busy_timeout").fetchone()
+        assert int(row[0]) >= 1000, (
+            f"busy_timeout must be >= 1000ms to handle concurrent Claude Code windows; got {row[0]}"
+        )
+
+    def test_concurrent_writes_do_not_deadlock_immediately(self, tmp_path):
+        """Multiple connections writing DML to the same DB must not fail with immediate lock error.
+
+        Production scenario: two Claude Code windows both open the same project DB
+        (MCP server initializes once per process).  Schema already exists; threads
+        do DML (INSERT) only — no DDL races.
+
+        With busy_timeout=0 (old default), the second writer fails instantly.
+        With WAL + busy_timeout>=1000ms it retries — this test verifies all writes
+        complete successfully."""
+        import threading
+        from mcp_server.graph_store import SQLiteGraphStore
+        from mcp_server.node_types import create_semantic_node
+
+        db = tmp_path / "concurrent.db"
+        # Initialize schema once (as MCP server does on startup)
+        SQLiteGraphStore(db)
+
+        errors = []
+
+        def write_node(i):
+            try:
+                s = SQLiteGraphStore(db)
+                node = create_semantic_node(
+                    project_id="concurrent-test",
+                    fact=f"concurrent write {i}",
+                    confidence=0.5,
+                )
+                s.write_node(node)
+            except Exception as e:
+                errors.append(f"writer {i}: {e}")
+
+        threads = [threading.Thread(target=write_node, args=(i,)) for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert not errors, f"Concurrent DML writes failed (check busy_timeout + WAL): {errors}"

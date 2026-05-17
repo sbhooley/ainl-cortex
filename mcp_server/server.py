@@ -853,55 +853,35 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await memory_server.memory_begin_task_execution(**arguments)
         elif name == "memory_approve_task":
             result = await memory_server.memory_approve_task(**arguments)
-        # AINL tools
-        elif name == "ainl_validate":
+        # AINL tools — delegate to ainl_tools; return structured error when package absent
+        elif name.startswith("ainl_"):
             if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]")
-            result = memory_server.ainl_tools.validate(**arguments)
-        elif name == "ainl_compile":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]")
-            result = memory_server.ainl_tools.compile(**arguments)
-        elif name == "ainl_run":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]")
-            result = memory_server.ainl_tools.run(**arguments)
-        elif name == "ainl_capabilities":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]")
-            result = memory_server.ainl_tools.capabilities()
-        elif name == "ainl_security_report":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]")
-            result = memory_server.ainl_tools.security_report(**arguments)
-        elif name == "ainl_ir_diff":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
-            result = memory_server.ainl_tools.ir_diff(**arguments)
-        elif name == "ainl_get_started":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
-            result = memory_server.ainl_tools.get_started(**arguments)
-        elif name == "ainl_step_examples":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
-            result = memory_server.ainl_tools.step_examples(**arguments)
-        elif name == "ainl_adapter_contract":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
-            result = memory_server.ainl_tools.adapter_contract(**arguments)
-        elif name == "ainl_propose_improvement":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
-            result = memory_server.ainl_tools.propose_improvement(**arguments)
-        elif name == "ainl_accept_proposal":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
-            result = memory_server.ainl_tools.accept_proposal(**arguments)
-        elif name == "ainl_list_proposals":
-            if not memory_server.ainl_tools:
-                raise ValueError("AINL tools not available. Install: pip install ainativelang[mcp]>=1.8.0")
-            result = memory_server.ainl_tools.list_proposals(**arguments)
+                return [TextContent(type="text", text=json.dumps({
+                    "ok": False,
+                    "error": "ainativelang package not installed",
+                    "install": "pip install ainativelang[mcp]>=1.8.0",
+                    "hint": (
+                        "Run the install command in your plugin venv, then restart Claude Code. "
+                        "See ~/.claude/plugins/ainl-cortex/README.md for full setup."
+                    ),
+                }, indent=2))]
+            _ainl_dispatch = {
+                "ainl_validate":          lambda: memory_server.ainl_tools.validate(**arguments),
+                "ainl_compile":           lambda: memory_server.ainl_tools.compile(**arguments),
+                "ainl_run":               lambda: memory_server.ainl_tools.run(**arguments),
+                "ainl_capabilities":      lambda: memory_server.ainl_tools.capabilities(),
+                "ainl_security_report":   lambda: memory_server.ainl_tools.security_report(**arguments),
+                "ainl_ir_diff":           lambda: memory_server.ainl_tools.ir_diff(**arguments),
+                "ainl_get_started":       lambda: memory_server.ainl_tools.get_started(**arguments),
+                "ainl_step_examples":     lambda: memory_server.ainl_tools.step_examples(**arguments),
+                "ainl_adapter_contract":  lambda: memory_server.ainl_tools.adapter_contract(**arguments),
+                "ainl_propose_improvement": lambda: memory_server.ainl_tools.propose_improvement(**arguments),
+                "ainl_accept_proposal":   lambda: memory_server.ainl_tools.accept_proposal(**arguments),
+                "ainl_list_proposals":    lambda: memory_server.ainl_tools.list_proposals(**arguments),
+            }
+            if name not in _ainl_dispatch:
+                raise ValueError(f"Unknown AINL tool: {name}")
+            result = _ainl_dispatch[name]()
         # A2A tools
         elif name == "a2a_send":
             result = memory_server.a2a_tools.a2a_send(**arguments)

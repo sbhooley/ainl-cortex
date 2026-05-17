@@ -197,6 +197,10 @@ class SQLiteGraphStore(GraphStore):
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
+        # Retry for up to 5 s before raising OperationalError on a locked write.
+        # Without this, two Claude Code windows writing to the same project DB
+        # deadlock immediately (default busy_timeout = 0 ms).
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
     def _initialize_schema(self) -> None:
