@@ -35,7 +35,7 @@ except ImportError:
 
 logger = get_logger("startup")
 
-TOOL_COUNT_MEMORY = 19  # 7 core + session_history + evolve_persona + expand_node + 4 goals + 5 autonomous + executions audit
+TOOL_COUNT_MEMORY = 21  # 7 core + session_history + evolve_persona + expand_node + 4 goals + 5 autonomous + executions audit + begin_task_execution + approve_task
 TOOL_COUNT_AINL = 12
 TOOL_COUNT_A2A = 7
 EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL + TOOL_COUNT_A2A
@@ -495,13 +495,34 @@ def main():
                 _at_project_id = get_project_id(cwd)
                 _at_store = _get_at_gs(db_path)
                 _lookahead_s = _at_cfg.get("due_tasks_lookahead_minutes", 60) * 60
-                _due_tasks = _at_store.list_autonomous_tasks(
+                _all_active = _at_store.list_autonomous_tasks(
                     project_id=_at_project_id,
                     status='active',
-                    due_only=True,
-                    due_before=time.time() + _lookahead_s,
+                    due_only=False,
                 )
-                if _due_tasks:
+                # Gap 1: separate approved-due from pending-approval
+                _due_tasks = []
+                _pending_approval = []
+                for _t in _all_active:
+                    import json as _psj
+                    # Gap 3: path_scope filter — skip if cwd doesn't match any listed prefix
+                    _scope_raw = _t.get('path_scope')
+                    if _scope_raw:
+                        try:
+                            _scope_paths = _psj.loads(_scope_raw) if isinstance(_scope_raw, str) else _scope_raw
+                            if not any(cwd.startswith(_sp) for _sp in _scope_paths):
+                                continue
+                        except Exception:
+                            pass
+                    _tier = _t.get('risk_tier', 'read_only')
+                    _approved = _t.get('approved_by')
+                    _nra = _t.get('next_run_at')
+                    _is_due = _nra is not None and _nra <= time.time() + _lookahead_s
+                    if _tier != 'read_only' and not _approved:
+                        _pending_approval.append(_t)
+                    elif _is_due:
+                        _due_tasks.append(_t)
+                if _due_tasks or _pending_approval:
                     def _fmt_due(ts):
                         if ts is None:
                             return "now"
@@ -512,10 +533,6 @@ def main():
                             return f"in {int(delta / 60)}m"
                         return f"in {int(delta / 3600)}h {int((delta % 3600) / 60)}m"
 
-                    _sorted = sorted(
-                        _due_tasks,
-                        key=lambda x: (-x.get('priority', 5), x.get('next_run_at') or 0),
-                    )[:10]
                     def _fmt_actions(raw):
                         import json as _aj
                         if raw is None:
@@ -526,29 +543,51 @@ def main():
                         except Exception:
                             return ""
 
-                    _task_lines = []
-                    for t in _sorted:
-                        _line = (
-                            f"  [{t.get('priority', 5):2d}] {t['description']}"
-                            f"  [{t.get('trigger_type', 'scheduled')}]"
-                            f"  {_fmt_due(t.get('next_run_at'))}"
-                            f"  id={t['task_id']}"
+                    if _due_tasks:
+                        _sorted = sorted(
+                            _due_tasks,
+                            key=lambda x: (-x.get('priority', 5), x.get('next_run_at') or 0),
+                        )[:10]
+                        _task_lines = []
+                        for t in _sorted:
+                            _tier = t.get('risk_tier', 'read_only')
+                            _line = (
+                                f"  [{t.get('priority', 5):2d}] {t['description']}"
+                                f"  [{t.get('trigger_type', 'scheduled')}|{_tier}]"
+                                f"  {_fmt_due(t.get('next_run_at'))}"
+                                f"  id={t['task_id']}"
+                            )
+                            _acts = _fmt_actions(t.get('allowed_actions'))
+                            if _acts:
+                                _line += f"\n{_acts}"
+                            _task_lines.append(_line)
+                        system_blocks.append(
+                            "\n━━━ AUTONOMOUS TASKS DUE ━━━\n"
+                            + "\n".join(_task_lines) + "\n\n"
+                            + "Before executing each task call memory_begin_task_execution(task_id, project_id) "
+                            "to activate the scope lock, then execute in priority order, "
+                            "then call memory_complete_task(task_id=…, note=…).\n"
+                            "━━━ END AUTONOMOUS TASKS ━━━\n"
                         )
-                        _acts = _fmt_actions(t.get('allowed_actions'))
-                        if _acts:
-                            _line += f"\n{_acts}"
-                        _task_lines.append(_line)
-                    system_blocks.append(
-                        "\n━━━ AUTONOMOUS TASKS DUE ━━━\n"
-                        + "\n".join(_task_lines) + "\n\n"
-                        + "Execute each task in priority order before responding to the user "
-                        "(unless their first message is clearly urgent). "
-                        "Call memory_complete_task(task_id=…, note=…) after each one.\n"
-                        "━━━ END AUTONOMOUS TASKS ━━━\n"
-                    )
-                    logger.info(
-                        "Injected %d autonomous task(s) due in startup", len(_due_tasks)
-                    )
+                        logger.info("Injected %d autonomous task(s) due in startup", len(_due_tasks))
+
+                    if _pending_approval:
+                        _appr_lines = []
+                        for t in _pending_approval[:5]:
+                            _appr_lines.append(
+                                f"  [{t.get('priority', 5):2d}] {t['description']}"
+                                f"  [risk={t.get('risk_tier','?')}]"
+                                f"  id={t['task_id']}"
+                            )
+                        system_blocks.append(
+                            "\n━━━ TASKS AWAITING YOUR APPROVAL ━━━\n"
+                            + "\n".join(_appr_lines) + "\n\n"
+                            + "These tasks have risk_tier != 'read_only' and require explicit user approval "
+                            "before they will fire. Present them to the user and call "
+                            "memory_approve_task(task_id) if they consent.\n"
+                            "━━━ END PENDING APPROVAL ━━━\n"
+                        )
+                        logger.info("Flagged %d task(s) awaiting approval", len(_pending_approval))
         except Exception as _at_e:
             logger.debug("Autonomous task injection failed (non-fatal): %s", _at_e)
 

@@ -95,9 +95,13 @@ CREATE TABLE IF NOT EXISTS autonomous_tasks (
     run_count       INTEGER NOT NULL DEFAULT 0,
     priority        INTEGER NOT NULL DEFAULT 5,
     allowed_actions TEXT,               -- JSON array of MCP tool names; NULL = config-list applies
+    risk_tier       TEXT    NOT NULL DEFAULT 'read_only',  -- read_only|memory_ops|file_write|external_send
+    approved_by     TEXT,               -- NULL = pending approval; 'user' = approved; 'system' = auto (read_only)
+    path_scope      TEXT,               -- JSON array of allowed cwd prefixes; NULL = any path
     CONSTRAINT valid_task_status   CHECK (status       IN ('active','paused','cancelled','completed')),
     CONSTRAINT valid_trigger_type  CHECK (trigger_type IN ('scheduled','one_shot','goal_complete','threshold')),
-    CONSTRAINT valid_priority      CHECK (priority BETWEEN 1 AND 10)
+    CONSTRAINT valid_priority      CHECK (priority BETWEEN 1 AND 10),
+    CONSTRAINT valid_risk_tier     CHECK (risk_tier IN ('read_only','memory_ops','file_write','external_send'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_project     ON autonomous_tasks(project_id);

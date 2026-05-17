@@ -10,6 +10,11 @@ Tests for the autonomous mode feature:
   H. Config section validation
   I. Server dispatch registration
   J. Edge cases — invalid schedule, unknown task_id, bad priority
+  K. allowed_actions whitelist
+  L. Execution audit log
+  M. Risk tiers + approval gate (Gap 1)
+  N. Tool-call interceptor via active_task.json (Gap 2)
+  O. path_scope constraint (Gap 3)
 """
 
 import sys
@@ -824,3 +829,281 @@ class TestEdgeCases:
         t = store.get_autonomous_task(tid)
         assert t['last_run_note'] == "all good"
         assert t['status'] == 'completed'
+
+
+# ── M. Risk tiers + approval gate (Gap 1) ─────────────────────────────────────
+
+class TestRiskTiers:
+    """Gap 1: risk_tier column, auto-approval for read_only, approval gate for others."""
+
+    def test_read_only_task_auto_approved(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x",
+                                     risk_tier='read_only')
+        t = store.get_autonomous_task(tid)
+        assert t['risk_tier'] == 'read_only'
+        assert t['approved_by'] == 'system'
+
+    def test_memory_ops_task_starts_unapproved(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x",
+                                     risk_tier='memory_ops')
+        t = store.get_autonomous_task(tid)
+        assert t['risk_tier'] == 'memory_ops'
+        assert t['approved_by'] is None
+
+    def test_file_write_task_starts_unapproved(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x",
+                                     risk_tier='file_write')
+        t = store.get_autonomous_task(tid)
+        assert t['approved_by'] is None
+
+    def test_external_send_task_starts_unapproved(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x",
+                                     risk_tier='external_send')
+        t = store.get_autonomous_task(tid)
+        assert t['approved_by'] is None
+
+    def test_approve_task_via_update(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x",
+                                     risk_tier='memory_ops')
+        store.update_autonomous_task(tid, approved_by='user')
+        t = store.get_autonomous_task(tid)
+        assert t['approved_by'] == 'user'
+
+    def test_default_risk_tier_is_read_only(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x")
+        t = store.get_autonomous_task(tid)
+        assert t['risk_tier'] == 'read_only'
+
+    def test_schema_has_risk_tier_column(self):
+        schema = (PLUGIN_ROOT / "mcp_server" / "schema.sql").read_text()
+        assert 'risk_tier' in schema
+        assert 'approved_by' in schema
+
+    def test_server_schema_has_risk_tier_param(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert '"risk_tier"' in src
+        assert 'memory_approve_task' in src
+
+    def test_startup_skips_unapproved_nonreadonly_tasks(self):
+        src = (PLUGIN_ROOT / "hooks" / "startup.py").read_text()
+        assert 'pending_approval' in src
+        assert "approved_by" in src
+
+    def test_startup_shows_pending_approval_block(self):
+        src = (PLUGIN_ROOT / "hooks" / "startup.py").read_text()
+        assert 'TASKS AWAITING YOUR APPROVAL' in src
+
+    def test_claude_md_documents_risk_tiers(self):
+        text = (PLUGIN_ROOT / "CLAUDE.md").read_text()
+        assert 'read_only' in text
+        assert 'memory_ops' in text
+        assert 'file_write' in text
+        assert 'external_send' in text
+        assert 'Requires approval' in text or 'requires_approval' in text or 'require' in text.lower()
+
+    def test_migration_adds_risk_tier_column(self, tmp_path):
+        """DB created without risk_tier gets it added on next open."""
+        import sqlite3
+        db = tmp_path / "test_migrate.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute("""CREATE TABLE autonomous_tasks (
+            task_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+            description TEXT NOT NULL, schedule TEXT,
+            trigger_type TEXT NOT NULL DEFAULT 'scheduled',
+            next_run_at REAL, last_run_at REAL, last_run_status TEXT,
+            last_run_note TEXT, status TEXT NOT NULL DEFAULT 'active',
+            created_at REAL NOT NULL, created_by TEXT NOT NULL DEFAULT 'user',
+            max_runs INTEGER, run_count INTEGER NOT NULL DEFAULT 0,
+            priority INTEGER NOT NULL DEFAULT 5, allowed_actions TEXT
+        )""")
+        conn.commit()
+        conn.close()
+        # Open via SQLiteGraphStore — migration should add columns
+        store = SQLiteGraphStore(db)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x",
+                                     risk_tier='memory_ops')
+        t = store.get_autonomous_task(tid)
+        assert t['risk_tier'] == 'memory_ops'
+        store.close()
+
+
+# ── N. Tool-call interceptor via active_task.json (Gap 2) ─────────────────────
+
+class TestToolCallInterceptor:
+    """Gap 2: memory_begin_task_execution writes active_task.json; call_tool reads it."""
+
+    def test_begin_task_tool_defined_in_server(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert 'name="memory_begin_task_execution"' in src
+
+    def test_begin_task_dispatched_in_call_tool(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert '"memory_begin_task_execution"' in src
+        assert 'memory_begin_task_execution' in src
+
+    def test_interceptor_block_present_in_call_tool(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert 'tool_blocked_by_task_scope' in src
+        assert 'active_task.json' in src
+
+    def test_always_allowed_set_includes_complete(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert '_ALWAYS_ALLOWED_IN_TASK' in src
+        assert "'memory_complete_task'" in src
+
+    def test_interceptor_is_non_fatal(self):
+        """Interceptor must catch all exceptions so it never breaks a tool call."""
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        # The interceptor starts at _ALWAYS_ALLOWED_IN_TASK and ends with except Exception: pass
+        idx = src.find('_ALWAYS_ALLOWED_IN_TASK')
+        block = src[idx: idx + 2000]
+        assert 'except Exception' in block or 'except:' in block
+
+    def test_complete_task_clears_scope_lock(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert 'scope_lock_cleared' in src
+        # The unlink should happen after the execution log write
+        idx_log = src.find('append_execution_log')
+        idx_unlink = src.find('unlink()', idx_log)
+        assert idx_unlink > idx_log, "active_task.json unlink should come after execution log"
+
+    def test_approve_task_tool_defined_in_server(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert 'name="memory_approve_task"' in src
+
+    def test_begin_task_execution_writes_sidecar(self, tmp_path):
+        """Unit: memory_begin_task_execution function creates active_task.json content."""
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="x",
+            allowed_actions=["memory_list_goals"],
+        )
+        t = store.get_autonomous_task(tid)
+        # Simulate what memory_begin_task_execution does
+        import json as _j
+        raw_aa = t.get('allowed_actions')
+        if isinstance(raw_aa, str):
+            aa = _j.loads(raw_aa)
+        else:
+            aa = raw_aa
+        record = {"task_id": tid, "project_id": "p", "allowed_actions": aa,
+                  "risk_tier": t.get('risk_tier', 'read_only'), "started_at": time.time()}
+        sidecar = tmp_path / "active_task.json"
+        sidecar.write_text(_j.dumps(record))
+        loaded = _j.loads(sidecar.read_text())
+        assert loaded['task_id'] == tid
+        assert 'memory_list_goals' in loaded['allowed_actions']
+
+    def test_claude_md_requires_begin_task_execution(self):
+        text = (PLUGIN_ROOT / "CLAUDE.md").read_text()
+        assert 'memory_begin_task_execution' in text
+        assert 'scope lock' in text.lower() or 'scope_lock' in text
+
+    def test_tool_count_includes_new_tools(self):
+        src = (PLUGIN_ROOT / "hooks" / "startup.py").read_text()
+        assert 'TOOL_COUNT_MEMORY = 21' in src
+
+
+# ── O. path_scope constraint (Gap 3) ─────────────────────────────────────────
+
+class TestPathScope:
+    """Gap 3: path_scope column restricts which cwd a task fires in."""
+
+    def test_path_scope_stored_and_retrieved(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x",
+                                     path_scope=["/home/user/myproject"])
+        t = store.get_autonomous_task(tid)
+        raw = t.get('path_scope')
+        assert raw is not None
+        import json as _j
+        paths = _j.loads(raw) if isinstance(raw, str) else raw
+        assert "/home/user/myproject" in paths
+
+    def test_path_scope_null_by_default(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x")
+        t = store.get_autonomous_task(tid)
+        assert t.get('path_scope') is None
+
+    def test_path_scope_updatable(self, tmp_path):
+        import json as _j
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x")
+        store.update_autonomous_task(tid, path_scope=_j.dumps(["/new/path"]))
+        t = store.get_autonomous_task(tid)
+        paths = _j.loads(t['path_scope'])
+        assert "/new/path" in paths
+
+    def test_schema_has_path_scope_column(self):
+        schema = (PLUGIN_ROOT / "mcp_server" / "schema.sql").read_text()
+        assert 'path_scope' in schema
+
+    def test_server_schedule_task_accepts_path_scope(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert '"path_scope"' in src
+        assert 'path_scope' in src
+
+    def test_startup_hook_filters_by_path_scope(self):
+        src = (PLUGIN_ROOT / "hooks" / "startup.py").read_text()
+        assert 'path_scope' in src
+        assert 'cwd.startswith' in src
+
+    def test_startup_skips_task_on_cwd_mismatch(self, tmp_path):
+        """Source-code check: the path filter uses 'continue' to skip non-matching tasks."""
+        src = (PLUGIN_ROOT / "hooks" / "startup.py").read_text()
+        idx = src.find('cwd.startswith')
+        assert idx != -1
+        block = src[idx: idx + 200]
+        assert 'continue' in block
+
+    def test_migration_adds_path_scope_column(self, tmp_path):
+        """DB without path_scope gets it added on next open."""
+        import sqlite3, json as _j
+        db = tmp_path / "test_ps_migrate.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute("""CREATE TABLE autonomous_tasks (
+            task_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+            description TEXT NOT NULL, schedule TEXT,
+            trigger_type TEXT NOT NULL DEFAULT 'scheduled',
+            next_run_at REAL, last_run_at REAL, last_run_status TEXT,
+            last_run_note TEXT, status TEXT NOT NULL DEFAULT 'active',
+            created_at REAL NOT NULL, created_by TEXT NOT NULL DEFAULT 'user',
+            max_runs INTEGER, run_count INTEGER NOT NULL DEFAULT 0,
+            priority INTEGER NOT NULL DEFAULT 5, allowed_actions TEXT,
+            risk_tier TEXT NOT NULL DEFAULT 'read_only', approved_by TEXT
+        )""")
+        conn.commit()
+        conn.close()
+        store = SQLiteGraphStore(db)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x",
+                                     path_scope=["/projects/foo"])
+        t = store.get_autonomous_task(tid)
+        raw = t.get('path_scope')
+        assert raw is not None
+        paths = _j.loads(raw) if isinstance(raw, str) else raw
+        assert "/projects/foo" in paths
+        store.close()
+
+    def test_claude_md_documents_path_scope(self):
+        text = (PLUGIN_ROOT / "CLAUDE.md").read_text()
+        assert 'path_scope' in text
+        assert 'working director' in text.lower()

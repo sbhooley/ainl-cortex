@@ -225,16 +225,20 @@ class SQLiteGraphStore(GraphStore):
         self.conn.executescript(schema_sql)
         self.conn.commit()
 
-        # Backward-compat: add allowed_actions column if the table exists without it
-        # (instances created before this column was introduced)
-        try:
-            self.conn.execute("SELECT allowed_actions FROM autonomous_tasks LIMIT 0")
-        except sqlite3.OperationalError:
-            self.conn.execute(
-                "ALTER TABLE autonomous_tasks ADD COLUMN allowed_actions TEXT"
-            )
-            self.conn.commit()
-            logger.info("Migrated autonomous_tasks: added allowed_actions column")
+        # Backward-compat migrations for autonomous_tasks columns added post-launch
+        _at_migrations = [
+            ("allowed_actions", "ALTER TABLE autonomous_tasks ADD COLUMN allowed_actions TEXT"),
+            ("risk_tier",       "ALTER TABLE autonomous_tasks ADD COLUMN risk_tier TEXT NOT NULL DEFAULT 'read_only'"),
+            ("approved_by",     "ALTER TABLE autonomous_tasks ADD COLUMN approved_by TEXT"),
+            ("path_scope",      "ALTER TABLE autonomous_tasks ADD COLUMN path_scope TEXT"),
+        ]
+        for _col, _ddl in _at_migrations:
+            try:
+                self.conn.execute(f"SELECT {_col} FROM autonomous_tasks LIMIT 0")
+            except sqlite3.OperationalError:
+                self.conn.execute(_ddl)
+                self.conn.commit()
+                logger.info("Migrated autonomous_tasks: added %s column", _col)
 
         logger.info(f"Initialized graph store at {self.db_path}")
 
@@ -783,18 +787,27 @@ class SQLiteGraphStore(GraphStore):
         max_runs: Optional[int] = None,
         priority: int = 5,
         allowed_actions: Optional[List[str]] = None,
+        risk_tier: str = 'read_only',
+        approved_by: Optional[str] = None,
+        path_scope: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         now = time.time()
         actions_json = json.dumps(allowed_actions) if allowed_actions is not None else None
+        scope_json   = json.dumps(path_scope)       if path_scope      is not None else None
+        # read_only tasks auto-approve; all others require explicit user approval
+        resolved_approved_by = approved_by if approved_by is not None else (
+            'system' if risk_tier == 'read_only' else None
+        )
         self.conn.execute(
             """INSERT INTO autonomous_tasks
                (task_id, project_id, description, schedule, trigger_type,
                 next_run_at, last_run_at, last_run_status, last_run_note,
                 status, created_at, created_by, max_runs, run_count, priority,
-                allowed_actions)
-               VALUES (?,?,?,?,?,?,NULL,NULL,NULL,'active',?,?,?,0,?,?)""",
+                allowed_actions, risk_tier, approved_by, path_scope)
+               VALUES (?,?,?,?,?,?,NULL,NULL,NULL,'active',?,?,?,0,?,?,?,?,?)""",
             (task_id, project_id, description, schedule, trigger_type,
-             next_run_at, now, created_by, max_runs, priority, actions_json),
+             next_run_at, now, created_by, max_runs, priority,
+             actions_json, risk_tier, resolved_approved_by, scope_json),
         )
         self.conn.commit()
         return {
@@ -803,7 +816,8 @@ class SQLiteGraphStore(GraphStore):
             'last_run_at': None, 'last_run_status': None, 'last_run_note': None,
             'status': 'active', 'created_at': now, 'created_by': created_by,
             'max_runs': max_runs, 'run_count': 0, 'priority': priority,
-            'allowed_actions': allowed_actions,
+            'allowed_actions': allowed_actions, 'risk_tier': risk_tier,
+            'approved_by': resolved_approved_by, 'path_scope': path_scope,
         }
 
     def list_autonomous_tasks(
@@ -843,6 +857,7 @@ class SQLiteGraphStore(GraphStore):
         _ALLOWED = {
             'description', 'schedule', 'trigger_type', 'next_run_at',
             'status', 'priority', 'max_runs', 'last_run_note', 'allowed_actions',
+            'risk_tier', 'approved_by', 'path_scope',
         }
         updates = {k: v for k, v in kwargs.items() if k in _ALLOWED}
         if not updates:

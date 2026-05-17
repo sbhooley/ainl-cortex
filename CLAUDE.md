@@ -97,10 +97,24 @@ You have a persistent task queue (`autonomous_tasks` table) that survives across
 
 ### On session start with due tasks
 
-1. Read the task list from the banner (id, description, priority, trigger_type).
-2. Execute each task in **priority order** (highest first) before responding to the user, unless the user's opening message is clearly urgent.
-3. After completing each task call `memory_complete_task(task_id=…, note=…)` — this advances `next_run_at` for recurring tasks automatically.
-4. If a task fails, call `memory_update_task(task_id=…, status="paused")` and explain why in the note.
+1. Read the task list from the banner (id, description, priority, trigger_type, risk_tier).
+2. For each task, **call `memory_begin_task_execution(task_id, project_id)` first** — this activates the server-side scope lock.
+3. Execute each task in **priority order** (highest first) before responding to the user, unless the user's opening message is clearly urgent.
+4. After completing each task call `memory_complete_task(task_id=…, note=…)` — this advances `next_run_at` and clears the scope lock.
+5. If a task fails, call `memory_update_task(task_id=…, status="paused")` and explain why in the note.
+
+If the banner shows **TASKS AWAITING YOUR APPROVAL**, present them to the user — do not execute them. Call `memory_approve_task(task_id)` only after the user explicitly consents.
+
+### Risk tiers — what to use when scheduling
+
+| Tier | What it means | Requires approval |
+|---|---|---|
+| `read_only` | Memory reads, goal checks, pattern review | No — auto-fires |
+| `memory_ops` | Writing memory nodes, updating goals | Yes — user must approve |
+| `file_write` | Editing, creating, or deleting files | Yes — user must approve |
+| `external_send` | Git push, API calls, messages | Yes — user must approve |
+
+Always set the **lowest tier** that describes what the task actually does. A task that only reads goals is `read_only`. A task that writes a semantic node is `memory_ops`. Never under-declare.
 
 ### Scheduling tasks proactively
 
@@ -110,6 +124,12 @@ Call `memory_schedule_task` when:
 - You detect a pattern worth monitoring periodically
 - You want to queue a deferred action for yourself
 
+**Always set `path_scope`** when creating tasks for a specific project:
+```
+memory_schedule_task(project_id, description, path_scope=["/absolute/path/to/project"])
+```
+Without `path_scope`, the task fires in any working directory that has the same `project_id` hash.
+
 **Schedule formats:**
 - Relative: `+30m`, `+6h`, `+1d`, `+2w`
 - Named: `@hourly`, `@daily`, `@weekly`, `@monthly`
@@ -117,29 +137,33 @@ Call `memory_schedule_task` when:
 
 **For recurring tasks**, pair `memory_schedule_task` with **`CronCreate`** so Claude Code actually wakes you up:
 ```
-1. memory_schedule_task(project_id, description, schedule="+1d", created_by="claude")
+1. memory_schedule_task(project_id, description, schedule="+1d", created_by="claude", risk_tier="read_only")
 2. CronCreate(interval_minutes=1440, prompt="Check autonomous task queue and execute due tasks.")
 ```
 
 ### Safety constraints
 
-**`allowed_actions` is a hard scope lock — treat it as a whitelist, not a hint.**
+**`allowed_actions` + `memory_begin_task_execution` form a hard scope lock enforced at the server dispatch layer, not just in instructions.**
 
-- If a task has `allowed_actions: ["memory_list_goals", "memory_update_goal"]`, you may **only** call those specific MCP tools while executing that task. Nothing else, even if it seems helpful.
-- If a task has no `allowed_actions` (null), fall back to the `approved_autonomous_actions` list in `config.json`. Still do not take actions outside that list.
+- **Always call `memory_begin_task_execution(task_id, project_id)` before executing task actions.** This writes `active_task.json`; the MCP server reads it on every tool call and blocks anything not in `allowed_actions`.
+- If a task has `allowed_actions: ["memory_list_goals", "memory_update_goal"]`, the server will return `tool_blocked_by_task_scope` for any other tool. Do not attempt workarounds.
+- Tasks with `risk_tier != 'read_only'` and no `approved_by` are invisible to you as "due" — they appear only in the PENDING APPROVAL block. Never execute a task from the pending block without user consent.
+- `path_scope` restricts which working directories a task may fire in. The startup hook enforces this at injection time.
 - Never modify files, push to git, delete data, or send external messages autonomously without explicit prior user authorization captured in the task description or a goal.
 - Claude-created tasks (`created_by: "claude"`) require `allow_self_scheduling: true` in `config.json` (it is `true` by default).
 - Cap self-scheduled recurring tasks at `max_self_scheduled_tasks` (default 10). Check `memory_list_scheduled_tasks` before creating new ones.
-- Always call `memory_complete_task` after finishing — it writes the tamper-evident execution log that proves what ran and what was authorized.
+- Always call `memory_complete_task` after finishing — it writes the tamper-evident execution log and clears the scope lock.
 
 ### Task management tools
 
 | Tool | When to use |
 |---|---|
-| `memory_schedule_task` | Create a new task (one-shot or recurring) |
+| `memory_schedule_task` | Create a new task (one-shot or recurring); set `risk_tier` and `path_scope` |
+| `memory_begin_task_execution` | **Required** before executing task actions — activates scope lock |
+| `memory_approve_task` | Grant user approval for a `memory_ops`/`file_write`/`external_send` task |
 | `memory_list_scheduled_tasks` | See what's in the queue; use `due_only=true` for what needs running |
-| `memory_complete_task` | After executing — advances next_run_at for recurring tasks |
-| `memory_update_task` | Pause, resume, change schedule or description |
+| `memory_complete_task` | After executing — advances next_run_at and clears scope lock |
+| `memory_update_task` | Pause, resume, change schedule, scope, or description |
 | `memory_cancel_task` | Permanently remove a task |
 | `memory_list_autonomous_executions` | Audit log — what ran, when, where, what was authorized |
 

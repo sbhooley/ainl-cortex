@@ -331,7 +331,9 @@ async def list_tools() -> list[Tool]:
                     "max_runs":        {"type": "integer", "description": "Stop recurring after N runs (omit for unlimited)"},
                     "created_by":      {"type": "string", "enum": ["user", "claude"], "default": "user"},
                     "allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Exact MCP tool names Claude may call during this task. Omit to use approved_autonomous_actions from config."},
-                    "run_now":         {"type": "boolean", "default": False, "description": "Set next_run_at to now so task fires immediately on next session start"}
+                    "run_now":         {"type": "boolean", "default": False, "description": "Set next_run_at to now so task fires immediately on next session start"},
+                    "risk_tier":       {"type": "string", "enum": ["read_only", "memory_ops", "file_write", "external_send"], "default": "read_only", "description": "read_only=auto-approved; memory_ops/file_write/external_send require memory_approve_task before firing"},
+                    "path_scope":      {"type": "array", "items": {"type": "string"}, "description": "Absolute path prefixes where this task may fire. Omit to allow any working directory."}
                 },
                 "required": ["project_id", "description"]
             }
@@ -388,7 +390,10 @@ async def list_tools() -> list[Tool]:
                     "schedule":        {"type": "string", "description": "New schedule expression (recalculates next_run_at)"},
                     "priority":        {"type": "integer", "minimum": 1, "maximum": 10},
                     "status":          {"type": "string", "enum": ["active", "paused", "cancelled", "completed"]},
-                    "allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Replace the allowed MCP tool list for this task"}
+                    "allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Replace the allowed MCP tool list for this task"},
+                    "risk_tier":       {"type": "string", "enum": ["read_only", "memory_ops", "file_write", "external_send"], "description": "Change the task's risk classification"},
+                    "approved_by":     {"type": "string", "description": "Set to 'user' to manually grant approval (prefer memory_approve_task)"},
+                    "path_scope":      {"type": "array", "items": {"type": "string"}, "description": "Replace path scope restrictions"}
                 },
                 "required": ["task_id"]
             }
@@ -409,6 +414,41 @@ async def list_tools() -> list[Tool]:
                     "since_days": {"type": "integer", "default": 30, "description": "Only include executions from last N days"}
                 },
                 "required": ["project_id"]
+            }
+        ),
+        Tool(
+            name="memory_begin_task_execution",
+            description=(
+                "REQUIRED: Call this before executing any autonomous task actions. "
+                "Records the active task and its allowed_actions in a sidecar file that "
+                "the server's tool-call interceptor reads on every dispatch. "
+                "Any tool not in allowed_actions will be hard-blocked until "
+                "memory_complete_task is called. Call once per task at the start."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id":    {"type": "string", "description": "Task UUID to begin executing"},
+                    "project_id": {"type": "string", "description": "Project identifier (for audit log)"},
+                },
+                "required": ["task_id", "project_id"]
+            }
+        ),
+        Tool(
+            name="memory_approve_task",
+            description=(
+                "Approve a task that requires user authorization before it can fire. "
+                "Tasks with risk_tier != 'read_only' start unapproved and won't appear "
+                "in the AUTONOMOUS TASKS DUE banner until approved. "
+                "Call this to grant approval — sets approved_by='user'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task UUID to approve"},
+                    "note":    {"type": "string", "description": "Optional note explaining the approval decision"},
+                },
+                "required": ["task_id"]
             }
         ),
         # AINL Tools
@@ -731,6 +771,42 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         except Exception:
             pass
 
+        # ── Task-scope enforcement (Gap 2: server-side tool-call interceptor) ──
+        # When memory_begin_task_execution has been called, active_task.json records
+        # the running task's allowed_actions. Any tool NOT in that list is hard-blocked
+        # here at dispatch time — not just via CLAUDE.md instruction.
+        _ALWAYS_ALLOWED_IN_TASK = {
+            'memory_complete_task', 'memory_begin_task_execution', 'memory_approve_task',
+            'memory_cancel_task', 'memory_list_scheduled_tasks',
+            'memory_list_autonomous_executions',
+        }
+        if name not in _ALWAYS_ALLOWED_IN_TASK:
+            try:
+                _at_file = _plugin_root() / "logs" / "active_task.json"
+                if _at_file.exists():
+                    import json as _atj
+                    _at = _atj.loads(_at_file.read_text(encoding="utf-8"))
+                    _at_aa = _at.get('allowed_actions')
+                    if _at_aa:  # only enforce when whitelist is explicit (non-null)
+                        if name not in _at_aa:
+                            return [TextContent(type="text", text=json.dumps({
+                                "ok": False,
+                                "error": "tool_blocked_by_task_scope",
+                                "tool_called": name,
+                                "task_id": _at.get('task_id'),
+                                "reason": (
+                                    f"'{name}' is not in allowed_actions for the active autonomous task. "
+                                    "This is a hard scope lock enforced at the server dispatch layer."
+                                ),
+                                "allowed_actions": _at_aa,
+                                "hint": (
+                                    "Call memory_complete_task to end the current task before calling "
+                                    "other tools, or call memory_approve_task to expand the task's scope."
+                                ),
+                            }))]
+            except Exception:
+                pass  # interceptor must never break a legitimate tool call
+
         # Belt-and-suspenders A2A gate: list_tools already hides a2a_* names
         # when the feature is disabled, but a non-conformant client could
         # still attempt a direct call_tool dispatch. Return a structured
@@ -773,6 +849,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await memory_server.memory_update_task(**arguments)
         elif name == "memory_list_autonomous_executions":
             result = await memory_server.memory_list_autonomous_executions(**arguments)
+        elif name == "memory_begin_task_execution":
+            result = await memory_server.memory_begin_task_execution(**arguments)
+        elif name == "memory_approve_task":
+            result = await memory_server.memory_approve_task(**arguments)
         # AINL tools
         elif name == "ainl_validate":
             if not memory_server.ainl_tools:
@@ -1272,6 +1352,8 @@ async def memory_schedule_task(
     created_by: str = 'user',
     allowed_actions: Optional[List[str]] = None,
     run_now: bool = False,
+    risk_tier: str = 'read_only',
+    path_scope: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Register an autonomous task in the persistent queue."""
     try:
@@ -1280,6 +1362,10 @@ async def memory_schedule_task(
             from .autonomous_scheduler import parse_next_run, is_valid_schedule, describe_schedule
         except ImportError:
             from autonomous_scheduler import parse_next_run, is_valid_schedule, describe_schedule
+
+        _VALID_TIERS = ('read_only', 'memory_ops', 'file_write', 'external_send')
+        if risk_tier not in _VALID_TIERS:
+            return {"error": f"Invalid risk_tier: {risk_tier!r}. Must be one of {_VALID_TIERS}"}
 
         if schedule and not is_valid_schedule(schedule):
             return {
@@ -1303,14 +1389,23 @@ async def memory_schedule_task(
             task_id=task_id, project_id=project_id, description=description,
             schedule=schedule, trigger_type=trigger_type, next_run_at=next_run_at,
             created_by=created_by, max_runs=max_runs, priority=priority,
-            allowed_actions=allowed_actions,
+            allowed_actions=allowed_actions, risk_tier=risk_tier, path_scope=path_scope,
         )
 
-        hint = (
-            "Task registered. For recurring wakeups also call CronCreate with a matching interval."
-            if schedule
-            else "One-shot task registered — call memory_complete_task(task_id, note=…) when done."
-        )
+        requires_approval = risk_tier != 'read_only'
+        if schedule:
+            hint = (
+                "Task registered. For recurring wakeups also call CronCreate with a matching interval. "
+                f"⚠ Requires user approval before firing — call memory_approve_task('{task_id}')."
+                if requires_approval
+                else "Task registered. For recurring wakeups also call CronCreate with a matching interval."
+            )
+        else:
+            hint = (
+                f"One-shot task registered. ⚠ Requires user approval — call memory_approve_task('{task_id}')."
+                if requires_approval
+                else "One-shot task registered — call memory_complete_task(task_id, note=…) when done."
+            )
         return {
             "task_id": task_id,
             "description": description,
@@ -1319,6 +1414,9 @@ async def memory_schedule_task(
             "next_run_at": next_run_at,
             "priority": priority,
             "allowed_actions": allowed_actions,
+            "risk_tier": risk_tier,
+            "requires_approval": requires_approval,
+            "path_scope": path_scope,
             "status": "active",
             "hint": hint,
         }
@@ -1403,12 +1501,21 @@ async def memory_complete_task(
             session_id=_session_id,
         )
 
+        # Clear the active-task sidecar so the interceptor stops enforcing scope
+        try:
+            _at_file = _plugin_root() / "logs" / "active_task.json"
+            if _at_file.exists():
+                _at_file.unlink()
+        except Exception:
+            pass
+
         return {
             "completed": ok,
             "task_id": task_id,
             "next_run_at": next_run_at,
             "rescheduled": next_run_at is not None,
             "execution_logged": True,
+            "scope_lock_cleared": True,
         }
     except Exception as e:
         logger.error("memory_complete_task failed: %s", e)
@@ -1471,9 +1578,13 @@ async def memory_update_task(
     priority: Optional[int] = None,
     status: Optional[str] = None,
     allowed_actions: Optional[List[str]] = None,
+    approved_by: Optional[str] = None,
+    risk_tier: Optional[str] = None,
+    path_scope: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Update a task's description, schedule, priority, or status."""
+    """Update a task's description, schedule, priority, status, or scope."""
     try:
+        import json as _j
         task = memory_server.store.get_autonomous_task(task_id)
         if not task:
             return {"error": "task_not_found", "task_id": task_id}
@@ -1500,13 +1611,100 @@ async def memory_update_task(
             import time as _t
             updates['next_run_at'] = parse_next_run(schedule, since=_t.time())
         if allowed_actions is not None:
-            import json as _j
             updates['allowed_actions'] = _j.dumps(allowed_actions)
+        if risk_tier is not None:
+            _VALID_TIERS = ('read_only', 'memory_ops', 'file_write', 'external_send')
+            if risk_tier not in _VALID_TIERS:
+                return {"error": f"Invalid risk_tier: {risk_tier!r}. Must be one of {_VALID_TIERS}"}
+            updates['risk_tier'] = risk_tier
+        if approved_by is not None:
+            updates['approved_by'] = approved_by
+        if path_scope is not None:
+            updates['path_scope'] = _j.dumps(path_scope)
 
         ok = memory_server.store.update_autonomous_task(task_id, **updates)
         return {"updated": ok, "task_id": task_id, "changes": list(updates.keys())}
     except Exception as e:
         logger.error("memory_update_task failed: %s", e)
+        return {"error": str(e)}
+
+
+async def memory_begin_task_execution(task_id: str, project_id: str) -> Dict[str, Any]:
+    """Record the active task in a sidecar file so the tool-call interceptor can enforce allowed_actions."""
+    try:
+        import json as _j, time as _t
+        task = memory_server.store.get_autonomous_task(task_id)
+        if not task:
+            return {"error": "task_not_found", "task_id": task_id}
+
+        raw_aa = task.get('allowed_actions')
+        if isinstance(raw_aa, str):
+            try:
+                allowed_actions = _j.loads(raw_aa)
+            except Exception:
+                allowed_actions = None
+        else:
+            allowed_actions = raw_aa
+
+        record = {
+            "task_id": task_id,
+            "project_id": project_id,
+            "allowed_actions": allowed_actions,
+            "risk_tier": task.get('risk_tier', 'read_only'),
+            "started_at": _t.time(),
+        }
+        _at_file = _plugin_root() / "logs" / "active_task.json"
+        _at_file.parent.mkdir(parents=True, exist_ok=True)
+        _at_file.write_text(_j.dumps(record), encoding="utf-8")
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "scope_lock_active": allowed_actions is not None,
+            "allowed_actions": allowed_actions,
+            "hint": (
+                "Scope lock is now active — only tools in allowed_actions will be permitted "
+                "until memory_complete_task is called."
+                if allowed_actions
+                else "No allowed_actions set on this task — all tools permitted. Consider adding a whitelist."
+            ),
+        }
+    except Exception as e:
+        logger.error("memory_begin_task_execution failed: %s", e)
+        return {"error": str(e)}
+
+
+async def memory_approve_task(task_id: str, note: Optional[str] = None) -> Dict[str, Any]:
+    """Grant user approval for a task that requires it before it can fire autonomously."""
+    try:
+        task = memory_server.store.get_autonomous_task(task_id)
+        if not task:
+            return {"error": "task_not_found", "task_id": task_id}
+
+        risk_tier = task.get('risk_tier', 'read_only')
+        if risk_tier == 'read_only':
+            return {
+                "ok": True,
+                "task_id": task_id,
+                "note": "read_only tasks are auto-approved — no action needed.",
+                "approved_by": task.get('approved_by'),
+            }
+
+        updates: Dict[str, Any] = {"approved_by": "user"}
+        if note:
+            updates["last_run_note"] = note
+        ok = memory_server.store.update_autonomous_task(task_id, **updates)
+        return {
+            "ok": ok,
+            "task_id": task_id,
+            "risk_tier": risk_tier,
+            "approved_by": "user",
+            "message": (
+                f"Task approved. It will now appear in AUTONOMOUS TASKS DUE on next session start "
+                f"(risk_tier={risk_tier!r})."
+            ),
+        }
+    except Exception as e:
+        logger.error("memory_approve_task failed: %s", e)
         return {"error": str(e)}
 
 
@@ -1530,6 +1728,8 @@ memory_server.memory_complete_task = memory_complete_task
 memory_server.memory_cancel_task = memory_cancel_task
 memory_server.memory_update_task = memory_update_task
 memory_server.memory_list_autonomous_executions = memory_list_autonomous_executions
+memory_server.memory_begin_task_execution = memory_begin_task_execution
+memory_server.memory_approve_task = memory_approve_task
 
 
 async def main():
