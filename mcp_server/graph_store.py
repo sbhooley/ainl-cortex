@@ -497,8 +497,32 @@ class SQLiteGraphStore(GraphStore):
 
         return [self._row_to_node(row) for row in cursor.fetchall()]
 
+    @staticmethod
+    def _sanitize_fts_query(query: str) -> str:
+        """Strip FTS5 syntax that causes parse errors when passed by users.
+
+        FTS5 treats AND/OR/NOT as operators, quotes as phrase delimiters,
+        parentheses as grouping, and * as prefix wildcards.  A raw user query
+        like '"unclosed' or 'NOT' raises sqlite3.OperationalError.  We convert
+        the query to a safe token list so any string returns results, not errors.
+        """
+        import re as _re
+        # Remove chars FTS5 treats as syntax
+        cleaned = _re.sub(r'["\'\(\)\*]', ' ', query)
+        # Remove standalone FTS5 operators (must be upper-case in FTS5)
+        tokens = [t for t in cleaned.split() if t.upper() not in ('AND', 'OR', 'NOT')]
+        return ' '.join(tokens)
+
     def search_fts(self, query: str, project_id: str, limit: int) -> List[GraphNode]:
-        """Full-text search using FTS5"""
+        """Full-text search using FTS5.
+
+        Sanitizes the query before passing to SQLite so that FTS5 syntax chars
+        (quotes, parentheses, AND/OR/NOT, *) in user-supplied strings don't
+        cause OperationalError — they're stripped to plain token queries instead.
+        """
+        safe_query = self._sanitize_fts_query(query)
+        if not safe_query.strip():
+            return []
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -509,7 +533,7 @@ class SQLiteGraphStore(GraphStore):
             ORDER BY fts.rank
             LIMIT ?
             """,
-            (query, project_id, limit)
+            (safe_query, project_id, limit)
         )
 
         return [self._row_to_node(row) for row in cursor.fetchall()]

@@ -98,10 +98,30 @@ except ImportError:
 class AINLGraphMemoryServer:
     """AINL Graph Memory MCP Server"""
 
+    # ------------------------------------------------------------------
+    # store property — propagates swaps to every sub-object that caches
+    # the store reference.  This ensures monkeypatching store in tests
+    # (and any future live swap) keeps goal_tracker, retrieval, and
+    # a2a_tools all reading/writing the same database.
+    # ------------------------------------------------------------------
+    @property
+    def store(self):
+        return self._store
+
+    @store.setter
+    def store(self, value):
+        self._store = value
+        if hasattr(self, 'goal_tracker'):
+            self.goal_tracker.store = value
+        if hasattr(self, 'retrieval'):
+            self.retrieval.store = value
+        if hasattr(self, 'a2a_tools'):
+            self.a2a_tools.store = value
+
     def __init__(self):
         self.db_path = self._get_db_path()
-        self.store = get_graph_store(self.db_path)
-        self.retrieval = MemoryRetrieval(self.store, cache_dir=self.db_path.parent)
+        self._store = get_graph_store(self.db_path)  # set backing field directly; sub-objects don't exist yet
+        self.retrieval = MemoryRetrieval(self._store, cache_dir=self.db_path.parent)
         self.persona_engine = PersonaEvolutionEngine()
         self.extractor = PatternExtractor()
 
@@ -1271,10 +1291,8 @@ async def memory_session_history(
     """Query the session delta audit log for a project."""
     try:
         import json as _json, time as _time
-        from pathlib import Path as _Path
 
-        plugin_root = _Path(__file__).resolve().parent.parent
-        delta_file = plugin_root / "logs" / "session_deltas.jsonl"
+        delta_file = _plugin_root() / "logs" / "session_deltas.jsonl"
 
         if not delta_file.exists():
             return {"sessions": [], "total": 0, "note": "No session delta log found yet."}

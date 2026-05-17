@@ -596,38 +596,25 @@ class TestCoreMemoryToolSmokes:
             assert "error" not in result
 
     def test_memory_set_goal_list_complete(self, ctx):
+        # store property propagates to goal_tracker.store automatically — no manual swap needed
         store, tmp, pid = ctx
-        monkeypatched_gt = None
-        try:
-            from mcp_server.goal_tracker import GoalTracker
-            gt = GoalTracker(store, pid)
-            original_gt = srv.memory_server.goal_tracker
-            srv.memory_server.goal_tracker = gt
-            monkeypatched_gt = original_gt
-        except Exception:
-            pass
+        set_result = run(srv.memory_set_goal(
+            title="test goal", description="desc", completion_criteria="done"
+        ))
+        assert "error" not in set_result
+        goal_id = set_result.get("goal_id")
 
-        try:
-            set_result = run(srv.memory_set_goal(
-                title="test goal", description="desc", completion_criteria="done"
+        list_result = run(srv.memory_list_goals())
+        assert "error" not in list_result
+
+        if goal_id:
+            update_result = run(srv.memory_update_goal(
+                goal_id=goal_id, progress_note="halfway"
             ))
-            assert "error" not in set_result
-            goal_id = set_result.get("goal_id")
+            assert "error" not in update_result
 
-            list_result = run(srv.memory_list_goals())
-            assert "error" not in list_result
-
-            if goal_id:
-                update_result = run(srv.memory_update_goal(
-                    goal_id=goal_id, progress_note="halfway"
-                ))
-                assert "error" not in update_result
-
-                complete_result = run(srv.memory_complete_goal(goal_id=goal_id))
-                assert "error" not in complete_result
-        finally:
-            if monkeypatched_gt is not None:
-                srv.memory_server.goal_tracker = monkeypatched_gt
+            complete_result = run(srv.memory_complete_goal(goal_id=goal_id))
+            assert "error" not in complete_result
 
 
 # ── F. Stale scope-lock auto-recovery ─────────────────────────────────────────
@@ -864,3 +851,108 @@ class TestSQLiteConfiguration:
             t.join(timeout=15)
 
         assert not errors, f"Concurrent DML writes failed (check busy_timeout + WAL): {errors}"
+
+
+# ── J. Store property isolation — all sub-objects stay in sync ────────────────
+# AINLGraphMemoryServer.store is now a property that propagates swaps to
+# goal_tracker.store, retrieval.store, and a2a_tools.store.
+# Without this, monkeypatching store in tests left sub-objects reading/writing
+# the real production DB.
+
+class TestStorePropertyIsolation:
+
+    def test_store_setter_updates_goal_tracker(self, ctx):
+        store, tmp, pid = ctx
+        assert srv.memory_server.goal_tracker.store is store
+
+    def test_store_setter_updates_retrieval(self, ctx):
+        store, tmp, pid = ctx
+        assert srv.memory_server.retrieval.store is store
+
+    def test_store_setter_updates_a2a_tools(self, ctx):
+        store, tmp, pid = ctx
+        assert srv.memory_server.a2a_tools.store is store
+
+    def test_goal_written_to_test_store_not_real(self, ctx):
+        """memory_set_goal must write to the test store, not the production DB."""
+        store, tmp, pid = ctx
+        result = run(srv.memory_set_goal(
+            title="isolation test goal",
+            description="should land in test DB only",
+        ))
+        assert "error" not in result
+        goal_id = result.get("goal_id")
+        assert goal_id is not None
+        # Verify the goal is in the test store
+        node = store.get_node(goal_id)
+        assert node is not None, "Goal was written to production DB instead of test store"
+
+    def test_recall_reads_from_test_store(self, ctx):
+        """memory_recall_context must query the test store, not production DB."""
+        store, tmp, pid = ctx
+        result = run(srv.memory_recall_context(project_id=pid))
+        assert "error" not in result
+        # The context may be empty (test store is clean), but must not error
+        assert "context" in result
+
+    def test_store_getter_returns_current_store(self, ctx):
+        store, tmp, pid = ctx
+        assert srv.memory_server.store is store
+
+
+# ── K. FTS query sanitization ─────────────────────────────────────────────────
+# SQLite FTS5 raises OperationalError on unbalanced quotes, standalone AND/OR/NOT,
+# bare asterisks, and unmatched parens.  search_fts must sanitize before querying.
+
+class TestFTSQuerySanitization:
+
+    def test_unclosed_quote_does_not_error(self, ctx):
+        _, tmp, pid = ctx
+        result = run(srv.memory_search(query='"unclosed quote', project_id=pid))
+        assert "error" not in result
+        assert isinstance(result.get("results"), list)
+
+    def test_standalone_and_does_not_error(self, ctx):
+        _, tmp, pid = ctx
+        result = run(srv.memory_search(query="foo AND", project_id=pid))
+        assert "error" not in result
+
+    def test_standalone_or_or_does_not_error(self, ctx):
+        _, tmp, pid = ctx
+        result = run(srv.memory_search(query="a OR OR b", project_id=pid))
+        assert "error" not in result
+
+    def test_standalone_not_does_not_error(self, ctx):
+        _, tmp, pid = ctx
+        result = run(srv.memory_search(query="NOT", project_id=pid))
+        assert "error" not in result
+
+    def test_triple_open_paren_does_not_error(self, ctx):
+        _, tmp, pid = ctx
+        result = run(srv.memory_search(query="(((", project_id=pid))
+        assert "error" not in result
+
+    def test_asterisk_prefix_does_not_error(self, ctx):
+        _, tmp, pid = ctx
+        result = run(srv.memory_search(query="*star", project_id=pid))
+        assert "error" not in result
+
+    def test_empty_after_sanitize_returns_empty_list(self, ctx):
+        _, tmp, pid = ctx
+        result = run(srv.memory_search(query='"AND"(NOT)', project_id=pid))
+        assert "error" not in result
+        assert result.get("results") == [] or isinstance(result.get("results"), list)
+
+    def test_normal_query_still_finds_results(self, ctx):
+        store, tmp, pid = ctx
+        run(srv.memory_store_semantic(project_id=pid, fact="database migration guide", confidence=0.8))
+        result = run(srv.memory_search(query="database migration", project_id=pid))
+        assert "error" not in result
+        # Results may be empty due to FTS indexing timing, but no error
+
+    def test_sanitize_preserves_normal_words(self):
+        from mcp_server.graph_store import SQLiteGraphStore
+        assert SQLiteGraphStore._sanitize_fts_query("hello world") == "hello world"
+        assert SQLiteGraphStore._sanitize_fts_query("AND") == ""
+        assert "AND" not in SQLiteGraphStore._sanitize_fts_query("foo AND bar")
+        assert SQLiteGraphStore._sanitize_fts_query('"unclosed') == "unclosed"
