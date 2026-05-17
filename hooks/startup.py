@@ -344,12 +344,36 @@ def _inject_autonomous_blocks(
         logger.info("Flagged %d task(s) awaiting approval", len(pending_approval))
 
 
+def _clear_stale_scope_lock(root: Path) -> None:
+    """Clear active_task.json left by a crashed or orphaned session.
+
+    The file is written by memory_begin_task_execution and deleted by
+    memory_complete_task.  If a session exits without calling complete_task
+    (crash, SIGKILL, etc.) the file persists, causing every subsequent
+    tool call to return tool_blocked_by_task_scope until manually cleared.
+
+    Session start is the safe moment to release the lock: the session that
+    wrote it is gone by definition.  Multi-window edge case: if two Claude
+    Code windows share the same plugin root, starting the second window
+    releases the first window's lock — acceptable, as the lock was not
+    designed for cross-process isolation."""
+    try:
+        at_file = root / "logs" / "active_task.json"
+        if at_file.exists():
+            at_file.unlink()
+            logger.info("Cleared stale active_task.json scope lock at session start")
+    except Exception:
+        pass
+
+
 def main():
     try:
         _ss_t0 = time.perf_counter()
         root = _plugin_root()
         cwd = _hook_cwd()
         logger.info("SessionStart: plugin=%s cwd=%s", root, cwd)
+
+        _clear_stale_scope_lock(root)
 
         status = get_compression_status()
         ainl = check_ainl_tools()

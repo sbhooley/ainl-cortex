@@ -1196,22 +1196,25 @@ async def memory_evolve_persona(
 ) -> Dict[str, Any]:
     """Evolve persona"""
     try:
-        signals = memory_server.extractor.extract_signals(episode_data)
-        traits = memory_server.persona_engine.evolve(project_id, signals)
+        signals = memory_server.persona_engine.extract_signals_from_episode(episode_data)
+        memory_server.persona_engine.ingest_signals(signals)
+        trait_list = memory_server.persona_engine.get_active_traits()
 
-        # Store persona nodes
         nodes_created = []
-        for trait_name, strength in traits.items():
+        traits_evolved = {}
+        for trait in trait_list:
             node = create_persona_node(
                 project_id=project_id,
-                trait_name=trait_name,
-                strength=strength
+                trait_name=trait['trait_name'],
+                strength=trait['strength'],
+                learned_from=[],
             )
             memory_server.store.write_node(node)
             nodes_created.append(node.id)
+            traits_evolved[trait['trait_name']] = trait['strength']
 
         return {
-            "traits_evolved": traits,
+            "traits_evolved": traits_evolved,
             "nodes_created": nodes_created
         }
     except Exception as e:
@@ -1564,7 +1567,20 @@ async def memory_cancel_task(task_id: str) -> Dict[str, Any]:
     """Cancel an autonomous task."""
     try:
         ok = memory_server.store.cancel_autonomous_task(task_id)
-        return {"cancelled": ok, "task_id": task_id}
+        # If the cancelled task currently holds the scope lock, release it so
+        # subsequent tool calls are not permanently blocked.
+        scope_lock_cleared = False
+        try:
+            import json as _cj
+            _at_file = _plugin_root() / "logs" / "active_task.json"
+            if _at_file.exists():
+                _at = _cj.loads(_at_file.read_text(encoding="utf-8"))
+                if _at.get("task_id") == task_id:
+                    _at_file.unlink()
+                    scope_lock_cleared = True
+        except Exception:
+            pass
+        return {"cancelled": ok, "task_id": task_id, "scope_lock_cleared": scope_lock_cleared}
     except Exception as e:
         logger.error("memory_cancel_task failed: %s", e)
         return {"error": str(e)}

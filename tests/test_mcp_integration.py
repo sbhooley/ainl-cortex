@@ -522,3 +522,227 @@ class TestToolCallInterceptor:
             assert data.get("error") != "tool_blocked_by_task_scope"
         except Exception:
             pass  # any non-interceptor exception is acceptable
+
+
+# ── E. Core memory tools — call-level smoke tests ─────────────────────────────
+# These 11 functions had zero test coverage at the call level (only smoke_test.sh
+# tested subsystem imports, never server.py dispatch paths).  Each test calls the
+# tool once with valid input and asserts it returns a non-error result.
+
+class TestCoreMemoryToolSmokes:
+
+    def test_memory_store_semantic(self, ctx):
+        store, tmp, pid = ctx
+        result = run(srv.memory_store_semantic(
+            project_id=pid, fact="tests exercise package-mode import path", confidence=0.9
+        ))
+        assert "error" not in result
+        assert result.get("stored") or result.get("node_id") or result.get("ok")
+
+    def test_memory_recall_context(self, ctx):
+        store, tmp, pid = ctx
+        result = run(srv.memory_recall_context(project_id=pid))
+        assert "error" not in result
+        assert isinstance(result, dict)
+
+    def test_memory_search(self, ctx):
+        store, tmp, pid = ctx
+        run(srv.memory_store_semantic(project_id=pid, fact="searchable fact about deployment", confidence=0.8))
+        result = run(srv.memory_search(query="deployment", project_id=pid))
+        assert "error" not in result
+        assert isinstance(result, dict)
+
+    def test_memory_session_history(self, ctx):
+        store, tmp, pid = ctx
+        result = run(srv.memory_session_history(project_id=pid))
+        assert "error" not in result
+        assert isinstance(result, dict)
+
+    def test_memory_promote_pattern(self, ctx):
+        store, tmp, pid = ctx
+        result = run(srv.memory_promote_pattern(
+            project_id=pid,
+            pattern_name="test-pattern",
+            trigger="test trigger",
+            tool_sequence=["read", "edit"],
+            evidence_ids=["ep-001", "ep-002"],
+        ))
+        assert "error" not in result
+
+    def test_memory_evolve_persona(self, ctx):
+        store, tmp, pid = ctx
+        episode_data = {
+            "task_description": "refactor module",
+            "tool_calls": ["read", "edit", "bash"],
+            "files_touched": ["src/main.py"],
+            "outcome": "success",
+        }
+        result = run(srv.memory_evolve_persona(project_id=pid, episode_data=episode_data))
+        assert "error" not in result
+
+    def test_memory_expand_node(self, ctx):
+        store, tmp, pid = ctx
+        ep_result = run(srv.memory_store_episode(
+            project_id=pid, task_description="seed ep", tool_calls=[], files_touched=[], outcome="ok"
+        ))
+        node_id = ep_result.get("node_id") or ep_result.get("id")
+        if node_id:
+            result = run(srv.memory_expand_node(project_id=pid, node_id=node_id))
+            assert "error" not in result
+
+    def test_memory_set_goal_list_complete(self, ctx):
+        store, tmp, pid = ctx
+        monkeypatched_gt = None
+        try:
+            from mcp_server.goal_tracker import GoalTracker
+            gt = GoalTracker(store, pid)
+            original_gt = srv.memory_server.goal_tracker
+            srv.memory_server.goal_tracker = gt
+            monkeypatched_gt = original_gt
+        except Exception:
+            pass
+
+        try:
+            set_result = run(srv.memory_set_goal(
+                title="test goal", description="desc", completion_criteria="done"
+            ))
+            assert "error" not in set_result
+            goal_id = set_result.get("goal_id")
+
+            list_result = run(srv.memory_list_goals())
+            assert "error" not in list_result
+
+            if goal_id:
+                update_result = run(srv.memory_update_goal(
+                    goal_id=goal_id, progress_note="halfway"
+                ))
+                assert "error" not in update_result
+
+                complete_result = run(srv.memory_complete_goal(goal_id=goal_id))
+                assert "error" not in complete_result
+        finally:
+            if monkeypatched_gt is not None:
+                srv.memory_server.goal_tracker = monkeypatched_gt
+
+
+# ── F. Stale scope-lock auto-recovery ─────────────────────────────────────────
+
+class TestScopeLockRecovery:
+
+    def test_cancel_task_clears_active_scope_lock(self, ctx):
+        """memory_cancel_task should release the scope lock if the cancelled task is active."""
+        store, tmp, pid = ctx
+        task_id = "cancel-lock-" + uuid.uuid4().hex[:8]
+        store.create_autonomous_task(
+            task_id=task_id, project_id=pid, description="task to cancel",
+            schedule="+1d", created_by="test", priority=5,
+        )
+        sidecar = tmp / "logs" / "active_task.json"
+        sidecar.write_text(json.dumps({
+            "task_id": task_id, "project_id": pid,
+            "allowed_actions": ["memory_list_goals"],
+            "started_at": time.time(),
+        }))
+        result = run(srv.memory_cancel_task(task_id=task_id))
+        assert result.get("cancelled") is True
+        assert result.get("scope_lock_cleared") is True
+        assert not sidecar.exists()
+
+    def test_cancel_task_nonactive_does_not_clear_others_lock(self, ctx):
+        """Cancelling an inactive task must not clear another task's active lock."""
+        store, tmp, pid = ctx
+        active_id = "active-task-001"
+        cancel_id = "cancel-other-" + uuid.uuid4().hex[:8]
+        store.create_autonomous_task(
+            task_id=cancel_id, project_id=pid, description="unrelated task",
+            schedule="+1d", created_by="test", priority=5,
+        )
+        sidecar = tmp / "logs" / "active_task.json"
+        sidecar.write_text(json.dumps({
+            "task_id": active_id, "project_id": pid,
+            "allowed_actions": [], "started_at": time.time(),
+        }))
+        result = run(srv.memory_cancel_task(task_id=cancel_id))
+        assert result.get("scope_lock_cleared") is False
+        assert sidecar.exists()
+
+    def test_startup_clear_stale_scope_lock(self, tmp_path):
+        """_clear_stale_scope_lock removes active_task.json at session start."""
+        from hooks.startup import _clear_stale_scope_lock
+        (tmp_path / "logs").mkdir()
+        sidecar = tmp_path / "logs" / "active_task.json"
+        sidecar.write_text('{"task_id": "orphaned", "started_at": 0}')
+        _clear_stale_scope_lock(tmp_path)
+        assert not sidecar.exists()
+
+    def test_startup_clear_is_noop_when_no_sidecar(self, tmp_path):
+        from hooks.startup import _clear_stale_scope_lock
+        _clear_stale_scope_lock(tmp_path)  # must not raise
+
+    def test_tools_unblocked_after_startup_clear(self, ctx, tmp_path):
+        """After a stale lock is cleared, tools should execute normally."""
+        from hooks.startup import _clear_stale_scope_lock
+        store, test_tmp, pid = ctx
+        sidecar = test_tmp / "logs" / "active_task.json"
+        sidecar.write_text(json.dumps({
+            "task_id": "orphaned", "project_id": pid,
+            "allowed_actions": ["memory_list_goals"],
+            "started_at": time.time() - 3600,
+        }))
+        _clear_stale_scope_lock(test_tmp)
+        result = run(srv.call_tool("memory_store_episode", {
+            "project_id": pid, "task_description": "post-clear call",
+            "tool_calls": [], "files_touched": [], "outcome": "ok",
+        }))
+        data = json.loads(result[0].text)
+        assert data.get("error") != "tool_blocked_by_task_scope"
+
+
+# ── G. Dynamic TOOL_COUNT cross-check ────────────────────────────────────────
+
+class TestToolCountConsistency:
+
+    def test_list_tools_count_matches_constants(self):
+        """The hardcoded TOOL_COUNT_* constants in startup.py must match the actual
+        number of Tool() declarations in server.py's list_tools block.
+
+        This catches the drift where someone adds a tool but forgets to bump the
+        constant, causing the startup banner to report the wrong tool count."""
+        server_src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        startup_src = (PLUGIN_ROOT / "hooks" / "startup.py").read_text()
+
+        import re
+
+        # Count Tool() lines in the list_tools function (before call_tool)
+        list_tools_match = re.search(
+            r'@server\.list_tools\(\)(.*?)@server\.call_tool\(\)',
+            server_src, re.DOTALL
+        )
+        assert list_tools_match, "list_tools block not found"
+        block = list_tools_match.group(1)
+
+        memory_tools = len(re.findall(r'name="memory_\w+"', block))
+        ainl_tools = len(re.findall(r'name="ainl_\w+"', block))
+        a2a_tools = len(re.findall(r'name="a2a_\w+"', block))
+
+        m = re.search(r'TOOL_COUNT_MEMORY\s*=\s*(\d+)', startup_src)
+        assert m, "TOOL_COUNT_MEMORY not found in startup.py"
+        expected_memory = int(m.group(1))
+
+        m = re.search(r'TOOL_COUNT_AINL\s*=\s*(\d+)', startup_src)
+        assert m, "TOOL_COUNT_AINL not found"
+        expected_ainl = int(m.group(1))
+
+        m = re.search(r'TOOL_COUNT_A2A\s*=\s*(\d+)', startup_src)
+        assert m, "TOOL_COUNT_A2A not found"
+        expected_a2a = int(m.group(1))
+
+        assert memory_tools == expected_memory, (
+            f"TOOL_COUNT_MEMORY={expected_memory} but {memory_tools} memory tools declared in list_tools"
+        )
+        assert ainl_tools == expected_ainl, (
+            f"TOOL_COUNT_AINL={expected_ainl} but {ainl_tools} ainl tools declared in list_tools"
+        )
+        assert a2a_tools == expected_a2a, (
+            f"TOOL_COUNT_A2A={expected_a2a} but {a2a_tools} a2a tools declared in list_tools"
+        )
