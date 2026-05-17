@@ -33,6 +33,21 @@ echo "    DB: $TEST_DB"
 echo "    Project: $TEST_PROJECT"
 echo ""
 
+# ── [0] MCP server importable in package mode ─────────────────────────────────
+# Claude Code loads the server as `python -m mcp_server.server` (package mode).
+# This step verifies that server.py loads without ImportError under that mode —
+# catching any bare absolute import in function bodies that has no relative fallback.
+echo "[0] MCP server import (package mode)"
+if "$PYTHON" - <<PYEOF 2>/dev/null
+import sys, logging; logging.disable(logging.CRITICAL)
+sys.path.insert(0, '$PLUGIN_DIR')
+import mcp_server.server  # package-mode import: relative imports succeed, mcp_server/ stays off sys.path
+print('ok: mcp_server.server loaded in package mode')
+PYEOF
+then ok "MCP server importable in package mode"
+else fail "MCP server package-mode import failed — bare inline import without relative fallback"; fi
+
+
 # ── [1] Episode storage & recall ──────────────────────────────────────────────
 echo "[1] Episode storage & recall"
 if "$PYTHON" - <<PYEOF 2>/dev/null

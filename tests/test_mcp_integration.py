@@ -23,14 +23,19 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+# Insert plugin root (not mcp_server/) so the package-mode import path fires:
+# `from .graph_store import ...` succeeds, mcp_server/ stays off sys.path.
+# This mirrors how Claude Code loads the server and catches bare inline imports
+# that only fail in package mode (the bug class that caused the node_types incident).
+sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
-from graph_store import SQLiteGraphStore
+from mcp_server.graph_store import SQLiteGraphStore
 
-# Import server module — memory_server is initialised at import time with the
-# real DB; we swap memory_server.store per-test via monkeypatch.
-import server as srv
+# Import server in package mode — relative imports succeed, mcp_server/ is NOT
+# added to sys.path.  Any bare absolute import inside a tool function without a
+# top-level relative counterpart will raise ImportError when that tool is called.
+import mcp_server.server as srv
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
