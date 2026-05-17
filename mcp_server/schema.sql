@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS autonomous_tasks (
     max_runs        INTEGER,            -- NULL = unlimited
     run_count       INTEGER NOT NULL DEFAULT 0,
     priority        INTEGER NOT NULL DEFAULT 5,
+    allowed_actions TEXT,               -- JSON array of MCP tool names; NULL = config-list applies
     CONSTRAINT valid_task_status   CHECK (status       IN ('active','paused','cancelled','completed')),
     CONSTRAINT valid_trigger_type  CHECK (trigger_type IN ('scheduled','one_shot','goal_complete','threshold')),
     CONSTRAINT valid_priority      CHECK (priority BETWEEN 1 AND 10)

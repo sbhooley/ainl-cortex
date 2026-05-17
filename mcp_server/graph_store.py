@@ -130,6 +130,7 @@ class GraphStore(ABC):
         created_by: str = 'user',
         max_runs: Optional[int] = None,
         priority: int = 5,
+        allowed_actions: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Insert a new autonomous task. Returns the created task dict."""
         pass
@@ -223,6 +224,18 @@ class SQLiteGraphStore(GraphStore):
 
         self.conn.executescript(schema_sql)
         self.conn.commit()
+
+        # Backward-compat: add allowed_actions column if the table exists without it
+        # (instances created before this column was introduced)
+        try:
+            self.conn.execute("SELECT allowed_actions FROM autonomous_tasks LIMIT 0")
+        except sqlite3.OperationalError:
+            self.conn.execute(
+                "ALTER TABLE autonomous_tasks ADD COLUMN allowed_actions TEXT"
+            )
+            self.conn.commit()
+            logger.info("Migrated autonomous_tasks: added allowed_actions column")
+
         logger.info(f"Initialized graph store at {self.db_path}")
 
     def _migrate_to_v2(self) -> None:
@@ -769,16 +782,19 @@ class SQLiteGraphStore(GraphStore):
         created_by: str = 'user',
         max_runs: Optional[int] = None,
         priority: int = 5,
+        allowed_actions: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         now = time.time()
+        actions_json = json.dumps(allowed_actions) if allowed_actions is not None else None
         self.conn.execute(
             """INSERT INTO autonomous_tasks
                (task_id, project_id, description, schedule, trigger_type,
                 next_run_at, last_run_at, last_run_status, last_run_note,
-                status, created_at, created_by, max_runs, run_count, priority)
-               VALUES (?,?,?,?,?,?,NULL,NULL,NULL,'active',?,?,?,0,?)""",
+                status, created_at, created_by, max_runs, run_count, priority,
+                allowed_actions)
+               VALUES (?,?,?,?,?,?,NULL,NULL,NULL,'active',?,?,?,0,?,?)""",
             (task_id, project_id, description, schedule, trigger_type,
-             next_run_at, now, created_by, max_runs, priority),
+             next_run_at, now, created_by, max_runs, priority, actions_json),
         )
         self.conn.commit()
         return {
@@ -787,6 +803,7 @@ class SQLiteGraphStore(GraphStore):
             'last_run_at': None, 'last_run_status': None, 'last_run_note': None,
             'status': 'active', 'created_at': now, 'created_by': created_by,
             'max_runs': max_runs, 'run_count': 0, 'priority': priority,
+            'allowed_actions': allowed_actions,
         }
 
     def list_autonomous_tasks(
@@ -825,7 +842,7 @@ class SQLiteGraphStore(GraphStore):
     def update_autonomous_task(self, task_id: str, **kwargs) -> bool:
         _ALLOWED = {
             'description', 'schedule', 'trigger_type', 'next_run_at',
-            'status', 'priority', 'max_runs', 'last_run_note',
+            'status', 'priority', 'max_runs', 'last_run_note', 'allowed_actions',
         }
         updates = {k: v for k, v in kwargs.items() if k in _ALLOWED}
         if not updates:
@@ -882,6 +899,37 @@ class SQLiteGraphStore(GraphStore):
         """Close database connection"""
         self.conn.close()
         logger.info("Closed graph store connection")
+
+
+def append_execution_log(
+    plugin_root: Path,
+    task: Dict[str, Any],
+    run_status: str,
+    note: Optional[str],
+    cwd: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> None:
+    """Append one record to logs/autonomous_executions.jsonl (never raises)."""
+    try:
+        log_file = plugin_root / "logs" / "autonomous_executions.jsonl"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": round(time.time(), 3),
+            "task_id": task.get("task_id"),
+            "project_id": task.get("project_id"),
+            "description": task.get("description"),
+            "trigger_type": task.get("trigger_type"),
+            "allowed_actions": task.get("allowed_actions"),
+            "run_status": run_status,
+            "note": note,
+            "run_count_after": (task.get("run_count") or 0) + 1,
+            "cwd": cwd,
+            "session_id": session_id,
+        }
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        pass  # execution log is best-effort; must never break the caller
 
 
 def get_graph_store(db_path: Path, agent_id: str = "claude-code") -> GraphStore:

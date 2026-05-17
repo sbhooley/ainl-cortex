@@ -328,9 +328,10 @@ async def list_tools() -> list[Tool]:
                     "schedule":      {"type": "string", "description": "Schedule expression or omit for one-shot"},
                     "trigger_type":  {"type": "string", "enum": ["scheduled", "one_shot", "goal_complete", "threshold"], "default": "scheduled"},
                     "priority":      {"type": "integer", "minimum": 1, "maximum": 10, "default": 5, "description": "1 (low) to 10 (critical)"},
-                    "max_runs":      {"type": "integer", "description": "Stop recurring after N runs (omit for unlimited)"},
-                    "created_by":    {"type": "string", "enum": ["user", "claude"], "default": "user"},
-                    "run_now":       {"type": "boolean", "default": False, "description": "Set next_run_at to now so task fires immediately on next session start"}
+                    "max_runs":        {"type": "integer", "description": "Stop recurring after N runs (omit for unlimited)"},
+                    "created_by":      {"type": "string", "enum": ["user", "claude"], "default": "user"},
+                    "allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Exact MCP tool names Claude may call during this task. Omit to use approved_autonomous_actions from config."},
+                    "run_now":         {"type": "boolean", "default": False, "description": "Set next_run_at to now so task fires immediately on next session start"}
                 },
                 "required": ["project_id", "description"]
             }
@@ -378,17 +379,36 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="memory_update_task",
-            description="Update a task's description, schedule, priority, or status (e.g. pause/resume).",
+            description="Update a task's description, schedule, priority, status, or allowed_actions (e.g. pause/resume, tighten scope).",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "task_id":     {"type": "string", "description": "Task UUID to update"},
-                    "description": {"type": "string", "description": "New description"},
-                    "schedule":    {"type": "string", "description": "New schedule expression (recalculates next_run_at)"},
-                    "priority":    {"type": "integer", "minimum": 1, "maximum": 10},
-                    "status":      {"type": "string", "enum": ["active", "paused", "cancelled", "completed"]}
+                    "task_id":         {"type": "string", "description": "Task UUID to update"},
+                    "description":     {"type": "string", "description": "New description"},
+                    "schedule":        {"type": "string", "description": "New schedule expression (recalculates next_run_at)"},
+                    "priority":        {"type": "integer", "minimum": 1, "maximum": 10},
+                    "status":          {"type": "string", "enum": ["active", "paused", "cancelled", "completed"]},
+                    "allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Replace the allowed MCP tool list for this task"}
                 },
                 "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="memory_list_autonomous_executions",
+            description=(
+                "Audit log of every autonomous task execution. Shows what Claude did, "
+                "which project it ran in, the working directory at execution time, "
+                "and which actions were authorized. Use to verify autonomous mode "
+                "is behaving correctly and has not taken unauthorized actions."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Project identifier"},
+                    "limit":      {"type": "integer", "default": 20, "description": "Max records to return"},
+                    "since_days": {"type": "integer", "default": 30, "description": "Only include executions from last N days"}
+                },
+                "required": ["project_id"]
             }
         ),
         # AINL Tools
@@ -751,6 +771,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await memory_server.memory_cancel_task(**arguments)
         elif name == "memory_update_task":
             result = await memory_server.memory_update_task(**arguments)
+        elif name == "memory_list_autonomous_executions":
+            result = await memory_server.memory_list_autonomous_executions(**arguments)
         # AINL tools
         elif name == "ainl_validate":
             if not memory_server.ainl_tools:
@@ -1248,6 +1270,7 @@ async def memory_schedule_task(
     priority: int = 5,
     max_runs: Optional[int] = None,
     created_by: str = 'user',
+    allowed_actions: Optional[List[str]] = None,
     run_now: bool = False,
 ) -> Dict[str, Any]:
     """Register an autonomous task in the persistent queue."""
@@ -1280,6 +1303,7 @@ async def memory_schedule_task(
             task_id=task_id, project_id=project_id, description=description,
             schedule=schedule, trigger_type=trigger_type, next_run_at=next_run_at,
             created_by=created_by, max_runs=max_runs, priority=priority,
+            allowed_actions=allowed_actions,
         )
 
         hint = (
@@ -1294,6 +1318,7 @@ async def memory_schedule_task(
             "schedule_description": describe_schedule(schedule) if schedule else "one-shot",
             "next_run_at": next_run_at,
             "priority": priority,
+            "allowed_actions": allowed_actions,
             "status": "active",
             "hint": hint,
         }
@@ -1330,10 +1355,18 @@ async def memory_complete_task(
 ) -> Dict[str, Any]:
     """Mark a task execution successful and advance next_run_at for recurring tasks."""
     try:
-        import time as _t
+        import time as _t, json as _j
         task = memory_server.store.get_autonomous_task(task_id)
         if not task:
             return {"error": "task_not_found", "task_id": task_id}
+
+        # Deserialise allowed_actions from JSON string if stored that way
+        raw_aa = task.get('allowed_actions')
+        if isinstance(raw_aa, str):
+            try:
+                task['allowed_actions'] = _j.loads(raw_aa)
+            except Exception:
+                task['allowed_actions'] = None
 
         next_run_at = None
         if reschedule and task.get('schedule'):
@@ -1346,14 +1379,78 @@ async def memory_complete_task(
         ok = memory_server.store.mark_task_run(
             task_id=task_id, run_status='success', note=note, next_run_at=next_run_at,
         )
+
+        # Append tamper-evident execution record
+        try:
+            from .graph_store import append_execution_log
+        except ImportError:
+            from graph_store import append_execution_log
+        _session_id = None
+        try:
+            from pathlib import Path as _P
+            import json as _sj
+            _sid_file = _plugin_root() / "logs" / f"{task['project_id']}_session_id"
+            if _sid_file.exists():
+                _session_id = _sid_file.read_text().strip()
+        except Exception:
+            pass
+        append_execution_log(
+            plugin_root=_plugin_root(),
+            task=task,
+            run_status='success',
+            note=note,
+            cwd=str(Path.cwd()),
+            session_id=_session_id,
+        )
+
         return {
             "completed": ok,
             "task_id": task_id,
             "next_run_at": next_run_at,
             "rescheduled": next_run_at is not None,
+            "execution_logged": True,
         }
     except Exception as e:
         logger.error("memory_complete_task failed: %s", e)
+        return {"error": str(e)}
+
+
+async def memory_list_autonomous_executions(
+    project_id: str,
+    limit: int = 20,
+    since_days: int = 30,
+) -> Dict[str, Any]:
+    """Return the autonomous execution audit log for a project."""
+    try:
+        import time as _t, json as _j
+        log_file = _plugin_root() / "logs" / "autonomous_executions.jsonl"
+        if not log_file.exists():
+            return {"executions": [], "total": 0, "note": "No executions recorded yet."}
+
+        cutoff = _t.time() - since_days * 86400
+        lines = log_file.read_text(encoding="utf-8").strip().splitlines()
+        executions = []
+        for line in reversed(lines):
+            if len(executions) >= limit:
+                break
+            try:
+                r = _j.loads(line)
+            except Exception:
+                continue
+            if r.get("project_id") != project_id:
+                continue
+            if r.get("ts", 0) < cutoff:
+                continue
+            executions.append(r)
+
+        return {
+            "executions": executions,
+            "total": len(executions),
+            "project_id": project_id,
+            "since_days": since_days,
+        }
+    except Exception as e:
+        logger.error("memory_list_autonomous_executions failed: %s", e)
         return {"error": str(e)}
 
 
@@ -1373,6 +1470,7 @@ async def memory_update_task(
     schedule: Optional[str] = None,
     priority: Optional[int] = None,
     status: Optional[str] = None,
+    allowed_actions: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Update a task's description, schedule, priority, or status."""
     try:
@@ -1401,6 +1499,9 @@ async def memory_update_task(
             updates['schedule'] = schedule
             import time as _t
             updates['next_run_at'] = parse_next_run(schedule, since=_t.time())
+        if allowed_actions is not None:
+            import json as _j
+            updates['allowed_actions'] = _j.dumps(allowed_actions)
 
         ok = memory_server.store.update_autonomous_task(task_id, **updates)
         return {"updated": ok, "task_id": task_id, "changes": list(updates.keys())}
@@ -1428,6 +1529,7 @@ memory_server.memory_list_scheduled_tasks = memory_list_scheduled_tasks
 memory_server.memory_complete_task = memory_complete_task
 memory_server.memory_cancel_task = memory_cancel_task
 memory_server.memory_update_task = memory_update_task
+memory_server.memory_list_autonomous_executions = memory_list_autonomous_executions
 
 
 async def main():

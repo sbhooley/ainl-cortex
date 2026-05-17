@@ -586,25 +586,168 @@ class TestConfigSection:
 
 class TestServerDispatch:
 
-    def test_all_five_dispatched_in_call_tool(self):
+    def test_all_tools_dispatched_in_call_tool(self):
         src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
         for tool in [
             "memory_schedule_task", "memory_list_scheduled_tasks",
             "memory_complete_task", "memory_cancel_task", "memory_update_task",
+            "memory_list_autonomous_executions",
         ]:
             assert f'name == "{tool}"' in src, f"Missing dispatch for {tool}"
 
-    def test_all_five_registered_on_server(self):
+    def test_all_tools_registered_on_server(self):
         src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
         for tool in [
             "memory_schedule_task", "memory_list_scheduled_tasks",
             "memory_complete_task", "memory_cancel_task", "memory_update_task",
+            "memory_list_autonomous_executions",
         ]:
             assert f"memory_server.{tool} = {tool}" in src, f"Missing registration: {tool}"
 
     def test_autonomous_scheduler_imported_in_server(self):
         src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
         assert "autonomous_scheduler" in src
+
+
+# ── K. allowed_actions scope lock ─────────────────────────────────────────────
+
+class TestAllowedActions:
+
+    def test_allowed_actions_stored_and_returned(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        actions = ["memory_list_goals", "memory_update_goal"]
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="scoped task",
+            allowed_actions=actions,
+        )
+        t = store.get_autonomous_task(tid)
+        # Stored as JSON; SQLite row may return string — parse if needed
+        raw = t.get('allowed_actions')
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        assert raw == actions
+
+    def test_allowed_actions_null_by_default(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x")
+        t = store.get_autonomous_task(tid)
+        assert t.get('allowed_actions') is None
+
+    def test_allowed_actions_updatable(self, tmp_path):
+        store = _make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(task_id=tid, project_id="p", description="x")
+        store.update_autonomous_task(tid, allowed_actions=json.dumps(["memory_search"]))
+        t = store.get_autonomous_task(tid)
+        raw = t.get('allowed_actions')
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        assert "memory_search" in raw
+
+    def test_schema_has_allowed_actions_column(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "schema.sql").read_text()
+        assert "allowed_actions" in src
+
+    def test_server_schedule_task_has_allowed_actions_param(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        idx = src.find('name="memory_schedule_task"')
+        snippet = src[idx: idx + 1800]
+        assert '"allowed_actions"' in snippet
+
+    def test_server_update_task_has_allowed_actions_param(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        idx = src.find('name="memory_update_task"')
+        snippet = src[idx: idx + 1200]
+        assert '"allowed_actions"' in snippet
+
+    def test_claude_md_allowed_actions_enforcement(self):
+        src = (PLUGIN_ROOT / "CLAUDE.md").read_text()
+        assert "allowed_actions" in src
+        assert "whitelist" in src or "hard scope lock" in src or "only" in src.lower()
+
+    def test_startup_surfaces_allowed_actions(self):
+        src = (PLUGIN_ROOT / "hooks" / "startup.py").read_text()
+        assert "allowed_actions" in src
+
+    def test_backward_compat_migration_in_graph_store(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "graph_store.py").read_text()
+        assert "ALTER TABLE autonomous_tasks ADD COLUMN allowed_actions" in src
+
+    def test_native_store_passes_allowed_actions(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "native_graph_store.py").read_text()
+        assert "allowed_actions" in src
+
+
+# ── L. Execution audit log ────────────────────────────────────────────────────
+
+class TestExecutionAuditLog:
+
+    def test_append_execution_log_creates_file(self, tmp_path):
+        from graph_store import append_execution_log
+        task = {
+            'task_id': 'tid-1', 'project_id': 'proj', 'description': 'test',
+            'trigger_type': 'scheduled', 'allowed_actions': None, 'run_count': 0,
+        }
+        append_execution_log(tmp_path, task, 'success', 'all done', cwd='/tmp', session_id='sid-1')
+        log = tmp_path / "logs" / "autonomous_executions.jsonl"
+        assert log.exists()
+        record = json.loads(log.read_text())
+        assert record['task_id'] == 'tid-1'
+        assert record['project_id'] == 'proj'
+        assert record['run_status'] == 'success'
+        assert record['cwd'] == '/tmp'
+        assert record['session_id'] == 'sid-1'
+        assert 'ts' in record
+
+    def test_append_execution_log_appends(self, tmp_path):
+        from graph_store import append_execution_log
+        task = {'task_id': 'x', 'project_id': 'p', 'description': 'd',
+                'trigger_type': 'scheduled', 'allowed_actions': None, 'run_count': 0}
+        for i in range(3):
+            append_execution_log(tmp_path, task, 'success', f'run {i}')
+        lines = (tmp_path / "logs" / "autonomous_executions.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 3
+
+    def test_append_execution_log_never_raises_on_bad_path(self):
+        from graph_store import append_execution_log
+        # Pass a path that can't be written to — must not raise
+        task = {'task_id': 'x', 'project_id': 'p', 'description': 'd',
+                'trigger_type': 'scheduled', 'allowed_actions': None, 'run_count': 0}
+        append_execution_log(Path("/nonexistent/path"), task, 'success', None)
+
+    def test_complete_task_writes_execution_log_in_server(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert "append_execution_log" in src
+        assert "execution_logged" in src
+
+    def test_audit_tool_in_server(self):
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        assert 'name="memory_list_autonomous_executions"' in src
+        assert "autonomous_executions.jsonl" in src
+
+    def test_execution_log_includes_allowed_actions(self, tmp_path):
+        from graph_store import append_execution_log
+        actions = ["memory_list_goals"]
+        task = {'task_id': 'x', 'project_id': 'p', 'description': 'd',
+                'trigger_type': 'scheduled', 'allowed_actions': actions, 'run_count': 0}
+        append_execution_log(tmp_path, task, 'success', None)
+        record = json.loads(
+            (tmp_path / "logs" / "autonomous_executions.jsonl").read_text()
+        )
+        assert record['allowed_actions'] == actions
+
+    def test_execution_log_includes_cwd(self, tmp_path):
+        from graph_store import append_execution_log
+        task = {'task_id': 'x', 'project_id': 'p', 'description': 'd',
+                'trigger_type': 'one_shot', 'allowed_actions': None, 'run_count': 0}
+        append_execution_log(tmp_path, task, 'failed', 'exploded', cwd='/home/user/myproject')
+        record = json.loads(
+            (tmp_path / "logs" / "autonomous_executions.jsonl").read_text()
+        )
+        assert record['cwd'] == '/home/user/myproject'
+        assert record['run_status'] == 'failed'
 
 
 # ── J. Edge cases ─────────────────────────────────────────────────────────────

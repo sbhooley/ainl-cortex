@@ -35,7 +35,7 @@ except ImportError:
 
 logger = get_logger("startup")
 
-TOOL_COUNT_MEMORY = 18  # 7 core + session_history + evolve_persona + expand_node + 4 goals + 5 autonomous
+TOOL_COUNT_MEMORY = 19  # 7 core + session_history + evolve_persona + expand_node + 4 goals + 5 autonomous + executions audit
 TOOL_COUNT_AINL = 12
 TOOL_COUNT_A2A = 7
 EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL + TOOL_COUNT_A2A
@@ -516,13 +516,28 @@ def main():
                         _due_tasks,
                         key=lambda x: (-x.get('priority', 5), x.get('next_run_at') or 0),
                     )[:10]
-                    _task_lines = [
-                        f"  [{t.get('priority', 5):2d}] {t['description']}"
-                        f"  [{t.get('trigger_type', 'scheduled')}]"
-                        f"  {_fmt_due(t.get('next_run_at'))}"
-                        f"  id={t['task_id']}"
-                        for t in _sorted
-                    ]
+                    def _fmt_actions(raw):
+                        import json as _aj
+                        if raw is None:
+                            return ""
+                        try:
+                            acts = _aj.loads(raw) if isinstance(raw, str) else raw
+                            return f"  → authorized: {', '.join(acts)}" if acts else ""
+                        except Exception:
+                            return ""
+
+                    _task_lines = []
+                    for t in _sorted:
+                        _line = (
+                            f"  [{t.get('priority', 5):2d}] {t['description']}"
+                            f"  [{t.get('trigger_type', 'scheduled')}]"
+                            f"  {_fmt_due(t.get('next_run_at'))}"
+                            f"  id={t['task_id']}"
+                        )
+                        _acts = _fmt_actions(t.get('allowed_actions'))
+                        if _acts:
+                            _line += f"\n{_acts}"
+                        _task_lines.append(_line)
                     system_blocks.append(
                         "\n━━━ AUTONOMOUS TASKS DUE ━━━\n"
                         + "\n".join(_task_lines) + "\n\n"

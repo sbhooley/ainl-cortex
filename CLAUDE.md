@@ -123,10 +123,14 @@ Call `memory_schedule_task` when:
 
 ### Safety constraints
 
-- Only execute tasks autonomously if they are in `approved_autonomous_actions` OR were explicitly created by the user (`created_by: "user"`).
-- Never modify files, push to git, delete data, or send external messages autonomously without prior explicit user authorization captured in the task description or a goal.
+**`allowed_actions` is a hard scope lock — treat it as a whitelist, not a hint.**
+
+- If a task has `allowed_actions: ["memory_list_goals", "memory_update_goal"]`, you may **only** call those specific MCP tools while executing that task. Nothing else, even if it seems helpful.
+- If a task has no `allowed_actions` (null), fall back to the `approved_autonomous_actions` list in `config.json`. Still do not take actions outside that list.
+- Never modify files, push to git, delete data, or send external messages autonomously without explicit prior user authorization captured in the task description or a goal.
 - Claude-created tasks (`created_by: "claude"`) require `allow_self_scheduling: true` in `config.json` (it is `true` by default).
 - Cap self-scheduled recurring tasks at `max_self_scheduled_tasks` (default 10). Check `memory_list_scheduled_tasks` before creating new ones.
+- Always call `memory_complete_task` after finishing — it writes the tamper-evident execution log that proves what ran and what was authorized.
 
 ### Task management tools
 
@@ -137,6 +141,7 @@ Call `memory_schedule_task` when:
 | `memory_complete_task` | After executing — advances next_run_at for recurring tasks |
 | `memory_update_task` | Pause, resume, change schedule or description |
 | `memory_cancel_task` | Permanently remove a task |
+| `memory_list_autonomous_executions` | Audit log — what ran, when, where, what was authorized |
 
 ---
 

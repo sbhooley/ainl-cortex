@@ -761,11 +761,11 @@ class NativeGraphStore(GraphStore):
     def create_autonomous_task(self, task_id, project_id, description,
                                schedule=None, trigger_type='scheduled',
                                next_run_at=None, created_by='user',
-                               max_runs=None, priority=5):
+                               max_runs=None, priority=5, allowed_actions=None):
         try:
             return self._sidecar_store().create_autonomous_task(
                 task_id, project_id, description, schedule, trigger_type,
-                next_run_at, created_by, max_runs, priority)
+                next_run_at, created_by, max_runs, priority, allowed_actions)
         except Exception:
             return {}
 
