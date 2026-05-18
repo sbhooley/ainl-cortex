@@ -265,7 +265,9 @@ def _inject_autonomous_blocks(
         if scope_raw:
             try:
                 scope_paths = _inj_json.loads(scope_raw) if isinstance(scope_raw, str) else scope_raw
-                if not any(cwd.startswith(sp) for sp in scope_paths):
+                # Anchor at path separator to avoid false prefix matches
+                # (e.g. /home/user/myproject-other should NOT match /home/user/myproject)
+                if not any(cwd == sp or cwd.startswith(sp.rstrip('/') + '/') for sp in scope_paths):
                     continue
             except Exception:
                 pass

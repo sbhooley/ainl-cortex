@@ -201,3 +201,47 @@ class TestSuggestionGeneration:
 
         assert "recurring" in text.lower() or "monitor" in text.lower()
         assert "cron" in text.lower() or "scheduling" in text.lower()
+
+
+class TestAinlDetectionMain:
+    """Test ainl_detection.main() entry point — particularly the project_id fix."""
+
+    def test_main_does_not_crash_with_empty_payload(self, monkeypatch):
+        """main() must not crash when given an empty hook payload."""
+        import json, sys
+        from io import StringIO
+        import importlib
+        import ainl_detection
+        importlib.reload(ainl_detection)
+        monkeypatch.setattr(sys, "stdin", StringIO(json.dumps({})))
+        captured = StringIO()
+        monkeypatch.setattr(sys, "stdout", captured)
+        ainl_detection.main()  # must return normally, not raise
+
+    def test_main_does_not_crash_with_plain_question(self, monkeypatch):
+        """A plain question prompt should not trigger a suggestion and must not raise."""
+        import json, sys
+        from io import StringIO
+        import importlib
+        import ainl_detection
+        importlib.reload(ainl_detection)
+        payload = {"prompt": "What is 2+2?", "cwd": "/tmp"}
+        monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(payload)))
+        captured = StringIO()
+        monkeypatch.setattr(sys, "stdout", captured)
+        ainl_detection.main()  # must return normally
+        # No suggestion emitted for a trivial question
+        assert captured.getvalue().strip() == ""
+
+    def test_main_uses_cwd_from_payload_not_path_dot_cwd(self, monkeypatch, tmp_path):
+        """main() should read cwd from payload, not Path.cwd() (plugin root)."""
+        import json, sys
+        from io import StringIO
+        import importlib
+        import ainl_detection
+        importlib.reload(ainl_detection)
+        payload = {"prompt": "run every hour", "cwd": str(tmp_path)}
+        monkeypatch.setattr(sys, "stdin", StringIO(json.dumps(payload)))
+        captured = StringIO()
+        monkeypatch.setattr(sys, "stdout", captured)
+        ainl_detection.main()  # must return normally regardless of cwd

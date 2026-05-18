@@ -715,19 +715,24 @@ class TestBranchFilteredRecall:
         assert _ep_branch(ep) == "main"
 
     def test_filter_lambda_dict_episode(self):
-        """Filter works on plain dict episodes (native recall path).
+        """Filter works on node.to_dict() format (Python recall path).
 
-        In the native path, episodes are returned as flat dicts where the
-        dict itself is the data (matching GraphNode.data layout), not wrapped
-        with a 'data' key.
+        compile_memory_context returns [node.to_dict() for node, score in ...].
+        to_dict() wraps everything in dataclass fields; git_branch is nested
+        under the 'data' key, NOT at the top level of the dict.
         """
         def _ep_branch(ep):
-            d = ep.data if hasattr(ep, "data") else (ep if isinstance(ep, dict) else {})
+            if isinstance(ep, dict):
+                return ep.get("data", {}).get("git_branch")
+            d = getattr(ep, "data", {})
             return d.get("git_branch") if isinstance(d, dict) else None
 
-        # Flat dict — the dict IS the episode data (same as GraphNode.data)
-        ep_dict = {"git_branch": "feature/x", "task_description": "some task"}
+        # node.to_dict() format — git_branch is inside 'data'
+        ep_dict = {"id": "x", "node_type": "episode", "data": {"git_branch": "feature/x", "task_description": "some task"}}
         assert _ep_branch(ep_dict) == "feature/x"
+
+        # A flat dict with no 'data' key returns None (not a crash)
+        assert _ep_branch({"git_branch": "main"}) is None
 
     def test_filter_lambda_none_branch(self):
         """Episodes with no git_branch field return None."""
@@ -824,3 +829,19 @@ class TestBranchFilteredRecall:
         assert "git_branch" in fn_body
         assert "recent_episodes" in fn_body
         assert "_ep_branch" in fn_body or "git_branch" in fn_body
+
+    def test_branch_filter_reads_nested_data_key(self):
+        """_ep_branch must read git_branch from ep['data']['git_branch'], not ep['git_branch'].
+
+        node.to_dict() returns {'data': {'git_branch': ...}, 'id': ..., ...}.
+        The old implementation read ep.get('git_branch') which always returned None
+        for to_dict() output, silently filtering out ALL episodes when git_branch
+        was specified."""
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        idx = src.find("async def memory_recall_context(")
+        fn_body = src[idx: idx + 3000]
+        # The fix must access the nested 'data' dict, not the top-level ep dict
+        assert 'get("data"' in fn_body or ".get('data'" in fn_body, (
+            "_ep_branch must access ep.get('data', {}).get('git_branch'), "
+            "not ep.get('git_branch') — node.to_dict() nests git_branch under 'data'"
+        )

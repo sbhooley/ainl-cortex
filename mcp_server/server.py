@@ -1133,8 +1133,12 @@ async def memory_recall_context(
         # and always included regardless of branch.
         if git_branch:
             def _ep_branch(ep):
-                d = ep.data if hasattr(ep, "data") else (ep if isinstance(ep, dict) else {})
-                return d.get("git_branch") if isinstance(d, dict) else None
+                # recent_episodes entries are node.to_dict() dicts; git_branch
+                # is stored inside the nested 'data' dict, not at the top level.
+                if isinstance(ep, dict):
+                    return ep.get("data", {}).get("git_branch")
+                # GraphNode object fallback (shouldn't happen post-retrieval)
+                return getattr(getattr(ep, "data", {}), "get", lambda k: None)("git_branch")
             memory_context["recent_episodes"] = [
                 ep for ep in memory_context.get("recent_episodes", [])
                 if _ep_branch(ep) == git_branch

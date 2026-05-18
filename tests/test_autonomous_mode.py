@@ -830,6 +830,30 @@ class TestEdgeCases:
         assert t['last_run_note'] == "all good"
         assert t['status'] == 'completed'
 
+    def test_complete_task_bad_schedule_does_not_raise(self, tmp_path):
+        """memory_complete_task must not crash when schedule is unrecognised.
+        Previously, parse_next_run(bad_schedule) raised ValueError and left the
+        scope lock active, causing a permanent tool block."""
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        # Guard: except (ValueError, TypeError) must wrap parse_next_run call
+        assert "except (ValueError, TypeError)" in src, (
+            "parse_next_run in memory_complete_task must catch ValueError so bad "
+            "schedules don't crash the hook and leave scope lock active"
+        )
+
+    def test_complete_task_session_id_reads_from_inbox(self):
+        """session_id sidecar is in inbox/, not logs/. A wrong path returns None.
+        Test verifies the correct path is used in memory_complete_task."""
+        src = (PLUGIN_ROOT / "mcp_server" / "server.py").read_text()
+        # Find memory_complete_task function body
+        idx = src.find("async def memory_complete_task(")
+        assert idx != -1
+        body = src[idx:idx + 2000]
+        # Must reference inbox directory (not logs/) for session_id file
+        assert '"inbox"' in body or "'inbox'" in body, (
+            "memory_complete_task must read session_id from inbox/ not logs/"
+        )
+
 
 # ── M. Risk tiers + approval gate (Gap 1) ─────────────────────────────────────
 
@@ -1215,6 +1239,30 @@ class TestStartupInjectionIntegration:
         )
         joined = "\n".join(blocks)
         assert "path-scoped review" in joined
+
+    def test_path_scope_false_prefix_match_excluded(self, tmp_path):
+        """path_scope must not fire for a cwd that is a string-prefix but not a path-prefix.
+
+        /home/user/myproject-other starts with /home/user/myproject as a
+        raw string, but is NOT inside /home/user/myproject as a filesystem path.
+        The filter must anchor at the path separator."""
+        from startup import _inject_autonomous_blocks
+        store = self._make_store(tmp_path)
+        tid = str(uuid.uuid4())
+        store.create_autonomous_task(
+            task_id=tid, project_id="p", description="anchored task",
+            next_run_at=time.time() - 60,
+            path_scope=["/home/user/myproject"],
+        )
+        blocks = []
+        _inject_autonomous_blocks(
+            blocks, store, "p", "/home/user/myproject-other", self._at_cfg()
+        )
+        joined = "\n".join(blocks)
+        assert "anchored task" not in joined, (
+            "path_scope /home/user/myproject must NOT match cwd /home/user/myproject-other "
+            "(string prefix but not a path prefix)"
+        )
 
     def test_empty_store_produces_no_blocks(self, tmp_path):
         from startup import _inject_autonomous_blocks

@@ -153,6 +153,47 @@ class TestTrajectoryStore:
         finally:
             db_path.unlink(missing_ok=True)
 
+    def test_cleanup_old_trajectories_does_not_crash(self):
+        """cleanup_old_trajectories must not crash regardless of the current day.
+
+        Regression test for the datetime.replace(day=current_day - days_old) bug:
+        replace() is not arithmetic — day=<negative> raises ValueError.
+        The fix uses timedelta(days=days_old) instead.
+        """
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+            db_path = Path(f.name)
+
+        try:
+            store = TrajectoryStore(db_path)
+
+            trajectory = ExecutionTrajectory(
+                trajectory_id="cleanup-test",
+                session_id="s1",
+                project_id="p1",
+                ainl_source_hash="aaa",
+                ainl_source="test",
+                frame_vars={},
+                adapters_enabled=[],
+                executed_at=datetime.now().isoformat(),
+                duration_ms=1.0,
+                outcome="success",
+                steps=[],
+                tags=[],
+                fitness_delta=0.0,
+            )
+            store.record_trajectory(trajectory)
+
+            # Must not raise — previously crashed with ValueError: day is out of range
+            store.cleanup_old_trajectories(days_old=90)
+            store.cleanup_old_trajectories(days_old=1)
+
+            # The recent trajectory should still be there (1 day old means yesterday's cutoff)
+            results = store.get_recent_trajectories("s1")
+            assert len(results) == 1
+
+        finally:
+            db_path.unlink(missing_ok=True)
+
     def test_trajectory_with_steps(self):
         """Test trajectory with execution steps."""
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:

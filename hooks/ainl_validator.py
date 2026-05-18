@@ -8,34 +8,23 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+sys.path.insert(0, str(Path(__file__).parent))
+from shared.project_id import get_project_id
+
 # Try to import AINL tools
 try:
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from mcp_server.ainl_tools import AINLTools, _HAS_AINL
-    from mcp_server.failure_learning import FailureLearningStore
-    _HAS_FAILURE_LEARNING = True
 except ImportError:
     _HAS_AINL = False
-    _HAS_FAILURE_LEARNING = False
 
 
 class AINLValidator:
-    """Auto-validates .ainl files with failure learning."""
+    """Auto-validates .ainl files after Edit/Write tool use."""
 
     def __init__(self, project_id: Optional[str] = None):
         self.tools = AINLTools() if _HAS_AINL else None
         self.project_id = project_id
-
-        # Initialize failure learning store
-        self.failure_store = None
-        if _HAS_FAILURE_LEARNING and project_id:
-            try:
-                failure_db = Path.home() / ".claude" / "projects" / project_id / "failures.db"
-                failure_db.parent.mkdir(parents=True, exist_ok=True)
-                self.failure_store = FailureLearningStore(failure_db)
-            except Exception as e:
-                sys.stderr.write(f"Failed to initialize failure store: {e}\n")
-                self.failure_store = None
 
     def should_validate(self, event: Dict[str, Any]) -> Optional[str]:
         """
@@ -44,20 +33,13 @@ class AINLValidator:
         Returns:
             File path if should validate, None otherwise
         """
-        # Check tool name
-        tool_name = event.get("toolName", "")
-        if tool_name not in ["Read", "Edit", "Write"]:
+        # Claude Code PostToolUse payload uses snake_case field names
+        tool_name = event.get("tool_name", "")
+        if tool_name not in ["Edit", "Write"]:
+            # Read doesn't change the file — no point re-validating on read
             return None
 
-        # Check for .ainl file
-        tool_input = event.get("toolInput", {})
-
-        # Read/Edit: check file_path
-        file_path = tool_input.get("file_path")
-        if file_path and file_path.endswith(".ainl"):
-            return file_path
-
-        # Write: check file_path
+        tool_input = event.get("tool_input", {}) or {}
         file_path = tool_input.get("file_path")
         if file_path and file_path.endswith(".ainl"):
             return file_path
@@ -92,78 +74,39 @@ class AINLValidator:
                 "error": f"Validation error: {e}"
             }
 
-    def format_validation_output(
-        self,
-        file_path: str,
-        validation: Dict[str, Any],
-        source: str
-    ) -> str:
-        """Format validation results as markdown with failure learning."""
+    def format_validation_output(self, file_path: str, validation: Dict[str, Any]) -> str:
+        """Format validation results as a compact markdown block."""
+        name = Path(file_path).name
 
         if validation.get("valid"):
-            return f"""
-**AINL Validation:** ✅ {Path(file_path).name}
+            next_tools = validation.get('recommended_next_tools', [])
+            msg = validation.get('message', 'Valid')
+            out = f"**AINL Validation:** ✅ {name}\n{msg}"
+            if next_tools:
+                out += f"\n**Next steps:** {', '.join(next_tools)}"
+            return out
 
-{validation.get('message', 'Valid')}
-
-**Next steps:** {', '.join(validation.get('recommended_next_tools', []))}
-"""
-
-        # Validation failed - check for similar failures
         diagnostics = validation.get("diagnostics", [])
         primary = validation.get("primary_diagnostic")
 
-        output = f"""
-**AINL Validation:** ❌ {Path(file_path).name}
-
-"""
-
+        out = f"**AINL Validation:** ❌ {name}\n"
         if primary:
-            output += f"**Error:** {primary.get('message', 'Unknown error')}\n"
+            out += f"**Error:** {primary.get('message', 'Unknown error')}\n"
             if "line" in primary:
-                output += f"**Line:** {primary['line']}\n"
-            output += "\n"
-
-        # Record failure and check for similar issues
-        if self.failure_store and primary:
-            try:
-                error_msg = primary.get('message', '')
-
-                # Record this failure
-                failure_id = self.failure_store.record_failure(
-                    error_type=primary.get('error_type', 'validation_error'),
-                    error_message=error_msg,
-                    ainl_source=source,
-                    context={'file': file_path}
-                )
-
-                # Search for similar failures with resolutions
-                similar = self.failure_store.find_similar_failures(error_msg, limit=3)
-                resolved = [f for f in similar if f.resolution]
-
-                if resolved:
-                    best_match = resolved[0]
-                    output += f"\n**💡 I've seen this error before ({best_match.prevented_count} times).**\n"
-                    output += f"**Previous fix:**\n```\n{best_match.resolution_diff}\n```\n\n"
-
-            except Exception as e:
-                sys.stderr.write(f"Failure learning error: {e}\n")
+                out += f"**Line:** {primary['line']}\n"
 
         repair_steps = validation.get("agent_repair_steps", [])
         if repair_steps:
-            output += "**How to fix:**\n"
-            for step in repair_steps:
-                output += f"- {step}\n"
-            output += "\n"
+            out += "**How to fix:**\n" + "".join(f"- {s}\n" for s in repair_steps)
 
         if len(diagnostics) > 1:
-            output += f"\n**{len(diagnostics) - 1} additional issue(s)**\n"
+            out += f"\n**{len(diagnostics) - 1} additional issue(s)**"
 
         resources = validation.get("recommended_resources", [])
         if resources:
-            output += f"\n**Resources:** {', '.join(resources)}\n"
+            out += f"\n**Resources:** {', '.join(resources)}"
 
-        return output
+        return out
 
 
 def main():
@@ -176,7 +119,9 @@ def main():
         from shared.stdin import read_stdin_json
         event = read_stdin_json(hook_name="ainl_validator")
 
-        project_id = event.get("projectId")
+        # projectId is not in PostToolUse payloads — compute from cwd
+        cwd = Path(event.get("cwd", str(Path.cwd())))
+        project_id = get_project_id(cwd)
         validator = AINLValidator(project_id=project_id)
 
         # Check if we should validate
@@ -184,32 +129,18 @@ def main():
         if not file_path:
             return
 
-        # Read source for failure learning
-        source = ""
-        try:
-            with open(file_path, 'r') as f:
-                source = f.read()
-        except Exception:
-            pass
-
         # Validate
         validation = validator.validate_file(file_path)
         if not validation:
             return
 
         # Format output
-        output_text = validator.format_validation_output(file_path, validation, source)
+        output_text = validator.format_validation_output(file_path, validation)
 
-        # Output as context injection
+        # PostToolUse context injection: hookSpecificOutput.additionalContext
         output = {
-            "contextInjection": {
-                "priority": "high",
-                "content": output_text,
-                "metadata": {
-                    "source": "ainl_validator",
-                    "file": file_path,
-                    "valid": validation.get("valid", False)
-                }
+            "hookSpecificOutput": {
+                "additionalContext": output_text
             }
         }
 

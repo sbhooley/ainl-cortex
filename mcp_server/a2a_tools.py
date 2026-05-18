@@ -433,9 +433,13 @@ class A2ATools:
                     task["completed_at"] = int(time.time())
                     task["result"] = result_text
                     _atomic_write(task_file, task)
-                elif remote_status in ("cancelled", "failed") and "error" not in remote:
+                elif remote_status in ("cancelled", "failed"):
+                    # A failed/cancelled task typically carries an "error" field;
+                    # do NOT gate on its absence or the task stays "pending" forever.
                     task["status"] = remote_status
                     task["completed_at"] = int(time.time())
+                    if "error" in remote:
+                        task["send_error"] = remote["error"]
                     _atomic_write(task_file, task)
 
             # Also check local inbox as fallback (for non-ArmaraOS callbacks)

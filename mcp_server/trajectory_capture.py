@@ -171,11 +171,11 @@ class TrajectoryStore:
 
     def cleanup_old_trajectories(self, days_old: int = 90):
         """Remove trajectories older than specified days."""
+        from datetime import timedelta
         conn = sqlite3.connect(str(self.db_path))
 
         try:
-            cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            cutoff = cutoff.replace(day=cutoff.day - days_old)
+            cutoff = datetime.now() - timedelta(days=days_old)
 
             conn.execute("""
                 DELETE FROM trajectories
