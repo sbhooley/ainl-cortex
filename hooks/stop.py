@@ -703,7 +703,8 @@ def flush_pending_captures(project_id: str) -> int:
     if not inbox_file.exists():
         return 0
     try:
-        count = sum(1 for _ in open(inbox_file))
+        with open(inbox_file) as _cf:
+            count = sum(1 for _ in _cf)
     except Exception:
         return 0
     if count == 0:

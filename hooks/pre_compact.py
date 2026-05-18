@@ -69,7 +69,8 @@ def _flush_and_snapshot(project_id: str, message_count: int, estimated_tokens: i
         capture_count = 0
         if captures_file.exists():
             try:
-                capture_count = sum(1 for _ in open(captures_file))
+                with open(captures_file) as _cf:
+                    capture_count = sum(1 for _ in _cf)
             except Exception:
                 pass
 
