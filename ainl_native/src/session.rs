@@ -271,7 +271,8 @@ fn flush_trajectory(
         Ok(c) => c,
         Err(_) => return 0,
     };
-    let _ = std::fs::remove_file(path);
+    // Do NOT delete the file here — deleting before the DB insert risks permanent
+    // data loss if deserialization or insert_trajectory_detail fails.
 
     let steps: Vec<serde_json::Value> = content
         .lines()
@@ -281,6 +282,7 @@ fn flush_trajectory(
 
     let count = steps.len();
     if count == 0 {
+        let _ = std::fs::remove_file(path);
         return 0;
     }
 
@@ -308,6 +310,11 @@ fn flush_trajectory(
     if let Ok(row) = serde_json::from_value::<ainl_memory::trajectory_table::TrajectoryDetailRecord>(record_val) {
         let _ = store.insert_trajectory_detail(&row);
     }
+
+    // Delete after the insert attempt. The step file is session-scoped and not
+    // useful on restart, so we always remove it — but only after we've had a
+    // chance to persist it.
+    let _ = std::fs::remove_file(path);
 
     count
 }
@@ -933,13 +940,20 @@ fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {
         s
     } else {
-        // Truncate at char boundary
-        &s[..s
+        // Keep only chars whose full byte span fits within max. Using
+        // i + c.len_utf8() (end byte) as both the filter and the slice
+        // endpoint ensures:
+        //   (a) the result never exceeds max bytes, and
+        //   (b) we never slice at a non-char-boundary (which would panic).
+        // The old code used `i + 1` as the endpoint, which panics for any
+        // multi-byte char (emoji, CJK, accented letters) near the boundary.
+        let end = s
             .char_indices()
-            .take_while(|(i, _)| *i < max)
+            .take_while(|(i, c)| *i + c.len_utf8() <= max)
             .last()
-            .map(|(i, _)| i + 1)
-            .unwrap_or(max)]
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        &s[..end]
     }
 }
 
@@ -1076,5 +1090,49 @@ mod tests {
         // (mcp_server/retrieval.py) handles surfacing them when needed.
         let unscoped = procedural(None);
         assert!(!node_project_matches(&unscoped, "proj_a"));
+    }
+
+    // ── truncate regression (Bug R1) ──────────────────────────────────────────
+
+    #[test]
+    fn truncate_ascii_does_not_exceed_max() {
+        let s = "hello world and more text here";
+        let t = super::truncate(s, 10);
+        assert!(t.len() <= 10);
+        assert_eq!(t, &s[..10]);
+    }
+
+    #[test]
+    fn truncate_shorter_than_max_returns_full() {
+        let s = "short";
+        assert_eq!(super::truncate(s, 100), "short");
+    }
+
+    #[test]
+    fn truncate_multibyte_does_not_panic() {
+        // Each of these chars is 3 bytes in UTF-8. A string of 27 such chars is 81 bytes.
+        // max=80 puts the cut right inside the last char — the old `i + 1` code would
+        // produce a non-char-boundary slice index and panic.
+        let s: String = "日".repeat(27); // 27 × 3 = 81 bytes
+        assert_eq!(s.len(), 81);
+        // Must not panic and result must be valid UTF-8 at a char boundary.
+        let t = super::truncate(&s, 80);
+        assert!(std::str::from_utf8(t.as_bytes()).is_ok());
+        assert!(t.len() <= 80);
+    }
+
+    #[test]
+    fn truncate_emoji_does_not_panic() {
+        // "🎉" is 4 bytes. A string of 21 emojis = 84 bytes; max=82 lands mid-emoji.
+        let s: String = "🎉".repeat(21);
+        assert_eq!(s.len(), 84);
+        let t = super::truncate(&s, 82);
+        assert!(std::str::from_utf8(t.as_bytes()).is_ok());
+        assert!(t.len() <= 82);
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(super::truncate("", 10), "");
     }
 }
