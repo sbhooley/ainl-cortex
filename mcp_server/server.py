@@ -1485,9 +1485,7 @@ async def memory_complete_task(
             from graph_store import append_execution_log
         _session_id = None
         try:
-            from pathlib import Path as _P
-            import json as _sj
-            _sid_file = _plugin_root() / "logs" / f"{task['project_id']}_session_id"
+            _sid_file = _plugin_root() / "inbox" / f"{task['project_id']}_session_id.txt"
             if _sid_file.exists():
                 _session_id = _sid_file.read_text().strip()
         except Exception:
