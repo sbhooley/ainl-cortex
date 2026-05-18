@@ -242,4 +242,45 @@ def test_branch_filter_in_recall_implementation():
     src = (Path(__file__).parent.parent / "mcp_server" / "server.py").read_text()
     assert "git_branch" in src
     assert "recent_episodes" in src
-    assert "_ep_branch" in src or "git_branch" in src
+
+
+# ── 4. FTS5 deduplication regression ─────────────────────────────────────────
+
+def test_fts5_no_duplicate_on_node_update(tmp_path):
+    """Updating a node must not create duplicate FTS entries.
+
+    Regression test for Bug 4: INSERT OR REPLACE into FTS5 without a rowid
+    column always inserts a new row (FTS5 has no unique constraint on content
+    columns), so every write_node call for an existing node accumulated a
+    duplicate FTS entry. search_fts then returned the same node multiple times.
+
+    Fix: DELETE existing FTS row before INSERT.
+    """
+    from graph_store import get_graph_store, NodeType
+    from node_types import GraphNode
+
+    store = get_graph_store(tmp_path / "fts_dedup.db")
+
+    now = int(time.time())
+    node = GraphNode(
+        id="fts-dedup-node-1",
+        project_id="proj-fts",
+        node_type=NodeType.SEMANTIC,
+        created_at=now,
+        updated_at=now,
+        confidence=0.9,
+        data={"summary": "http adapter registration error test"},
+        embedding_text="http adapter registration error",
+    )
+
+    # Write once, then update (same id, new embedding_text)
+    store.write_node(node)
+    node.embedding_text = "http adapter registration error updated"
+    store.write_node(node)
+
+    results = store.search_fts("http adapter", "proj-fts", 10)
+    ids = [n.id for n in results]
+
+    assert ids.count("fts-dedup-node-1") == 1, (
+        f"FTS5 duplicate: node appeared {ids.count('fts-dedup-node-1')} times in search results"
+    )

@@ -370,13 +370,17 @@ class SQLiteGraphStore(GraphStore):
                 )
             )
 
-            # Update FTS index if embedding_text exists
+            # Update FTS index if embedding_text exists.
+            # FTS5 has no unique constraint on content columns, so INSERT OR REPLACE
+            # always inserts a NEW row rather than replacing the existing one.
+            # Delete first to avoid accumulating duplicate entries on node updates.
             if node.embedding_text:
                 cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO ainl_nodes_fts (node_id, embedding_text)
-                    VALUES (?, ?)
-                    """,
+                    "DELETE FROM ainl_nodes_fts WHERE node_id = ?",
+                    (node.id,)
+                )
+                cursor.execute(
+                    "INSERT INTO ainl_nodes_fts (node_id, embedding_text) VALUES (?, ?)",
                     (node.id, node.embedding_text)
                 )
 
