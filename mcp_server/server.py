@@ -1469,10 +1469,13 @@ async def memory_complete_task(
         next_run_at = None
         if reschedule and task.get('schedule'):
             try:
-                from .autonomous_scheduler import parse_next_run
-            except ImportError:
-                from autonomous_scheduler import parse_next_run
-            next_run_at = parse_next_run(task['schedule'], since=_t.time())
+                try:
+                    from .autonomous_scheduler import parse_next_run
+                except ImportError:
+                    from autonomous_scheduler import parse_next_run
+                next_run_at = parse_next_run(task['schedule'], since=_t.time())
+            except (ValueError, TypeError) as _sched_err:
+                logger.warning("Could not parse schedule %r: %s — task not rescheduled", task.get('schedule'), _sched_err)
 
         ok = memory_server.store.mark_task_run(
             task_id=task_id, run_status='success', note=note, next_run_at=next_run_at,
