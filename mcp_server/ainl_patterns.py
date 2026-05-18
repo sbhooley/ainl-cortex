@@ -190,6 +190,10 @@ class AINLPatternStore:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
 
+        # Phrase-quote to prevent FTS5 from interpreting user-supplied chars
+        # (AND, OR, NOT, parentheses, quotes) as query operators.
+        safe_fts = '"' + query.replace('"', '""') + '"'
+
         # Build query
         sql = """
             SELECT p.*, fts.rank
@@ -198,7 +202,7 @@ class AINLPatternStore:
             WHERE ainl_patterns_fts MATCH ?
             AND p.fitness_score >= ?
         """
-        params = [query, min_fitness]
+        params = [safe_fts, min_fitness]
 
         if pattern_type:
             sql += " AND p.pattern_type = ?"
@@ -207,7 +211,22 @@ class AINLPatternStore:
         sql += " ORDER BY fts.rank, p.fitness_score DESC LIMIT ?"
         params.append(limit)
 
-        results = conn.execute(sql, params).fetchall()
+        try:
+            results = conn.execute(sql, params).fetchall()
+        except Exception:
+            # FTS5 phrase query can still fail on degenerate inputs; fall back to LIKE
+            try:
+                like_sql = "SELECT * FROM ainl_patterns WHERE fitness_score >= ?"
+                like_params: list = [min_fitness]
+                if pattern_type:
+                    like_sql += " AND pattern_type = ?"
+                    like_params.append(pattern_type)
+                like_sql += " AND (description LIKE ? OR tags LIKE ?) ORDER BY fitness_score DESC LIMIT ?"
+                like_pat = f"%{query[:80]}%"
+                like_params += [like_pat, like_pat, limit]
+                results = conn.execute(like_sql, like_params).fetchall()
+            except Exception:
+                results = []
         conn.close()
 
         return [self._row_to_dict(row) for row in results]
