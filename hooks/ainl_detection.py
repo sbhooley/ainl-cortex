@@ -12,6 +12,9 @@ from typing import Dict, List, Optional, Any
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
+
+from shared.project_id import get_project_id
 
 try:
     from mcp_server.persona_evolution import (
@@ -300,9 +303,11 @@ def main():
         event = read_stdin_json(hook_name="ainl_detection")
 
         prompt = event.get("prompt", "")
-        project_id = event.get("projectId")
+        # projectId is not in the hook payload — compute from cwd like other hooks
+        cwd = Path(event.get("cwd", str(Path.cwd())))
+        project_id = get_project_id(cwd)
         context = {
-            "workingDir": event.get("workingDir"),
+            "workingDir": event.get("workingDir") or str(cwd),
             "projectId": project_id
         }
 
