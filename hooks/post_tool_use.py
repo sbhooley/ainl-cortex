@@ -228,8 +228,9 @@ def buffer_capture(project_id: str, capture: dict) -> int:
     try:
         with open(inbox_file, 'a') as f:
             f.write(json.dumps(capture) + '\n')
-        # Count lines efficiently
-        count = sum(1 for _ in open(inbox_file))
+        # Count lines efficiently — use context manager so the handle is closed
+        with open(inbox_file) as _cf:
+            count = sum(1 for _ in _cf)
         logger.debug(f"Buffered capture: {capture['type']} - {capture['tool']} ({count} total)")
         return count
     except Exception as e:

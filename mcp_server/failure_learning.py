@@ -138,21 +138,41 @@ class FailureLearningStore:
     def find_similar_failures(self, error_message: str, limit: int = 5) -> List[FailureResolution]:
         """Find similar failures via FTS5 search."""
         conn = sqlite3.connect(str(self.db_path))
-
-        # FTS5 search
-        cursor = conn.execute("""
-            SELECT f.id, f.error_type, f.error_message, f.ainl_source,
-                   f.context, f.resolution, f.resolution_diff, f.prevented_count,
-                   f.created_at, f.resolved_at
-            FROM failure_search fs
-            JOIN failure_resolutions f ON fs.failure_id = f.id
-            WHERE failure_search MATCH ?
-            ORDER BY rank
-            LIMIT ?
-        """, (error_message, limit))
-
-        rows = cursor.fetchall()
-        conn.close()
+        rows = []
+        try:
+            # Wrap the search term in a phrase query to prevent FTS5 from
+            # interpreting user-supplied characters (AND, OR, NOT, "(", ")", etc.)
+            # as query operators.  Internal double-quotes must be escaped by doubling.
+            safe_fts = '"' + error_message.replace('"', '""') + '"'
+            cursor = conn.execute("""
+                SELECT f.id, f.error_type, f.error_message, f.ainl_source,
+                       f.context, f.resolution, f.resolution_diff, f.prevented_count,
+                       f.created_at, f.resolved_at
+                FROM failure_search fs
+                JOIN failure_resolutions f ON fs.failure_id = f.id
+                WHERE failure_search MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (safe_fts, limit))
+            rows = cursor.fetchall()
+        except Exception:
+            # FTS5 phrase query can still fail on degenerate inputs; fall back
+            # to a simple LIKE scan so callers always get a result.
+            try:
+                like_pat = f"%{error_message[:80]}%"
+                cursor = conn.execute("""
+                    SELECT id, error_type, error_message, ainl_source,
+                           context, resolution, resolution_diff, prevented_count,
+                           created_at, resolved_at
+                    FROM failure_resolutions
+                    WHERE error_message LIKE ?
+                    LIMIT ?
+                """, (like_pat, limit))
+                rows = cursor.fetchall()
+            except Exception:
+                pass
+        finally:
+            conn.close()
 
         return [self._row_to_failure(row) for row in rows]
 
