@@ -717,7 +717,7 @@ class NativeGraphStore(GraphStore):
         try:
             import sqlite3 as _sq, json as _json, time as _time
             from pathlib import Path as _Path
-            _py_db = _Path(str(self.db_path)).parent / "ainl_memory.db"
+            _py_db = _Path(str(self._db_path)).parent / "ainl_memory.db"
             if not _py_db.exists():
                 return []
             _since = int(_time.time()) - since_days * 86400
@@ -755,7 +755,7 @@ class NativeGraphStore(GraphStore):
             import sys as _sys
             _sys.path.insert(0, str(_P(__file__).parent))
             from graph_store import SQLiteGraphStore as _S
-        _py_db = _P(str(self.db_path)).parent / "ainl_memory.db"
+        _py_db = _P(str(self._db_path)).parent / "ainl_memory.db"
         return _S(_py_db)
 
     def create_autonomous_task(self, task_id, project_id, description,
