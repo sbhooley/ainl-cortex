@@ -18,6 +18,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 from shared.project_id import get_project_id
 from shared.logger import log_event, get_logger
 
+
+def _get_compact_project_id(plugin_root: Path) -> str:
+    """Get the session's project_id from the startup-written sidecar.
+
+    PostCompact payload doesn't include cwd, so we fall back to the sidecar
+    written by startup.py. Without this, get_project_id() uses Path.cwd()
+    which is the plugin root, not the user's actual project."""
+    try:
+        cid_file = plugin_root / "inbox" / "current_project_id.txt"
+        if cid_file.exists():
+            pid = cid_file.read_text().strip()
+            if pid:
+                return pid
+    except Exception:
+        pass
+    return get_project_id()
+
 logger = get_logger("post_compact")
 
 try:
@@ -32,7 +49,8 @@ def main():
     try:
         from shared.stdin import read_stdin_json
         input_data = read_stdin_json(hook_name="post_compact")
-        project_id = get_project_id()
+        plugin_root = Path(__file__).parent.parent
+        project_id = _get_compact_project_id(plugin_root)
 
         messages_before = input_data.get('messagesBefore', 0)
         messages_after = input_data.get('messagesAfter', 0)

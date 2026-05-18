@@ -564,11 +564,9 @@ def write_patterns(store, project_id: str) -> int:
     # Fetch existing procedural patterns to avoid re-promoting
     existing_patterns = []
     try:
-        all_nodes = store.search_fts("", project_id, limit=200)
         existing_patterns = [
             {"data": n.data}
-            for n in all_nodes
-            if n.node_type == NodeType.PROCEDURAL
+            for n in store.query_by_type(NodeType.PROCEDURAL, project_id, limit=200)
         ]
     except Exception:
         pass

@@ -185,3 +185,28 @@ class TestClearStaleScopeLock:
     def test_noop_when_logs_dir_absent(self, tmp_path):
         from startup import _clear_stale_scope_lock
         _clear_stale_scope_lock(tmp_path / "no_such_dir")  # must not raise
+
+
+# ── E. current_project_id.txt sidecar ────────────────────────────────────────
+
+class TestStartupProjectIdSidecar:
+
+    def test_main_writes_current_project_id_file(self, monkeypatch, tmp_path):
+        """startup.main() must write inbox/current_project_id.txt for PreCompact."""
+        (tmp_path / "logs").mkdir()
+        _run_main(monkeypatch, plugin_root_override=tmp_path)
+        sidecar = tmp_path / "inbox" / "current_project_id.txt"
+        assert sidecar.exists(), "inbox/current_project_id.txt not written by startup"
+
+    def test_current_project_id_is_nonempty_string(self, monkeypatch, tmp_path):
+        (tmp_path / "logs").mkdir()
+        _run_main(monkeypatch, plugin_root_override=tmp_path)
+        pid = (tmp_path / "inbox" / "current_project_id.txt").read_text().strip()
+        assert isinstance(pid, str) and len(pid) > 0
+
+    def test_current_project_id_sidecar_survives_missing_config(self, monkeypatch, tmp_path):
+        """Even without config.json the sidecar is written (graceful degradation)."""
+        (tmp_path / "logs").mkdir()
+        code, _ = _run_main(monkeypatch, plugin_root_override=tmp_path)
+        assert code == 0
+        assert (tmp_path / "inbox" / "current_project_id.txt").exists()

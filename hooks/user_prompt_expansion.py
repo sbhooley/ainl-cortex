@@ -97,8 +97,8 @@ def main():
             print(json.dumps({}), file=sys.stdout)
             sys.exit(0)
 
-        # Get project ID
-        cwd = Path.cwd()
+        # Get project ID — read cwd from payload if present (hooks run in plugin root)
+        cwd = Path(input_data.get('cwd', str(Path.cwd())))
         project_id = get_project_id(cwd)
 
         logger.info(f"Processing prompt compression for project {project_id}")

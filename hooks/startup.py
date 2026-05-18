@@ -391,6 +391,15 @@ def main():
         except Exception:
             pass
 
+        # Persist the current session's project_id so hooks without cwd in
+        # their payload (PreCompact, PostCompact) can find it.
+        try:
+            _cid_file = root / "inbox" / "current_project_id.txt"
+            _cid_file.parent.mkdir(parents=True, exist_ok=True)
+            _cid_file.write_text(get_project_id(cwd))
+        except Exception:
+            pass
+
         mcp_ok, mcp_detail = verify_mcp_imports(root)
         # Only attempt native build when config explicitly requests it
         try:
