@@ -157,12 +157,12 @@ def compression_status_from_config() -> Dict[str, Any]:
         lines.append(f"{_CONT}compresses: (nothing — check config.json compression.*)")
     lines.extend(_wrap_subfield("not", "; ".join(not_compressed)))
     if bench:
-        bench_line = f"{bench} — applies to compressed recall/prompt text only, not your whole session"
-        if len(bench_line) + len(_CONT) <= _WRAP_WIDTH:
-            lines.append(f"{_CONT}{bench_line}")
+        tail = " — applies to compressed recall/prompt text only, not your whole session"
+        if len(_CONT) + len(bench) + len(tail) <= _WRAP_WIDTH:
+            lines.append(f"{_CONT}{bench}{tail}")
         else:
             lines.append(f"{_CONT}{bench}")
-            lines.append(f"{_CONT}  — applies to compressed recall/prompt text only, not your whole session")
+            lines.append(f"{_CONT} {tail.lstrip()}")
 
     line = "\n".join(lines) + "\n"
     return {"enabled": True, "mode": mode, "line": line, "lines": lines}
@@ -266,14 +266,8 @@ def build_main_banner(
             expected_tools=expected_tools,
         )
     )
-    lines.extend(
-        _wrap_segments(
-            f"{_BULLET}After git pull or setup.sh: run /reload-plugins if tools act stale",
-            ["(/plugin → Installed → ainl-cortex)."],
-            sep=" ",
-            cont=_CONT,
-        )
-    )
+    lines.append(f"{_BULLET}After git pull or setup.sh: run /reload-plugins if tools act stale")
+    lines.append(f"{_CONT}(/plugin → Installed → ainl-cortex).")
     return "\n".join(lines) + "\n"
 
 
