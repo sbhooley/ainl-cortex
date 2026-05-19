@@ -656,6 +656,31 @@ class NativeGraphStore(GraphStore):
 
         return nodes[:limit]
 
+
+    def _merge_sidecar_goals(
+        self,
+        nodes: List[GraphNode],
+        project_id: str,
+        status: Optional[str],
+        limit: int,
+    ) -> List[GraphNode]:
+        """Strict-native writes goals to ainl_memory.db (sidecar) only."""
+        try:
+            sidecar_nodes = self._sidecar_store().query_goals(
+                project_id, status=status, limit=limit
+            )
+            seen = {n.id for n in nodes}
+            for n in sidecar_nodes:
+                if n.id not in seen:
+                    nodes.append(n)
+                    seen.add(n.id)
+            nodes.sort(
+                key=lambda n: (n.updated_at or n.created_at or 0), reverse=True
+            )
+        except Exception:
+            pass
+        return nodes[:limit]
+
     def query_goals(
         self, project_id: str, status: Optional[str] = None, limit: int = 50
     ) -> List[GraphNode]:
@@ -685,7 +710,9 @@ class NativeGraphStore(GraphStore):
                 if len(nodes) >= limit:
                     break
             if nodes:
-                return nodes
+                return self._merge_sidecar_goals(
+                    nodes, project_id, status, limit
+                )
             # Fallthrough: index hit zero matches; do a fallback scan in case
             # the index missed an entry (defensive).
 
@@ -709,7 +736,7 @@ class NativeGraphStore(GraphStore):
             if status and (n.data or {}).get("status") != status:
                 continue
             nodes.append(n)
-        return nodes[:limit]
+        return self._merge_sidecar_goals(nodes, project_id, status, limit)
 
     # ── Anchored summary passthrough ──────────────────────────────────────────
 

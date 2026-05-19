@@ -141,9 +141,9 @@ def recall_context(project_id: str, prompt: str, max_nodes: int = 20) -> dict:
         memory_dir = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
         db_path = memory_dir / "ainl_memory.db"
 
-        # Check if database exists
-        if not db_path.exists():
-            logger.debug(f"No memory database found at {db_path}")
+        native_db = memory_dir / "ainl_native.db"
+        if not db_path.exists() and not native_db.exists():
+            logger.debug(f"No memory database found under {memory_dir}")
             return {
                 'recent_episodes': [],
                 'relevant_facts': [],
@@ -152,6 +152,7 @@ def recall_context(project_id: str, prompt: str, max_nodes: int = 20) -> dict:
                 'persona_traits': []
             }
 
+        memory_dir.mkdir(parents=True, exist_ok=True)
         # Initialize store and retrieval
         store = get_graph_store(db_path)
         retrieval = MemoryRetrieval(store)

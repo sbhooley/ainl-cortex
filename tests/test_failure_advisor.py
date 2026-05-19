@@ -354,3 +354,25 @@ class TestNativeUnresolvedFailures:
         unresolved = store.get_unresolved_failures(pid, limit=10)
         assert len(unresolved) == 1
         assert unresolved[0].data.get("error_type") == "compile_error"
+
+@pytest.mark.skipif(_ngs is None or not _ngs._NATIVE_OK, reason="ainl_native not built")
+class TestNativeSidecarGoals:
+
+    def test_query_goals_merges_python_sidecar(self, tmp_path):
+        """Strict-native writes goals to ainl_memory.db; native read must merge."""
+        from graph_store import SQLiteGraphStore
+        from node_types import create_goal_node
+
+        native_db = tmp_path / "ainl_native.db"
+        sidecar_db = tmp_path / "ainl_memory.db"
+        store = _ngs.NativeGraphStore(native_db)
+        py_store = SQLiteGraphStore(sidecar_db)
+        pid = "proj_goals_sidecar"
+
+        py_store.write_node(
+            create_goal_node(pid, "Ship native merge", "Verify sidecar goals visible")
+        )
+
+        active = store.query_goals(pid, status="active", limit=10)
+        assert len(active) == 1
+        assert active[0].data.get("title") == "Ship native merge"
