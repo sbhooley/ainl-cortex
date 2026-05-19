@@ -22,7 +22,7 @@ if _mcp_dir not in sys.path:
     sys.path.insert(0, _mcp_dir)
 
 from shared.logger import get_logger
-from shared.project_id import get_project_id, get_project_info
+from shared.project_id import get_project_id, get_project_info, LEGACY_GLOBAL_PROJECT_ID
 from shared.a2a_inbox import read_self_inbox, clear_self_inbox
 from notifications import poll as _poll_notifications, format_banner as _format_notif_banner
 from session_banner import (
@@ -345,6 +345,7 @@ def main():
             db_s = f"error: {e}"
 
         mcp_ok, mcp_detail = verify_mcp_imports(root)
+        _ainl_heal_msg = ""
         # Self-heal ainativelang in venv (idempotent; safe on python-only backend)
         try:
             sys.path.insert(0, str(root))
@@ -424,6 +425,15 @@ def main():
         else:
             logger.debug("A2A bridge offline: %s", bridge_status.get("reason", "unknown"))
 
+        if bridge_status.get("running"):
+            _bridge_line = (
+                f"running (pid {bridge_status.get('pid')}, "
+                f"{bridge_status.get('base_url')}, "
+                f"v{bridge_status.get('version', '?')})"
+            )
+        else:
+            _bridge_line = f"not running — {bridge_status.get('reason', 'unknown')}"
+
         # ── Notification feed ─────────────────────────────────────────────────
         new_notifs: list = []
         update_msgs: list = []
@@ -491,16 +501,18 @@ def main():
             project_id=_project_id,
             isolation_mode=_isolation_mode,
             git_repo=_git_repo,
+            cwd=cwd,
+            legacy_project_id=LEGACY_GLOBAL_PROJECT_ID,
             compression_lines=status.get("lines"),
             compression_line=status.get("line", "  • Compression: off\n"),
             ainl_ok=ainl,
+            ainl_heal_msg=_ainl_heal_msg,
             mcp_ok=mcp_ok,
             mcp_detail=mcp_detail,
             native_status=native_status,
+            venv_file_status=venv_file_status,
             expected_tools=EXPECTED_MCP_TOOLS,
-            a2a_enabled=_a2a_enabled,
-            bridge_running=bool(bridge_status.get("running")),
-            bridge_reason=str(bridge_status.get("reason", "")),
+            bridge_line=_bridge_line,
             recall_line=_recall_line,
         )
 

@@ -112,34 +112,36 @@ def build_main_banner(
     project_id: str,
     isolation_mode: str,
     git_repo: bool,
+    cwd: Path,
+    legacy_project_id: str = "",
     compression_line: str = "",
     compression_lines: Optional[List[str]] = None,
     ainl_ok: bool,
+    ainl_heal_msg: str = "",
     mcp_ok: bool,
     mcp_detail: str,
     native_status: str,
+    venv_file_status: str = "",
     expected_tools: int,
-    a2a_enabled: bool,
-    bridge_running: bool,
-    bridge_reason: str,
+    bridge_line: str = "",
     recall_line: str = "",
 ) -> str:
-    """Short status block — no duplicate tildes, no path dumps."""
+    """SessionStart status block (graph memory, stack health, compression)."""
     git_bit = "git" if git_repo else "no-git"
     lines = [
         f"[AINL Cortex]  {root}",
-        f"  • Memory: {db_s}  |  backend: {backend}  |  project: {project_id} ({isolation_mode}, {git_bit})",
+        (
+            f"  • Graph Memory: {db_s}  |  backend: {backend}  |  "
+            f"project: {project_id} ({isolation_mode}, {git_bit})  cwd: {cwd}"
+        ),
     ]
+    if legacy_project_id and project_id != legacy_project_id:
+        lines.append(
+            f"  • Legacy fallback: {legacy_project_id} "
+            f"(read-only until backfill via scripts/repartition_by_repo.py)"
+        )
     if recall_line:
         lines.append(recall_line.rstrip("\n"))
-
-    stack = [f"ainativelang: {'ok' if ainl_ok else 'missing'}"]
-    stack.append(f"MCP: {'OK' if mcp_ok else 'FAIL'}")
-    if backend == "native":
-        stack.append(f"native: {native_status[:40]}")
-    elif "ok" in native_status.lower() or "installed" in native_status.lower():
-        stack.append("ainl_native: ready (optional upgrade)")
-    lines.append(f"  • Stack: {' · '.join(stack)}  |  ~{expected_tools} tools (/mcp)")
 
     if compression_lines:
         for cl in compression_lines:
@@ -149,16 +151,24 @@ def build_main_banner(
             if cl.strip():
                 lines.append(cl.rstrip("\n"))
 
-    if a2a_enabled:
-        if bridge_running:
-            lines.append("  • A2A: running")
-        else:
-            short = (bridge_reason or "offline")[:80]
-            lines.append(f"  • A2A: offline ({short})")
-
-    if not mcp_ok:
-        lines.append(f"  • MCP detail: {mcp_detail[:120]}")
-
+    if ainl_ok:
+        ainl_bit = "yes"
+    elif ainl_heal_msg:
+        ainl_bit = f"no (auto-heal: {ainl_heal_msg[:120]})"
+    else:
+        ainl_bit = "no"
+    lines.append(f"  • AINL Python tools (ainativelang): {ainl_bit}")
+    lines.append(f"  • ainl_native (Rust bindings): {native_status}")
+    mcp_bit = "OK" if mcp_ok else f"FAIL – {mcp_detail[:100]}"
+    lines.append(f"  • MCP stack (same venv as server): {mcp_bit}")
+    if venv_file_status:
+        lines.append(f"  • venv on PATH (child processes): {venv_file_status}")
+    if bridge_line:
+        lines.append(f"  • A2A bridge: {bridge_line}")
+    lines.append(
+        f"  • When Claude spawns MCP, expect ~{expected_tools} tools (ainl + memory + a2a); "
+        f"if missing, /plugin -> Installed -> ainl-cortex and /mcp, or /reload-plugins."
+    )
     lines.append("  • After git pull or setup.sh: run /reload-plugins if tools act stale.")
     return "\n".join(lines) + "\n"
 

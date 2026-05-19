@@ -33,21 +33,28 @@ def test_build_main_banner_expands_compression_lines():
     banner = build_main_banner(
         root=ROOT,
         backend="python",
-        db_s="ready",
-        project_id="abc",
+        db_s="ready (ainl_memory.db)",
+        project_id="abc123",
         isolation_mode="per_repo",
         git_repo=True,
+        cwd=Path("/Users/clawdbot"),
+        legacy_project_id="legacy999",
         compression_lines=st["lines"],
         ainl_ok=True,
         mcp_ok=True,
         mcp_detail="",
-        native_status="",
-        expected_tools=10,
-        a2a_enabled=False,
-        bridge_running=False,
-        bridge_reason="",
+        native_status="skipped (python backend selected)",
+        venv_file_status="appended to /tmp/sessionstart-hook-0.sh",
+        expected_tools=31,
+        bridge_line="not running — openfang not found",
     )
+    assert "Graph Memory:" in banner
     assert "compresses:" in banner
+    assert "Legacy fallback:" in banner
+    assert "AINL Python tools" in banner
+    assert "ainl_native" in banner
+    assert "MCP stack" in banner
+    assert "venv on PATH" in banner
     assert banner.count("  • Compression:") == 1
 
 
