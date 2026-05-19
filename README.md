@@ -121,7 +121,8 @@ bash setup.sh --auto-install-rust
 switch to the Rust native backend later, run:
 
 ```bash
-bash scripts/migrate_python_to_native.sh   # 5 phases: dry-run → migrate → verify → flip
+bash scripts/upgrade_to_native.sh            # recommended: Rust (optional) → migrate → flip
+# or: bash scripts/migrate_python_to_native.sh   # low-level 5 phases
 ```
 
 See [scripts/MIGRATION.md](scripts/MIGRATION.md) for the full migration flow,
@@ -168,7 +169,7 @@ bash setup.sh
 - Installs `ainl_native` from PyPI (platform wheels; no Rust required on macOS/Linux/Windows). Falls back to `maturin develop` only if the wheel is unavailable and Rust is installed. Does **not** flip `store_backend`.
 - Runs a smoke test to confirm the MCP server starts correctly
 
-To switch to the native backend after install, run `bash scripts/migrate_python_to_native.sh` — see [scripts/MIGRATION.md](scripts/MIGRATION.md).
+To switch to the native backend after install, run `bash scripts/upgrade_to_native.sh` (or `setup.sh --enable-native`) — see [scripts/MIGRATION.md](scripts/MIGRATION.md).
 
 ### Step 2 — Tell the user to restart Claude Code
 
@@ -347,8 +348,8 @@ bash setup.sh --auto-install-rust
 
 Then **restart Claude Code**. That's it.
 
-`setup.sh` always defaults `store_backend = "python"`. To switch to native after
-install, run `bash scripts/migrate_python_to_native.sh` — see
+`setup.sh` defaults `store_backend = "python"` (greenfield TTY installs may auto-enable native when `ainl_native` is ready). To switch to native after
+install, run `bash scripts/upgrade_to_native.sh` — see
 [scripts/MIGRATION.md](scripts/MIGRATION.md) for the 5-phase flow with rollback.
 
 ### What you'll see

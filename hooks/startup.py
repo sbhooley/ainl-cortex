@@ -512,6 +512,9 @@ def main():
         _op_banner = _session_extras.get("operator_banner") or ""
         if _op_banner:
             system_blocks.append(_op_banner)
+        _upgrade_banner = _session_extras.get("upgrade_runbook_banner") or ""
+        if _upgrade_banner:
+            system_blocks.append(_upgrade_banner)
         if _session_extras.get("stale_mcp") and _session_extras.get("stale_mcp_message"):
             system_blocks.append(
                 "\n━━━ AINL CORTEX: RELOAD MCP ━━━\n"
@@ -527,23 +530,17 @@ def main():
             )
 
         # ── Sticky upgrade notice (Python backend — every session until migrated) ──
-        if _backend == "python":
-            _rust_installed = shutil.which("rustc") is not None
-            if _rust_installed:
-                _upgrade_how = (
-                    "Rust is already installed — just ask me to re-run setup.sh to upgrade (no downloads needed)."
-                )
-            else:
-                _upgrade_how = (
-                    "Ask me to upgrade and I'll install Rust automatically and migrate your memory."
-                )
+        if _backend == "python" and not _upgrade_banner:
+            _claude_cmd = "bash scripts/claude_do_native_upgrade.sh"
             system_blocks.append(
                 "\n━━━ AINL CORTEX: NATIVE BACKEND UPGRADE AVAILABLE ━━━\n"
                 "Plugin is running on the Python backend. The native Rust backend adds:\n"
                 "  • Trajectory distillation — learns patterns across sessions\n"
                 "  • Procedure scoring — reuses your most successful workflows\n"
                 "  • Anchored memory compression — preserves key context under pressure\n"
-                f"{_upgrade_how}\n"
+                f"When the user wants Rust or native memory, run **`{_claude_cmd}`** from the "
+                "plugin root (detects migration vs greenfield, installs Rust if needed).\n"
+                "Then ask the user to run **/reload-plugins** (you cannot run that slash command).\n"
                 "You should proactively mention this upgrade is available at the start of this session.\n"
                 "━━━\n"
             )

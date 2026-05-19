@@ -62,6 +62,16 @@ When **`memory.store_backend`** is **`native`**, **`ainl_native`** is importable
 
 - `[0b]`–`[0e]` — import compat + ainativelang
 - `scripts/codemod_relative_imports.py --check` — CI gate for bare imports
+- `scripts/bug_hunt_matrix.sh` — install / MCP / native upgrade regression matrix
+
+## Native upgrade
+
+- `scripts/claude_do_native_upgrade.sh` — **Claude Code entrypoint** when user asks to install Rust / upgrade native
+- `scripts/native_upgrade_status.py --json` — machine-readable: migration vs greenfield vs reload-only
+- `scripts/upgrade_to_native.sh` — low-level orchestration (Rust optional → migrate → flip → reload marker)
+- `setup.sh --enable-native` / `AINL_CORTEX_ENABLE_NATIVE=1` — run upgrade after install
+- Greenfield (no graph data): `setup.sh` on a TTY may auto-enable native when `ainl_native` is ready
+- After any backend flip: user must run **`/reload-plugins`** (hooks cannot invoke slash commands)
 
 ## Related commits
 

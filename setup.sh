@@ -6,6 +6,8 @@
 #     bash setup.sh --python-only    # never install Rust, never build native, never migrate
 #     bash setup.sh --no-rust        # alias for --python-only
 #     bash setup.sh --auto-install-rust   # unattended install of Rust via rustup
+#     bash setup.sh --enable-native       # upgrade to native after install (see policy below)
+#     bash setup.sh --enable-native --yes # non-interactive native upgrade (incl. migrate)
 #     bash setup.sh --restore-from ~/.claude/backups/ainl-cortex-<timestamp>
 #     bash setup.sh --help
 #
@@ -13,10 +15,16 @@
 #     AINL_CORTEX_INSTALL_MODE=python_only   # same as --python-only
 #     AINL_CORTEX_INSTALL_MODE=auto_rust     # same as --auto-install-rust
 #     AINL_CORTEX_INSTALL_MODE=interactive   # force a prompt even when stdin not a tty
+#     AINL_CORTEX_ENABLE_NATIVE=1            # same as --enable-native
 #
-# Migration is now a SEPARATE step. setup.sh never flips store_backend to
-# "native" automatically. After install, run:
-#     bash scripts/migrate_python_to_native.sh
+# Native upgrade policy (default install stays Python):
+#   • Non-tty (CI/agents): Python only unless --enable-native --yes
+#   • Fresh install, ainl_native ready, no graph data: auto native (greenfield)
+#   • Existing memory + tty: prompt to run scripts/upgrade_to_native.sh
+#   • --enable-native: run scripts/upgrade_to_native.sh after install
+#
+# Manual upgrade anytime:
+#     bash scripts/upgrade_to_native.sh
 #
 # Safe to re-run — every step is idempotent.
 set -euo pipefail
@@ -29,6 +37,8 @@ MARKETPLACE="$HOME/.claude/ainl-local-marketplace"
 INSTALL_MODE=""   # one of: python_only, auto_rust, interactive (or empty)
 SHOW_HELP=false
 RESTORE_FROM=""
+ENABLE_NATIVE=false
+ASSUME_YES=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -37,6 +47,12 @@ while [ $# -gt 0 ]; do
             ;;
         --auto-install-rust)
             INSTALL_MODE="auto_rust"
+            ;;
+        --enable-native)
+            ENABLE_NATIVE=true
+            ;;
+        --yes|-y)
+            ASSUME_YES=true
             ;;
         --interactive)
             INSTALL_MODE="interactive"
@@ -60,8 +76,12 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$SHOW_HELP" = "true" ]; then
-    head -n 18 "$0" | sed 's/^# \{0,1\}//'
+    head -n 28 "$0" | sed 's/^# \{0,1\}//'
     exit 0
+fi
+
+if [ "${AINL_CORTEX_ENABLE_NATIVE:-}" = "1" ] || [ "${AINL_CORTEX_ENABLE_NATIVE:-}" = "true" ]; then
+    ENABLE_NATIVE=true
 fi
 
 # Env override beats flags so CI / agents can pin behavior.
@@ -98,9 +118,10 @@ echo "    3. Creates a Python venv and installs dependencies"
 echo "    4. Installs ainl_native (PyPI wheel; maturin only if wheel unavailable)"
 echo "    5. Registers the plugin with Claude Code"
 echo "    6. Runs verification tests"
+echo "    7. (Optional) upgrades to native backend — see policy in script header"
 echo ""
-echo "  NOTE: setup.sh never flips store_backend or migrates data."
-echo "        After install, run: bash scripts/migrate_python_to_native.sh"
+echo "  Default: Python backend (works without Rust). Native upgrade:"
+echo "        bash scripts/upgrade_to_native.sh"
 echo ""
 
 # ── 1. Python check ────────────────────────────────────────────────────────
@@ -244,32 +265,90 @@ else
     echo "  [warn] ainl_native not installed — Python backend works; native needs a wheel or Rust"
 fi
 
-# ── 6. Migration deferral notice ───────────────────────────────────────────
-if [ "$NATIVE_READY" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
-    HAS_DATA=$(python3 -c "
-import pathlib
-dbs = list(pathlib.Path.home().glob('.claude/projects/*/graph_memory/ainl_memory.db'))
-print('yes' if dbs else 'no')
+# ── 6. Native upgrade policy ───────────────────────────────────────────────
+UPGRADE_RAN=false
+HAS_DATA=$(python3 -c "
+import pathlib, sqlite3
+home = pathlib.Path.home()
+for db in home.glob('.claude/projects/*/graph_memory/ainl_memory.db'):
+    if db.stat().st_size < 8192:
+        continue
+    try:
+        conn = sqlite3.connect(str(db))
+        try:
+            n = conn.execute('SELECT COUNT(*) FROM ainl_graph_nodes').fetchone()[0]
+            if n > 0:
+                print('yes'); raise SystemExit
+        except sqlite3.Error:
+            if db.stat().st_size >= 8192:
+                print('yes'); raise SystemExit
+        finally:
+            conn.close()
+    except OSError:
+        pass
+print('no')
 ")
-    echo ""
-    echo "  ainl_native is installed but the plugin is currently configured"
-    echo "  to use the Python backend (safe default)."
-    if [ "$HAS_DATA" = "yes" ]; then
-        echo "  You have existing graph_memory data under ~/.claude/projects/."
-        echo "  Before reinstalling the plugin directory, back it up:"
-        echo "      bash scripts/backup_install.sh"
-        echo "  Restore after a fresh clone:"
-        echo "      bash scripts/restore_install.sh ~/.claude/backups/ainl-cortex-<timestamp>"
+
+_run_native_upgrade() {
+    local extra=()
+    [ "$ASSUME_YES" = true ] && extra+=(--yes)
+    [ "$INSTALL_MODE" = "auto_rust" ] && extra+=(--auto-install-rust)
+    bash "$PLUGIN_DIR/scripts/upgrade_to_native.sh" "${extra[@]}"
+}
+
+if [ "$INSTALL_MODE" = "python_only" ]; then
+  ENABLE_NATIVE=false
+fi
+
+if [ "$NATIVE_READY" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
+    if [ "$ENABLE_NATIVE" = true ]; then
+        echo "  Running native upgrade (--enable-native)..."
+        if _run_native_upgrade; then
+            UPGRADE_RAN=true
+            CURRENT_BACKEND=native
+            echo "  [ok] Native backend enabled"
+        else
+            echo "  [warn] Native upgrade failed — staying on Python backend"
+        fi
+    elif [ "$HAS_DATA" = "no" ] && [ -t 0 ] && [ "$INSTALL_MODE" != "python_only" ]; then
+        echo "  No graph memory yet — enabling native backend (greenfield)..."
+        _saved_assume="$ASSUME_YES"
+        ASSUME_YES=true
+        if _run_native_upgrade; then
+            UPGRADE_RAN=true
+            CURRENT_BACKEND=native
+            echo "  [ok] Native backend enabled (greenfield)"
+        fi
+        ASSUME_YES="$_saved_assume"
+    elif [ "$HAS_DATA" = "yes" ] && [ -t 0 ] && [ "$INSTALL_MODE" = "interactive" ]; then
         echo ""
-        echo "  To migrate to native, run:"
-        echo "      bash scripts/migrate_python_to_native.sh"
-        echo "  This runs dry-run -> migrate -> verify -> flip in 5 phases,"
-        echo "  with rollback available via migrate_to_python.py."
-    else
-        echo "  No existing memory data found. To switch to native, run:"
-        echo "      bash scripts/migrate_python_to_native.sh"
+        echo "  ainl_native is ready. Existing graph memory was found."
+        echo "  Upgrade to the native Rust backend now? (dry-run → migrate → verify)"
+        echo "    [1] Yes — run scripts/upgrade_to_native.sh"
+        echo "    [2] No  — stay on Python (upgrade later via the same script)"
+        printf "  Choice [1/2] (default 2): "
+        UP_CHOICE=""
+        if read -rt 45 UP_CHOICE; then : ; else UP_CHOICE="2"; fi
+        if [ "$UP_CHOICE" = "1" ]; then
+            if _run_native_upgrade; then
+                UPGRADE_RAN=true
+                CURRENT_BACKEND=native
+            fi
+        else
+            echo "  Staying on Python. Upgrade anytime:"
+            echo "      bash scripts/upgrade_to_native.sh"
+        fi
+        echo ""
+    elif [ "$NATIVE_READY" = "true" ]; then
+        echo ""
+        echo "  ainl_native is installed; store_backend remains python (safe default)."
+        if [ "$HAS_DATA" = "yes" ]; then
+            echo "  Upgrade when ready: bash scripts/upgrade_to_native.sh"
+        else
+            echo "  Greenfield native: bash scripts/upgrade_to_native.sh --yes"
+        fi
+        echo ""
     fi
-    echo ""
 fi
 
 # ── 7. Set up local marketplace ────────────────────────────────────────────
@@ -359,8 +438,11 @@ echo "  Plugin dir : $PLUGIN_DIR"
 echo "  Backend    : $CURRENT_BACKEND  (ainl_native ready: $NATIVE_READY)"
 echo "  Venv       : $PLUGIN_DIR/.venv"
 echo ""
-if [ "$NATIVE_READY" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
-    echo "  To switch to native: bash scripts/migrate_python_to_native.sh"
+if [ "$CURRENT_BACKEND" = "python" ] && [ "$NATIVE_READY" = "true" ]; then
+    echo "  To switch to native: bash scripts/upgrade_to_native.sh"
+    echo ""
+elif [ "$CURRENT_BACKEND" = "native" ]; then
+    echo "  Native backend active. Run /reload-plugins in Claude Code if MCP was already running."
     echo ""
 fi
 if [ -n "$RESTORE_FROM" ]; then

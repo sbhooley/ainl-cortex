@@ -1,11 +1,18 @@
 # Migrating Python ↔ Native (Rust) backend
 
 This plugin ships two storage backends (see `CLAUDE.md` § *Backend Selection*).
-Migration is a **5-phase, gated, reversible** flow; nothing happens
-automatically. The wrapper script orchestrates the whole thing:
+Migration is a **5-phase, gated, reversible** flow.
+
+**Recommended entrypoint** (Rust optional, handles greenfield + existing memory):
 
 ```bash
 cd ~/.claude/plugins/ainl-cortex
+bash scripts/upgrade_to_native.sh
+```
+
+Low-level 5-phase wrapper (used internally by the upgrade script):
+
+```bash
 bash scripts/migrate_python_to_native.sh
 ```
 

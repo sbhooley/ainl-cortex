@@ -92,10 +92,19 @@ def session_start_extras(root: Optional[Path] = None) -> dict:
 
     migrate_ran, migrate_msg = scan_and_auto_migrate_all_projects(root)
 
+    upgrade_banner = ""
+    try:
+        from .native_upgrade_runbook import assess, format_banner
+
+        upgrade_banner = format_banner(assess(root))
+    except Exception:
+        pass
+
     return {
         "stale_mcp": stale or reload_needed,
         "stale_mcp_message": reload_msg or stale_msg,
         "operator_banner": operator_banner,
+        "upgrade_runbook_banner": upgrade_banner,
         "auto_migrate_ran": migrate_ran,
         "auto_migrate_message": migrate_msg,
         "reload_requested": read_reload_request(root) is not None,
