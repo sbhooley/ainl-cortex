@@ -73,6 +73,7 @@ def get_compression_status():
         "mode": st.get("mode", "OFF"),
         "savings": st.get("mode", "OFF"),
         "line": st.get("line", "  • Compression: off\n"),
+        "lines": st.get("lines", []),
     }
 
 
@@ -490,6 +491,7 @@ def main():
             project_id=_project_id,
             isolation_mode=_isolation_mode,
             git_repo=_git_repo,
+            compression_lines=status.get("lines"),
             compression_line=status.get("line", "  • Compression: off\n"),
             ainl_ok=ainl,
             mcp_ok=mcp_ok,

@@ -3,33 +3,81 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+_BENCH_RECALL = {
+    "OFF": "",
+    "BALANCED": "benchmark ~40–60% on recall text (varies)",
+    "AGGRESSIVE": "benchmark ~60–70% on recall text (varies)",
+}
+
+
+def _output_compression_enabled(config: Any) -> bool:
+    try:
+        out = config._compression_nested("output")
+        return bool(
+            config.is_compression_enabled()
+            and out.get("enabled", False)
+        )
+    except Exception:
+        return False
 
 
 def compression_status_from_config() -> Dict[str, Any]:
-    """Return compression mode + honest savings wording (benchmark, not guaranteed)."""
+    """Compression mode plus what eco mode does and does not touch."""
+    mode = "OFF"
+    enabled = False
+    mem = False
+    user = False
+    output = False
+    min_tok = 80
+
     try:
         from config import get_config
 
         config = get_config()
         mode = config.get_compression_mode().name
         enabled = config.is_compression_enabled()
+        mem = config.should_compress_memory_context()
+        user = config.should_compress_user_prompt()
+        output = _output_compression_enabled(config)
+        min_tok = config.get_min_tokens_for_compression()
     except Exception:
         mode, enabled = "AGGRESSIVE", True
+        mem, user = True, True
 
-    notes = {
-        "OFF": "off",
-        "BALANCED": "est. 40–60% fewer tokens on recall injections (benchmark; varies)",
-        "AGGRESSIVE": "est. 60–70% fewer tokens on recall injections (benchmark; varies)",
-    }
     if not enabled or mode == "OFF":
-        return {"enabled": False, "mode": "OFF", "line": "  • Compression: off\n"}
-    note = notes.get(mode, "typical savings vary by session")
-    return {
-        "enabled": True,
-        "mode": mode,
-        "line": f"  • Compression: {mode} — {note}\n",
-    }
+        off = "  • Compression: off (graph recall and prompts sent verbatim)\n"
+        return {"enabled": False, "mode": "OFF", "line": off, "lines": [off.rstrip("\n")]}
+
+    compresses: List[str] = []
+    if mem:
+        compresses.append("graph-memory recall brief (injected before each prompt)")
+    if user:
+        compresses.append(f"long user prompts (≥~{min_tok} tokens)")
+    if output:
+        compresses.append("assistant replies (output eco)")
+
+    not_compressed = [
+        "SQLite graph store on disk",
+        "MCP tool definitions & tool results",
+        "Claude Code chat transcript / compaction",
+    ]
+    if not output:
+        not_compressed.append("assistant replies (output eco off)")
+
+    bench = _BENCH_RECALL.get(mode, "savings vary by session")
+    lines: List[str] = [f"  • Compression: {mode}"]
+    if compresses:
+        lines.append(f"    compresses: {'; '.join(compresses)}")
+    else:
+        lines.append("    compresses: (nothing — check config.json compression.*)")
+    lines.append(f"    not: {'; '.join(not_compressed)}")
+    if bench:
+        lines.append(f"    {bench} — applies to compressed recall/prompt text only, not your whole session")
+
+    line = "\n".join(lines) + "\n"
+    return {"enabled": True, "mode": mode, "line": line, "lines": lines}
 
 
 def build_main_banner(
@@ -40,7 +88,8 @@ def build_main_banner(
     project_id: str,
     isolation_mode: str,
     git_repo: bool,
-    compression_line: str,
+    compression_line: str = "",
+    compression_lines: Optional[List[str]] = None,
     ainl_ok: bool,
     mcp_ok: bool,
     mcp_detail: str,
@@ -68,7 +117,13 @@ def build_main_banner(
         stack.append("ainl_native: ready (optional upgrade)")
     lines.append(f"  • Stack: {' · '.join(stack)}  |  ~{expected_tools} tools (/mcp)")
 
-    lines.append(compression_line.rstrip("\n"))
+    if compression_lines:
+        for cl in compression_lines:
+            lines.append(cl.rstrip("\n"))
+    elif compression_line:
+        for cl in compression_line.split("\n"):
+            if cl.strip():
+                lines.append(cl.rstrip("\n"))
 
     if a2a_enabled:
         if bridge_running:

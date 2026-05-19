@@ -359,7 +359,10 @@ On your next session start, the `[AINL Cortex]` banner appears:
 ```
 [AINL Cortex]  Plugin root: ~/.claude/plugins/ainl-cortex
   • Graph DB: ready (ainl_memory.db)
-  • Compression: BALANCED (on)  ~savings ~40–60%
+  • Compression: BALANCED
+    compresses: graph-memory recall brief; long user prompts
+    not: SQLite graph store; MCP tools; chat transcript
+    benchmark ~40–60% on recall text (varies)
   • MCP stack: OK
   ...
 ```
