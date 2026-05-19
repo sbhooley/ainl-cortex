@@ -11,6 +11,65 @@ _BENCH_RECALL = {
     "AGGRESSIVE": "benchmark ~60–70% on recall text (varies)",
 }
 
+_BULLET = "  • "
+_CONT = "    "
+_WRAP_WIDTH = 96
+
+
+def _home_rel(path: Path | str) -> str:
+    """Display path with ~ for home (same path, shorter line)."""
+    try:
+        p = Path(path).expanduser().resolve()
+        rel = p.relative_to(Path.home())
+        return f"~/{rel}" if str(rel) != "." else "~"
+    except (ValueError, OSError):
+        return str(path).replace("\n", " ")
+
+
+def _shorten_venv_path_status(status: str) -> str:
+    """Keep 'appended to …' wording; shorten embedded absolute paths."""
+    prefix = "appended to "
+    s = (status or "").replace("\n", " ").strip()
+    if s.startswith(prefix):
+        return prefix + _home_rel(s[len(prefix) :].strip())
+    return s
+
+
+def _wrap_segments(
+    first_line: str,
+    segments: List[str],
+    *,
+    sep: str = " · ",
+    cont: str = _CONT,
+    width: int = _WRAP_WIDTH,
+) -> List[str]:
+    """Break long bullets at segment boundaries with aligned continuations."""
+    if not segments:
+        return [first_line] if first_line else []
+    lines: List[str] = []
+    current = first_line + segments[0]
+    for seg in segments[1:]:
+        piece = sep + seg
+        if len(current) + len(piece) > width:
+            lines.append(current)
+            current = cont + seg
+        else:
+            current += piece
+    lines.append(current)
+    return lines
+
+
+def _wrap_subfield(label: str, value: str, *, indent: str = _CONT) -> List[str]:
+    """Wrap long compression sub-lines at '; ' without changing labels."""
+    head = f"{indent}{label}: {value}"
+    if len(head) <= _WRAP_WIDTH:
+        return [head]
+    parts = value.split("; ")
+    out = [f"{indent}{label}: {parts[0]}"]
+    for part in parts[1:]:
+        out.append(f"{indent}  {part}")
+    return out
+
 
 def _output_compression_enabled(config: Any) -> bool:
     try:
@@ -91,20 +150,25 @@ def compression_status_from_config() -> Dict[str, Any]:
         not_compressed.append("assistant replies (output eco off)")
 
     bench = _BENCH_RECALL.get(mode, "savings vary by session")
-    lines: List[str] = [f"  • Compression: {mode}"]
+    lines: List[str] = [f"{_BULLET}Compression: {mode}"]
     if compresses:
-        lines.append(f"    compresses: {'; '.join(compresses)}")
+        lines.extend(_wrap_subfield("compresses", "; ".join(compresses)))
     else:
-        lines.append("    compresses: (nothing — check config.json compression.*)")
-    lines.append(f"    not: {'; '.join(not_compressed)}")
+        lines.append(f"{_CONT}compresses: (nothing — check config.json compression.*)")
+    lines.extend(_wrap_subfield("not", "; ".join(not_compressed)))
     if bench:
-        lines.append(f"    {bench} — applies to compressed recall/prompt text only, not your whole session")
+        bench_line = f"{bench} — applies to compressed recall/prompt text only, not your whole session"
+        if len(bench_line) + len(_CONT) <= _WRAP_WIDTH:
+            lines.append(f"{_CONT}{bench_line}")
+        else:
+            lines.append(f"{_CONT}{bench}")
+            lines.append(f"{_CONT}  — applies to compressed recall/prompt text only, not your whole session")
 
     line = "\n".join(lines) + "\n"
     return {"enabled": True, "mode": mode, "line": line, "lines": lines}
 
 
-def format_stack_one_liner(
+def format_stack_lines(
     *,
     ainl_ok: bool,
     ainl_heal_msg: str,
@@ -114,27 +178,32 @@ def format_stack_one_liner(
     venv_file_status: str,
     bridge_line: str,
     expected_tools: int,
-) -> str:
-    """One line with the same fields as the former per-bullet stack diagnostics."""
+) -> List[str]:
+    """Stack diagnostics as wrapped lines (same labels/values as the one-liner)."""
     if ainl_ok:
         ainl_bit = "yes"
     elif ainl_heal_msg:
         ainl_bit = f"no (auto-heal: {ainl_heal_msg[:80]})"
     else:
         ainl_bit = "no"
-    native_bit = (native_status or "unknown").replace("\n", " ")[:100]
+    native_bit = (native_status or "unknown").replace("\n", " ")
     mcp_bit = "OK" if mcp_ok else f"FAIL ({mcp_detail[:80]})"
-    venv_bit = (venv_file_status or "n/a").replace("\n", " ")[:120]
-    bridge_bit = (bridge_line or "n/a").replace("\n", " ")[:100]
-    return (
-        "  • Stack: "
-        f"AINL Python tools (ainativelang)={ainl_bit} · "
-        f"ainl_native (Rust bindings)={native_bit} · "
-        f"MCP stack (same venv as server)={mcp_bit} · "
-        f"venv on PATH (child processes)={venv_bit} · "
-        f"A2A bridge={bridge_bit} · "
-        f"~{expected_tools} tools (ainl + memory + a2a; /mcp if missing)"
-    )
+    venv_bit = _shorten_venv_path_status(venv_file_status or "n/a")
+    bridge_bit = (bridge_line or "n/a").replace("\n", " ")
+    segments = [
+        f"AINL Python tools (ainativelang)={ainl_bit}",
+        f"ainl_native (Rust bindings)={native_bit}",
+        f"MCP stack (same venv as server)={mcp_bit}",
+        f"venv on PATH (child processes)={venv_bit}",
+        f"A2A bridge={bridge_bit}",
+        f"~{expected_tools} tools (ainl + memory + a2a; /mcp if missing)",
+    ]
+    return _wrap_segments(f"{_BULLET}Stack: ", segments)
+
+
+def format_stack_one_liner(**kwargs: Any) -> str:
+    """Backward-compatible single string (joined with newlines)."""
+    return "\n".join(format_stack_lines(**kwargs))
 
 
 def build_main_banner(
@@ -161,18 +230,19 @@ def build_main_banner(
 ) -> str:
     """SessionStart status block (graph memory, stack health, compression)."""
     git_bit = "git" if git_repo else "no-git"
-    lines = [
-        f"[AINL Cortex]  {root}",
-        (
-            f"  • Graph Memory: {db_s}  |  backend: {backend}  |  "
-            f"project: {project_id} ({isolation_mode}, {git_bit})  cwd: {cwd}"
-        ),
+    lines: List[str] = [f"[AINL Cortex]  {_home_rel(root)}"]
+    graph_segments = [
+        f"Graph Memory: {db_s}",
+        f"backend: {backend}",
+        f"project: {project_id} ({isolation_mode}, {git_bit})",
+        f"cwd: {_home_rel(cwd)}",
     ]
+    lines.extend(
+        _wrap_segments(f"{_BULLET}", graph_segments, sep="  |  ", cont=_CONT + "|  ")
+    )
     if legacy_project_id and project_id != legacy_project_id:
-        lines.append(
-            f"  • Legacy fallback: {legacy_project_id} "
-            f"(read-only until backfill via scripts/repartition_by_repo.py)"
-        )
+        lines.append(f"{_BULLET}Legacy fallback: {legacy_project_id}")
+        lines.append(f"{_CONT}(read-only until backfill via scripts/repartition_by_repo.py)")
     if recall_line:
         lines.append(recall_line.rstrip("\n"))
 
@@ -184,8 +254,8 @@ def build_main_banner(
             if cl.strip():
                 lines.append(cl.rstrip("\n"))
 
-    lines.append(
-        format_stack_one_liner(
+    lines.extend(
+        format_stack_lines(
             ainl_ok=ainl_ok,
             ainl_heal_msg=ainl_heal_msg,
             native_status=native_status,
@@ -196,9 +266,13 @@ def build_main_banner(
             expected_tools=expected_tools,
         )
     )
-    lines.append(
-        "  • After git pull or setup.sh: run /reload-plugins if tools act stale "
-        "(/plugin → Installed → ainl-cortex)."
+    lines.extend(
+        _wrap_segments(
+            f"{_BULLET}After git pull or setup.sh: run /reload-plugins if tools act stale",
+            ["(/plugin → Installed → ainl-cortex)."],
+            sep=" ",
+            cont=_CONT,
+        )
     )
     return "\n".join(lines) + "\n"
 

@@ -14,7 +14,8 @@ from session_banner import (
     compression_status_from_config,
     build_main_banner,
     format_prior_session_context,
-    format_stack_one_liner,
+    format_stack_lines,
+    _home_rel,
 )
 
 
@@ -52,32 +53,40 @@ def test_build_main_banner_expands_compression_lines():
     assert "Graph Memory:" in banner
     assert "compresses:" in banner
     assert "Legacy fallback:" in banner
-    assert banner.count("  • Stack:") == 1
+    assert "  • Stack:" in banner
     assert "AINL Python tools (ainativelang)=yes" in banner
     assert "ainl_native (Rust bindings)=" in banner
     assert "MCP stack (same venv as server)=OK" in banner
     assert "venv on PATH (child processes)=" in banner
     assert "A2A bridge=" in banner
+    assert "cwd: ~" in banner or "cwd: /" in banner
     assert banner.count("  • Compression:") == 1
 
 
-def test_stack_one_liner_preserves_all_fields():
-    line = format_stack_one_liner(
+def test_home_rel_shortens_paths():
+    p = _home_rel(Path.home() / ".claude" / "plugins" / "ainl-cortex")
+    assert p.startswith("~/")
+
+
+def test_stack_lines_preserves_all_fields():
+    stack = format_stack_lines(
         ainl_ok=False,
         ainl_heal_msg="pip install failed",
         native_status="skipped (python backend selected)",
         mcp_ok=False,
         mcp_detail="import error",
-        venv_file_status="appended to /tmp/sessionstart-hook-0.sh",
+        venv_file_status="appended to /Users/clawdbot/.claude/session-env/abc/sessionstart-hook-0.sh",
         bridge_line="not running — openfang not found",
         expected_tools=31,
     )
-    assert "ainativelang)=no (auto-heal:" in line
-    assert "ainl_native (Rust bindings)=skipped" in line
-    assert "MCP stack (same venv as server)=FAIL" in line
-    assert "venv on PATH (child processes)=appended" in line
-    assert "A2A bridge=not running" in line
-    assert "~31 tools" in line
+    text = "\n".join(stack)
+    assert "ainativelang)=no (auto-heal:" in text
+    assert "ainl_native (Rust bindings)=skipped" in text
+    assert "MCP stack (same venv as server)=FAIL" in text
+    assert "venv on PATH (child processes)=appended to ~/" in text
+    assert "A2A bridge=not running" in text
+    assert "~31 tools" in text
+    assert len(stack) >= 2
 
 
 def test_prior_session_context_box():
