@@ -995,14 +995,28 @@ def get_graph_store(db_path: Path, agent_id: str = "claude-code") -> GraphStore:
 
     if backend == "native":
         try:
+            try:
+                from .native_compat import ensure_ainl_native, heal_native_backend_failure
+            except ImportError:
+                from native_compat import ensure_ainl_native, heal_native_backend_failure
+            ensure_ainl_native()
             from native_graph_store import NativeGraphStore
             # Native store uses ainl_native.db (Rust schema) alongside ainl_memory.db (Python schema)
             native_path = db_path.parent / "ainl_native.db"
             return NativeGraphStore(native_path, agent_id)
         except Exception as e:
             import logging
-            logging.getLogger(__name__).warning(
+            _log = logging.getLogger(__name__)
+            _log.warning(
                 "native backend requested but failed (%s) — falling back to python", e
             )
+            try:
+                try:
+                    from .native_compat import heal_native_backend_failure
+                except ImportError:
+                    from native_compat import heal_native_backend_failure
+                heal_native_backend_failure(exc=e)
+            except Exception:
+                pass
 
     return SQLiteGraphStore(db_path)

@@ -109,6 +109,40 @@ PYEOF
 then ok "node_types sys.modules alias (package-mode)"
 else fail "node_types alias missing — update mcp_server/__init__.py"; fi
 
+# ── [0d] Bare graph_store + retrieval shims ───────────────────────────────────
+echo "[0d] graph_store + retrieval bare imports"
+if "$PYTHON" - <<PYEOF 2>/dev/null
+import sys
+from pathlib import Path
+ROOT = Path('$PLUGIN_DIR')
+sys.path.insert(0, str(ROOT))
+if str(ROOT / 'mcp_server') in sys.path:
+    sys.path.remove(str(ROOT / 'mcp_server'))
+from mcp_server.runtime_bootstrap import bootstrap_runtime
+bootstrap_runtime(ROOT, quick=True)
+from graph_store import get_graph_store
+from retrieval import MemoryRetrieval
+assert callable(get_graph_store) and MemoryRetrieval is not None
+print('ok: graph_store + retrieval shims')
+PYEOF
+then ok "graph_store + retrieval bare shims"
+else fail "graph_store/retrieval shim failed — see docs/SELF_HEALING.md"; fi
+
+# ── [0e] ainativelang importable in venv ──────────────────────────────────────
+echo "[0e] ainativelang (compiler_v2) importable"
+if "$PYTHON" - <<PYEOF 2>/dev/null
+import sys
+from pathlib import Path
+ROOT = Path('$PLUGIN_DIR')
+sys.path.insert(0, str(ROOT))
+from mcp_server.deps_compat import ainativelang_importable, ensure_ainativelang
+ok, msg = ensure_ainativelang(ROOT)
+assert ainativelang_importable(), msg
+print('ok:', msg)
+PYEOF
+then ok "ainativelang importable"
+else fail "ainativelang missing — run bash setup.sh"; fi
+
 
 # ── [1] Episode storage & recall ──────────────────────────────────────────────
 echo "[1] Episode storage & recall"

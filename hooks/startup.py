@@ -140,10 +140,13 @@ def verify_mcp_imports(plugin_root: Path) -> Tuple[bool, str]:
     python3 + venv site-packages — same strategy as mcp_launch.sh).
     """
     pycheck = (
-        "from mcp_server.import_compat import ensure_node_types_alias, verify_bare_node_types_import; "
-        "ensure_node_types_alias(); "
+        "from mcp_server.runtime_bootstrap import bootstrap_runtime; "
+        "from mcp_server.import_compat import ("
+        "verify_bare_node_types_import, verify_bare_graph_store_import, verify_bare_retrieval_import); "
+        "bootstrap_runtime(heal_deps=True); "
         "import mcp.server; import mcp_server.graph_store; import mcp_server.server; "
-        "assert verify_bare_node_types_import()"
+        "assert verify_bare_node_types_import() and verify_bare_graph_store_import() "
+        "and verify_bare_retrieval_import()"
     )
     tried: list[str] = []
     py = _venv_python(plugin_root)
@@ -354,6 +357,21 @@ def main():
             db_s = f"error: {e}"
 
         mcp_ok, mcp_detail = verify_mcp_imports(root)
+        # Self-heal ainativelang in venv (idempotent; safe on python-only backend)
+        try:
+            sys.path.insert(0, str(root))
+            from mcp_server.deps_compat import ensure_ainativelang, ainativelang_importable
+            _ainl_heal_ok, _ainl_heal_msg = ensure_ainativelang(root)
+            ainl = ainativelang_importable()
+        except Exception as _ae:
+            _ainl_heal_ok, _ainl_heal_msg = False, str(_ae)
+        _session_extras = {}
+        try:
+            sys.path.insert(0, str(root))
+            from mcp_server.runtime_bootstrap import session_start_extras
+            _session_extras = session_start_extras(root)
+        except Exception:
+            pass
         # Only attempt native build when config explicitly requests it
         try:
             import json as _json
@@ -479,7 +497,8 @@ def main():
             f"{_project_line}"
             f"{_recall_line}"
             f"  • Compression: {status['mode']} ({'on' if status['enabled'] else 'off'})  ~savings {status['savings']}\n"
-            f"  • AINL Python tools module: {'yes' if ainl else 'no (optional)'}\n"
+            f"  • AINL Python tools (ainativelang): "
+            f"{'yes' if ainl else 'no (auto-heal: ' + str(_ainl_heal_msg) + ')'}\n"
             f"  • ainl_native (Rust bindings): {native_status}\n"
             f"  • MCP stack (same venv as server): {'OK' if mcp_ok else 'FAIL – ' + mcp_detail}\n"
             f"  • venv on PATH (child processes): {venv_file_status}\n"
@@ -489,6 +508,16 @@ def main():
         )
 
         system_blocks = [banner]
+
+        _op_banner = _session_extras.get("operator_banner") or ""
+        if _op_banner:
+            system_blocks.append(_op_banner)
+        if _session_extras.get("stale_mcp") and _session_extras.get("stale_mcp_message"):
+            system_blocks.append(
+                "\n━━━ AINL CORTEX: RESTART RECOMMENDED ━━━\n"
+                f"  • {_session_extras['stale_mcp_message']}\n"
+                "━━━\n"
+            )
 
         # ── Sticky upgrade notice (Python backend — every session until migrated) ──
         if _backend == "python":

@@ -197,7 +197,9 @@ After the user restarts, confirm the install worked by checking:
 | No banner at session start | Check `~/.claude/settings.json` has `"ainl-cortex@ainl-local": true` under `enabledPlugins`; if missing, re-run `bash setup.sh` |
 | Banner shows `MCP stack: FAIL` | Run `cd ~/.claude/plugins/ainl-cortex && bash setup.sh` again — setup re-installs deps |
 | `ainl_native (Rust bindings): build failed` | Re-run `bash scripts/install_ainl_native.sh` or `bash setup.sh`. PyPI wheels cover macOS/Linux/Windows; Rust is only needed on unsupported platforms. |
-| `No module named node_types` on `memory_store_failure` (smoke passes) | **Auto-healed** by `mcp_server/import_compat.py` at MCP launch, every tool call, and `memory_store_failure` retry. `setup.sh` and `mcp_launch.sh` run a preflight; SessionStart hook verifies the same venv. After `git pull`, restart Claude Code **once** so the MCP process loads the new code — after that you should not need manual steps. Verify: `bash scripts/smoke_test.sh` steps **[0b]** and **[0c]**. |
+| `No module named node_types` / import errors on memory tools | **Auto-healed** by `mcp_server/runtime_bootstrap.py` (see [`docs/SELF_HEALING.md`](docs/SELF_HEALING.md)). Preflight: `scripts/ensure_runtime_preflight.py`. Smoke: steps **[0b]–[0e]**. After `git pull`, restart Claude Code **once** if SessionStart shows a stale-MCP banner. |
+| Missing `ainl_*` MCP tools | SessionStart + first `ainl_*` call run `pip install` into the plugin venv automatically. If still missing: `bash setup.sh`. |
+| Native backend errors | Auto `pip install ainl_native`; on failure `store_backend` is set to `python` in `config.json` with reason in `logs/native_fallback.json`. |
 
 ### What activates automatically (no config needed)
 

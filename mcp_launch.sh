@@ -9,7 +9,7 @@ cd "$ROOT"
 
 _preflight_import_compat() {
   local py="$1"
-  "$py" "$ROOT/scripts/ensure_mcp_import_compat.py" 2>/dev/null || true
+  "$py" "$ROOT/scripts/ensure_runtime_preflight.py" 2>/dev/null || true
 }
 
 for py in .venv/bin/python .venv/bin/python3 .venv/bin/python3.14 .venv/bin/python3.13 .venv/bin/python3.12 .venv/bin/python3.11; do

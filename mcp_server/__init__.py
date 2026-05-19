@@ -6,6 +6,6 @@ Production-grade graph-native memory system inspired by AINL unified graph execu
 
 __version__ = "0.1.0"
 
-from .import_compat import ensure_node_types_alias
+from .runtime_bootstrap import bootstrap_runtime
 
-ensure_node_types_alias()
+bootstrap_runtime(quick=True)

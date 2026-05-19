@@ -1,0 +1,115 @@
+"""Detect stale MCP processes after git pull (disk HEAD vs running MCP SHA)."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+from .import_compat import plugin_root
+
+
+def _logs_dir(root: Path) -> Path:
+    d = root / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def current_git_head(root: Optional[Path] = None) -> Optional[str]:
+    root = root or plugin_root()
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if r.returncode == 0:
+            return (r.stdout or "").strip() or None
+    except Exception:
+        pass
+    return None
+
+
+def write_install_stamp(root: Optional[Path] = None) -> Optional[str]:
+    """Called from setup.sh preflight — records expected code version on disk."""
+    root = root or plugin_root()
+    sha = current_git_head(root) or "unknown"
+    payload = {
+        "git_sha": sha,
+        "written_at": time.time(),
+        "written_by": "install",
+    }
+    try:
+        (_logs_dir(root) / "mcp_install_stamp.json").write_text(
+            json.dumps(payload, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        return None
+    return sha
+
+
+def write_mcp_runtime_stamp(root: Optional[Path] = None) -> Optional[str]:
+    """Called when MCP server process starts."""
+    root = root or plugin_root()
+    sha = current_git_head(root) or "unknown"
+    payload = {
+        "git_sha": sha,
+        "pid": os.getpid(),
+        "started_at": time.time(),
+    }
+    try:
+        (_logs_dir(root) / "mcp_runtime.json").write_text(
+            json.dumps(payload, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        return None
+    return sha
+
+
+def read_mcp_runtime(root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    root = root or plugin_root()
+    path = _logs_dir(root) / "mcp_runtime.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def stale_mcp_message(root: Optional[Path] = None) -> Optional[str]:
+    """
+    If plugin code on disk is newer than the last MCP boot SHA, tell user to restart once.
+    """
+    root = root or plugin_root()
+    disk_sha = current_git_head(root)
+    if not disk_sha:
+        return None
+    runtime = read_mcp_runtime(root)
+    if not runtime:
+        return None
+    run_sha = runtime.get("git_sha")
+    if not run_sha or run_sha == disk_sha:
+        return None
+    short_disk = disk_sha[:8]
+    short_run = str(run_sha)[:8]
+    return (
+        f"Plugin updated on disk ({short_disk}) but MCP is still running build {short_run}. "
+        "Fully quit and restart Claude Code once so MCP reloads the new code."
+    )
+
+
+def check_stale_mcp(root: Optional[Path] = None) -> Tuple[bool, str]:
+    """Returns (is_stale, message)."""
+    msg = stale_mcp_message(root)
+    if msg:
+        return True, msg
+    return False, ""

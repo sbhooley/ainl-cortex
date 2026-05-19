@@ -97,16 +97,18 @@ except ImportError:
 
 
 
-from .import_compat import ensure_node_types_alias, heal_import_error, is_node_types_import_error
+from .runtime_bootstrap import (
+    bootstrap_runtime,
+    ensure_ainl_tools_on_server,
+    heal_tool_import_error,
+)
 
 
 def _bootstrap_import_compat() -> None:
-    """Heal bare ``node_types`` imports; never block MCP startup."""
-    if not ensure_node_types_alias():
-        logger.warning(
-            "node_types import alias not registered at startup; "
-            "will auto-heal on first tool call"
-        )
+    """Full runtime self-heal; never block MCP startup."""
+    ok, detail = bootstrap_runtime(heal_deps=True, record_mcp_runtime=True)
+    if not ok:
+        logger.warning("runtime bootstrap incomplete at startup: %s", detail)
 
 
 _bootstrap_import_compat()
@@ -799,7 +801,7 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls"""
     try:
-        ensure_node_types_alias()
+        bootstrap_runtime(quick=True)
         logger.info(f"Tool called: {name}")
         try:
             import sys as _sys
@@ -894,13 +896,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # AINL tools — delegate to ainl_tools; return structured error when package absent
         elif name.startswith("ainl_"):
             if not memory_server.ainl_tools:
+                ensure_ainl_tools_on_server(memory_server)
+            if not memory_server.ainl_tools:
                 return [TextContent(type="text", text=json.dumps({
                     "ok": False,
                     "error": "ainativelang package not installed",
+                    "auto_heal_attempted": True,
                     "install": "pip install ainativelang[mcp]>=1.8.0",
                     "hint": (
-                        "Run the install command in your plugin venv, then restart Claude Code. "
-                        "See ~/.claude/plugins/ainl-cortex/README.md for full setup."
+                        "Auto pip install was attempted. Run: "
+                        "cd ~/.claude/plugins/ainl-cortex && bash setup.sh "
+                        "then restart Claude Code if tools stay missing."
                     ),
                 }, indent=2))]
             _ainl_dispatch = {
@@ -1065,7 +1071,7 @@ async def memory_store_failure(
                 "error_type": error_type
             }
         except Exception as e:
-            if attempt == 0 and is_node_types_import_error(e) and heal_import_error(e):
+            if attempt == 0 and heal_tool_import_error(e):
                 continue
             logger.error(f"Failed to store failure: {e}")
             return {"error": str(e)}

@@ -1,22 +1,47 @@
 """
 Import compatibility for package-mode MCP (``python -m mcp_server.server``).
 
-Many modules use bare ``from node_types import …``. Claude Code loads the server as a
-package, so those imports fail unless ``node_types`` is registered in ``sys.modules``.
-This module heals that automatically at launch, setup, session start, and tool dispatch.
+Registers legacy top-level module names in ``sys.modules`` and normalizes
+``sys.path`` for hooks + mcp_server.
 """
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
 _healed_once = False
+
+# Bare imports used across mcp_server (package-mode safe names).
+MCP_BARE_MODULES: Sequence[str] = (
+    "node_types",
+    "graph_store",
+    "retrieval",
+    "similarity",
+    "native_graph_store",
+    "persona_engine",
+    "extractor",
+    "goal_tracker",
+    "ainl_tools",
+    "a2a_tools",
+    "config",
+    "compression",
+    "compression_pipeline",
+    "output_compression",
+    "project_profiles",
+    "cache_awareness",
+    "adaptive_eco",
+    "failure_advisor",
+    "memory_reconcile",
+    "anchored_summary",
+    "a2a_store",
+)
 
 
 def plugin_root() -> Path:
@@ -26,13 +51,21 @@ def plugin_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def expected_node_types_file(root: Optional[Path] = None) -> Path:
+def venv_python(root: Optional[Path] = None) -> Optional[Path]:
     root = root or plugin_root()
-    return (root / "mcp_server" / "node_types.py").resolve()
+    bindir = root / ".venv" / "bin"
+    for name in ("python", "python3", "python3.14", "python3.13", "python3.12", "python3.11"):
+        p = bindir / name
+        if p.is_file() and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def expected_module_file(root: Path, bare_name: str) -> Path:
+    return (root / "mcp_server" / f"{bare_name}.py").resolve()
 
 
 def ensure_sys_path(root: Optional[Path] = None) -> None:
-    """Ensure plugin root and mcp_server/ are on sys.path (idempotent)."""
     root = root or plugin_root()
     mcp_dir = root / "mcp_server"
     for p in (str(mcp_dir), str(root)):
@@ -40,90 +73,124 @@ def ensure_sys_path(root: Optional[Path] = None) -> None:
             sys.path.insert(0, p)
 
 
-def _node_types_module_matches(mod: object, root: Path) -> bool:
+def ensure_hooks_path(root: Optional[Path] = None) -> None:
+    """Hooks tree: ``from shared.project_id`` and ``from compression`` (mcp_server)."""
+    root = root or plugin_root()
+    hooks = root / "hooks"
+    if hooks.is_dir() and str(hooks) not in sys.path:
+        sys.path.insert(0, str(hooks))
+
+
+def _module_file_matches(mod: object, expected: Path) -> bool:
     mod_file = getattr(mod, "__file__", None)
     if not mod_file:
         return False
     try:
-        return Path(mod_file).resolve() == expected_node_types_file(root)
+        return Path(mod_file).resolve() == expected
     except OSError:
         return False
 
 
-def _load_node_types_module(root: Path):
+def _load_mcp_bare_module(bare_name: str, root: Path):
     ensure_sys_path(root)
     try:
-        from mcp_server import node_types as nt  # noqa: WPS433
-        return nt
+        return importlib.import_module(f"mcp_server.{bare_name}")
     except ImportError:
-        pass
-    try:
-        from . import node_types as nt  # noqa: WPS433
-        return nt
-    except ImportError:
-        pass
-    import node_types as nt  # noqa: WPS433
-    return nt
+        return importlib.import_module(bare_name)
 
 
-def ensure_node_types_alias(*, force: bool = False) -> bool:
-    """
-    Register ``node_types`` in ``sys.modules`` for bare imports.
-
-    Returns True when bare ``import node_types`` should work. Never raises.
-    """
-    global _healed_once
-    root = plugin_root()
-    ensure_sys_path(root)
-
-    existing = sys.modules.get("node_types")
+def _register_bare_module(bare_name: str, root: Path, *, force: bool = False) -> bool:
+    expected = expected_module_file(root, bare_name)
+    if not expected.is_file():
+        return False
+    existing = sys.modules.get(bare_name)
     if existing is not None and not force:
-        if _node_types_module_matches(existing, root):
-            _healed_once = True
+        if _module_file_matches(existing, expected):
             return True
         force = True
-
-    if force and "node_types" in sys.modules:
-        del sys.modules["node_types"]
-
+    if force and bare_name in sys.modules:
+        del sys.modules[bare_name]
     try:
-        nt = _load_node_types_module(root)
+        mod = _load_mcp_bare_module(bare_name, root)
     except ImportError as exc:
-        logger.debug("ensure_node_types_alias: could not load node_types: %s", exc)
+        logger.debug("register %s failed: %s", bare_name, exc)
         return False
-
-    sys.modules["node_types"] = nt
-    if not _healed_once:
-        logger.debug("ensure_node_types_alias: registered sys.modules['node_types']")
-    _healed_once = True
+    sys.modules[bare_name] = mod
     return True
 
 
-def is_node_types_import_error(exc: BaseException) -> bool:
+def ensure_mcp_module_shims(*, force: bool = False) -> bool:
+    """Register all legacy bare mcp_server modules in sys.modules."""
+    global _healed_once
+    root = plugin_root()
+    ensure_sys_path(root)
+    ensure_hooks_path(root)
+    ok = True
+    for name in MCP_BARE_MODULES:
+        if not _register_bare_module(name, root, force=force):
+            ok = False
+    if ok:
+        _healed_once = True
+    return ok
+
+
+def ensure_node_types_alias(*, force: bool = False) -> bool:
+    """Backward-compatible alias for node_types shim."""
+    return _register_bare_module("node_types", plugin_root(), force=force)
+
+
+def is_mcp_import_error(exc: BaseException) -> bool:
+    names: Iterable[str] = MCP_BARE_MODULES + ("shared", "compression", "compiler_v2")
     if isinstance(exc, ModuleNotFoundError):
-        return exc.name == "node_types" or "node_types" in str(exc)
+        n = exc.name or ""
+        return any(n == x or n.startswith(x + ".") for x in names)
     if isinstance(exc, ImportError):
         msg = str(exc).lower()
-        return "node_types" in msg or "no module named 'node_types'" in msg
+        return any(x in msg for x in names) or "no module named" in msg
     return False
 
 
+def is_node_types_import_error(exc: BaseException) -> bool:
+    return is_mcp_import_error(exc) and (
+        (isinstance(exc, ModuleNotFoundError) and exc.name == "node_types")
+        or "node_types" in str(exc).lower()
+    )
+
+
 def heal_import_error(exc: BaseException) -> bool:
-    """If *exc* is a node_types import failure, heal and return True."""
-    if not is_node_types_import_error(exc):
+    if not is_mcp_import_error(exc):
         return False
-    if ensure_node_types_alias(force=True):
-        logger.info("Auto-healed node_types import (was: %s)", exc)
+    if ensure_mcp_module_shims(force=True):
+        logger.info("Auto-healed MCP import (was: %s)", exc)
         return True
     return False
 
 
 def verify_bare_node_types_import() -> bool:
-    """Return True if a bare ``from node_types import failure_content_id`` works."""
     if not ensure_node_types_alias():
         return False
     try:
         from node_types import failure_content_id  # noqa: F401
         return callable(failure_content_id)
+    except ImportError:
+        return False
+
+
+def verify_bare_graph_store_import() -> bool:
+    if not _register_bare_module("graph_store", plugin_root()):
+        return False
+    try:
+        from graph_store import get_graph_store  # noqa: F401
+        return callable(get_graph_store)
+    except ImportError:
+        return False
+
+
+def verify_bare_retrieval_import() -> bool:
+    if not _register_bare_module("retrieval", plugin_root()):
+        return False
+    try:
+        from retrieval import MemoryRetrieval  # noqa: F401
+        return MemoryRetrieval is not None
     except ImportError:
         return False
