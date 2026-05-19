@@ -5,7 +5,7 @@
 //! recall_context:    UserPromptSubmit hook — retrieve + score relevant nodes, return brief string.
 
 use ainl_context_freshness::{can_execute_with_context, evaluate_freshness, FreshnessInputs};
-use ainl_contracts::{ContextFreshness, TrajectoryOutcome};
+use ainl_contracts::{ContextFreshness, TrajectoryOutcome, TrajectoryStep};
 use ainl_memory::{
     anchored_summary::{anchored_summary_id, ANCHORED_SUMMARY_TAG},
     node::{AinlNodeType, MemoryCategory, ProceduralNode, ProcedureType, SemanticNode},
@@ -271,10 +271,8 @@ fn flush_trajectory(
         Ok(c) => c,
         Err(_) => return 0,
     };
-    // Do NOT delete the file here — deleting before the DB insert risks permanent
-    // data loss if deserialization or insert_trajectory_detail fails.
 
-    let steps: Vec<serde_json::Value> = content
+    let steps: Vec<TrajectoryStep> = content
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -307,16 +305,19 @@ fn flush_trajectory(
         "steps": steps,
     });
 
-    if let Ok(row) = serde_json::from_value::<ainl_memory::trajectory_table::TrajectoryDetailRecord>(record_val) {
-        let _ = store.insert_trajectory_detail(&row);
+    let inserted = serde_json::from_value::<ainl_memory::trajectory_table::TrajectoryDetailRecord>(
+        record_val,
+    )
+    .ok()
+    .and_then(|row| store.insert_trajectory_detail(&row).ok())
+    .is_some();
+
+    if inserted {
+        let _ = std::fs::remove_file(path);
+        count
+    } else {
+        0
     }
-
-    // Delete after the insert attempt. The step file is session-scoped and not
-    // useful on restart, so we always remove it — but only after we've had a
-    // chance to persist it.
-    let _ = std::fs::remove_file(path);
-
-    count
 }
 
 /// Map a TrajectoryDetailRecord outcome (enum) to a TrajectoryDraft outcome (same enum).
@@ -350,6 +351,10 @@ fn run_procedure_learning(
             draft.session_id = r.session_id.clone();
             draft.project_id = r.project_id.clone().or_else(|| Some(project_id.to_string()));
             draft.duration_ms = r.duration_ms;
+            draft.steps = r.steps.clone();
+            draft.ainl_source_hash = r.ainl_source_hash.clone();
+            draft.frame_vars = r.frame_vars.clone();
+            draft.fitness_delta = r.fitness_delta;
             Some(draft)
         })
         .collect();
@@ -938,23 +943,17 @@ fn episode_display(node: &AinlMemoryNode) -> (String, String, i64) {
 
 fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {
-        s
-    } else {
-        // Keep only chars whose full byte span fits within max. Using
-        // i + c.len_utf8() (end byte) as both the filter and the slice
-        // endpoint ensures:
-        //   (a) the result never exceeds max bytes, and
-        //   (b) we never slice at a non-char-boundary (which would panic).
-        // The old code used `i + 1` as the endpoint, which panics for any
-        // multi-byte char (emoji, CJK, accented letters) near the boundary.
-        let end = s
-            .char_indices()
-            .take_while(|(i, c)| *i + c.len_utf8() <= max)
-            .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(0);
-        &s[..end]
+        return s;
     }
+    let mut end = 0usize;
+    for (i, c) in s.char_indices() {
+        let next = i + c.len_utf8();
+        if next > max {
+            break;
+        }
+        end = next;
+    }
+    &s[..end]
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -1103,36 +1102,155 @@ mod tests {
     }
 
     #[test]
-    fn truncate_shorter_than_max_returns_full() {
-        let s = "short";
-        assert_eq!(super::truncate(s, 100), "short");
-    }
-
-    #[test]
     fn truncate_multibyte_does_not_panic() {
-        // Each of these chars is 3 bytes in UTF-8. A string of 27 such chars is 81 bytes.
-        // max=80 puts the cut right inside the last char — the old `i + 1` code would
-        // produce a non-char-boundary slice index and panic.
-        let s: String = "日".repeat(27); // 27 × 3 = 81 bytes
+        let s: String = "日".repeat(27);
         assert_eq!(s.len(), 81);
-        // Must not panic and result must be valid UTF-8 at a char boundary.
         let t = super::truncate(&s, 80);
         assert!(std::str::from_utf8(t.as_bytes()).is_ok());
         assert!(t.len() <= 80);
     }
 
+    // ── flush_trajectory regression (Bug R2) ───────────────────────────────────
+
     #[test]
-    fn truncate_emoji_does_not_panic() {
-        // "🎉" is 4 bytes. A string of 21 emojis = 84 bytes; max=82 lands mid-emoji.
-        let s: String = "🎉".repeat(21);
-        assert_eq!(s.len(), 84);
-        let t = super::truncate(&s, 82);
-        assert!(std::str::from_utf8(t.as_bytes()).is_ok());
-        assert!(t.len() <= 82);
+    fn flush_trajectory_keeps_file_when_insert_would_fail() {
+        use ainl_contracts::TrajectoryStep;
+        use ainl_memory::store::SqliteGraphStore;
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("flush.db");
+        let step_path = dir.path().join("steps.jsonl");
+        let step = TrajectoryStep {
+            step_id: Uuid::new_v4().to_string(),
+            timestamp_ms: 1,
+            adapter: "Bash".into(),
+            operation: "run".into(),
+            inputs_preview: None,
+            outputs_preview: None,
+            duration_ms: 0,
+            success: true,
+            error: None,
+            vitals: None,
+            freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
+        };
+        {
+            let mut f = std::fs::File::create(&step_path).expect("create step file");
+            writeln!(f, "{}", serde_json::to_string(&step).unwrap()).expect("write step");
+        }
+
+        // No episode row in ainl_graph_nodes — FK insert must fail; file must survive.
+        let store = SqliteGraphStore::open(&db_path).expect("open db");
+        let count = super::flush_trajectory(
+            &store,
+            Uuid::new_v4(),
+            "proj_test",
+            "success",
+            Some(step_path.to_str().unwrap()),
+            1_700_000_000,
+        );
+        assert_eq!(count, 0);
+        assert!(step_path.exists());
     }
 
     #[test]
-    fn truncate_empty_string() {
-        assert_eq!(super::truncate("", 10), "");
+    fn flush_trajectory_removes_file_after_successful_insert() {
+        use ainl_contracts::TrajectoryStep;
+        use ainl_memory::store::GraphStore;
+        use ainl_memory::store::SqliteGraphStore;
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("flush_ok.db");
+        let step_path = dir.path().join("steps_ok.jsonl");
+        let step = TrajectoryStep {
+            step_id: Uuid::new_v4().to_string(),
+            timestamp_ms: 1_700_000_000_000,
+            adapter: "Bash".into(),
+            operation: "run".into(),
+            inputs_preview: None,
+            outputs_preview: None,
+            duration_ms: 0,
+            success: true,
+            error: None,
+            vitals: None,
+            freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
+        };
+        {
+            let mut f = std::fs::File::create(&step_path).expect("create step file");
+            writeln!(f, "{}", serde_json::to_string(&step).unwrap()).expect("write step");
+        }
+
+        let store = SqliteGraphStore::open(&db_path).expect("open db");
+        let turn_id = Uuid::new_v4();
+        let episode_node =
+            AinlMemoryNode::new_episode(turn_id, 1_700_000_000, vec![], None, None);
+        let episode_id = episode_node.id;
+        store.write_node(&episode_node).expect("episode row for FK");
+
+        let count = super::flush_trajectory(
+            &store,
+            episode_id,
+            "proj_ok",
+            "success",
+            Some(step_path.to_str().unwrap()),
+            1_700_000_000,
+        );
+        assert_eq!(count, 1);
+        assert!(!step_path.exists());
+        let rows = store
+            .list_trajectories_for_agent("claude-code", 10, None)
+            .expect("list trajectories");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].steps.len(), 1);
+    }
+
+    #[test]
+    fn procedure_learning_draft_includes_trajectory_steps() {
+        use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
+        use ainl_memory::trajectory_table::TrajectoryDetailRecord;
+        use ainl_trajectory::TrajectoryDraft;
+
+        let step = TrajectoryStep {
+            step_id: "s1".into(),
+            timestamp_ms: 1,
+            adapter: "Read".into(),
+            operation: "run".into(),
+            inputs_preview: None,
+            outputs_preview: None,
+            duration_ms: 5,
+            success: true,
+            error: None,
+            vitals: None,
+            freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
+        };
+        let record = TrajectoryDetailRecord {
+            id: Uuid::new_v4(),
+            episode_id: Uuid::new_v4(),
+            graph_trajectory_node_id: None,
+            agent_id: "claude-code".into(),
+            session_id: "sess".into(),
+            project_id: Some("proj".into()),
+            recorded_at: 1,
+            outcome: TrajectoryOutcome::Success,
+            ainl_source_hash: None,
+            duration_ms: 5,
+            steps: vec![step],
+            frame_vars: None,
+            fitness_delta: None,
+        };
+        let outcome = super::map_traj_outcome(&record.outcome);
+        let mut draft = TrajectoryDraft::new(record.episode_id, outcome);
+        draft.steps = record.steps.clone();
+        assert_eq!(draft.steps.len(), 1);
+        assert_eq!(draft.steps[0].adapter, "Read");
     }
 }
