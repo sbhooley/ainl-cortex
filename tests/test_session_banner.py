@@ -48,7 +48,7 @@ def test_build_main_banner_expands_compression_lines():
         native_status="skipped (python backend selected)",
         venv_file_status="appended to /tmp/sessionstart-hook-0.sh",
         expected_tools=31,
-        bridge_line="not running — openfang not found",
+        bridge_line="not running — ArmaraOS daemon not found — start ArmaraOS to enable A2A",
     )
     assert "Graph Memory:" in banner
     assert "compresses:" in banner
@@ -76,7 +76,7 @@ def test_stack_lines_preserves_all_fields():
         mcp_ok=False,
         mcp_detail="import error",
         venv_file_status="appended to /Users/clawdbot/.claude/session-env/abc/sessionstart-hook-0.sh",
-        bridge_line="not running — openfang not found",
+        bridge_line="not running — ArmaraOS daemon not found — start ArmaraOS to enable A2A",
         expected_tools=31,
     )
     text = "\n".join(stack)

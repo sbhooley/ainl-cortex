@@ -1,0 +1,80 @@
+"""ArmaraOS daemon discovery helpers (shared by A2A hooks and MCP tools)."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import Optional, Tuple
+
+DAEMON_URL_CACHE_NAME = "armaraos_daemon_url.json"
+LEGACY_DAEMON_URL_CACHE_NAME = "openfang_url.json"
+
+DAEMON_NOT_FOUND_REASON = (
+    "ArmaraOS daemon not found — start ArmaraOS to enable A2A"
+)
+DAEMON_NOT_FOUND_ERROR = (
+    "ArmaraOS daemon not found — is the daemon running?"
+)
+
+# Legacy `openfang` binary names may still appear in lsof until fully renamed.
+_LSOF_PROCESS_MARKERS = ("armaraos", "openfang")
+
+
+def daemon_url_cache_path(plugin_root: Path) -> Path:
+    return plugin_root / "a2a" / DAEMON_URL_CACHE_NAME
+
+
+def resolve_daemon_cache_file(
+    cache_file: Optional[str],
+    plugin_root: Optional[Path] = None,
+) -> Optional[str]:
+    """Prefer armaraos_daemon_url.json; fall back to legacy openfang_url.json."""
+    if cache_file:
+        path = Path(cache_file)
+        if path.is_file():
+            return str(path)
+        legacy = path.parent / LEGACY_DAEMON_URL_CACHE_NAME
+        if legacy.is_file():
+            return str(legacy)
+        return str(path)
+    if plugin_root is None:
+        return None
+    a2a = plugin_root / "a2a"
+    primary = a2a / DAEMON_URL_CACHE_NAME
+    if primary.is_file():
+        return str(primary)
+    legacy = a2a / LEGACY_DAEMON_URL_CACHE_NAME
+    if legacy.is_file():
+        return str(legacy)
+    return str(primary)
+
+
+def scan_daemon_listen_port() -> Tuple[Optional[str], Optional[int]]:
+    """Scan lsof for a listening ArmaraOS daemon. Returns (host, port) or (None, None)."""
+    try:
+        r = subprocess.run(
+            ["lsof", "-iTCP", "-sTCP:LISTEN", "-n", "-P"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in r.stdout.splitlines():
+            lower = line.lower()
+            if not any(marker in lower for marker in _LSOF_PROCESS_MARKERS):
+                continue
+            for part in line.split():
+                if ":" in part:
+                    host, _, port_str = part.rpartition(":")
+                    try:
+                        return host or "127.0.0.1", int(port_str)
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+    return None, None
+
+
+def scan_daemon_listen_port_int() -> Optional[int]:
+    """Return listen port only (127.0.0.1 assumed)."""
+    _, port = scan_daemon_listen_port()
+    return port

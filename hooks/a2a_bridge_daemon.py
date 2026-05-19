@@ -12,6 +12,13 @@ import time
 from pathlib import Path
 from typing import Dict, Any
 
+from shared.armaraos_daemon import (
+    DAEMON_NOT_FOUND_REASON,
+    LEGACY_DAEMON_URL_CACHE_NAME,
+    daemon_url_cache_path,
+    scan_daemon_listen_port,
+)
+
 
 def _pid_alive(pid: int) -> bool:
     try:
@@ -32,31 +39,9 @@ def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def _scan_openfang_port() -> tuple:
-    """Scan lsof for a listening openfang process. Returns (host, port) or (None, None)."""
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["lsof", "-iTCP", "-sTCP:LISTEN", "-n", "-P"],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in r.stdout.splitlines():
-            if "openfang" in line.lower():
-                for part in line.split():
-                    if ":" in part:
-                        host, _, port_str = part.rpartition(":")
-                        try:
-                            return host or "127.0.0.1", int(port_str)
-                        except ValueError:
-                            pass
-    except Exception:
-        pass
-    return None, None
-
-
 def _write_url_cache(plugin_root: Path, base_url: str, pid, version: str) -> None:
     """Write discovered daemon URL to plugin-local cache for fast reuse."""
-    cache_file = plugin_root / "a2a" / "openfang_url.json"
+    cache_file = daemon_url_cache_path(plugin_root)
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     tmp = cache_file.with_suffix(".tmp")
     tmp.write_text(json.dumps({
@@ -74,8 +59,8 @@ def ensure_bridge_running(plugin_root: Path, config: dict) -> Dict[str, Any]:
 
     Discovery order:
       1. daemon.json — check if the recorded port is still alive
-      2. lsof scan   — openfang uses dynamic ports on restart
-    Result is written to a2a/openfang_url.json so tools skip re-scanning.
+      2. lsof scan   — daemon may use dynamic ports on restart
+    Result is written to a2a/armaraos_daemon_url.json so tools skip re-scanning.
     """
     a2a_cfg = config.get("a2a", {})
     if not a2a_cfg.get("enabled", True):
@@ -107,7 +92,7 @@ def ensure_bridge_running(plugin_root: Path, config: dict) -> Dict[str, Any]:
             pass
 
     # ── Step 2: lsof scan for dynamic port ───────────────────────────────────
-    host, port = _scan_openfang_port()
+    host, port = scan_daemon_listen_port()
     if host and port:
         base_url = f"http://{host}:{port}"
         # Confirm it's actually the ArmaraOS API
@@ -125,8 +110,11 @@ def ensure_bridge_running(plugin_root: Path, config: dict) -> Dict[str, Any]:
 
     # ── Not found ─────────────────────────────────────────────────────────────
     # Clear stale cache so tools don't use a dead URL
-    cache_file = plugin_root / "a2a" / "openfang_url.json"
+    cache_file = daemon_url_cache_path(plugin_root)
     if cache_file.exists():
         cache_file.unlink(missing_ok=True)
+    legacy_cache = plugin_root / "a2a" / LEGACY_DAEMON_URL_CACHE_NAME
+    if legacy_cache.exists():
+        legacy_cache.unlink(missing_ok=True)
 
-    return {"running": False, "reason": "openfang not found — start ArmaraOS to enable A2A"}
+    return {"running": False, "reason": DAEMON_NOT_FOUND_REASON}

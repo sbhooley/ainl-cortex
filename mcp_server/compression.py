@@ -193,7 +193,7 @@ _CRITICAL_SNIPPETS = re.compile(
 # Soft-preserve: force-keep in Balanced; score-boost only in Aggressive
 SOFT_PRESERVE = [
     "##", " ms", " kb", " mb", " gb", " %",
-    "openfang", "armaraos", "manifest",
+    "armaraos", "manifest",
     # Claude Code specific
     "graph memory", "episode", "persona", "pattern",
 ]

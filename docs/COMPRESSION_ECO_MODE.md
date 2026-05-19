@@ -46,7 +46,7 @@ The plugin includes **Ultra Cost-Efficient Mode** - embedding-free input compres
 
 **Soft Preserve** (Balanced force-keep, Aggressive boost-only):
 - Formatting: `##`, metrics (` ms`, ` kb`, ` %`)
-- Product names: "armaraos", "openfang", "manifest"
+- Product names: "armaraos", "manifest"
 - Memory types: "persona", "pattern", "semantic"
 
 **Aggressive Mode Extras**:

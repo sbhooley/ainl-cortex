@@ -59,6 +59,7 @@ inbox/
 
 # A2A runtime data
 a2a/self_inbox/
+a2a/armaraos_daemon_url.json
 a2a/openfang_url.json
 a2a/logs/
 a2a/bridge.pid

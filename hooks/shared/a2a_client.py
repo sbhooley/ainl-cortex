@@ -21,6 +21,12 @@ import urllib.error
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from shared.armaraos_daemon import (
+    DAEMON_NOT_FOUND_ERROR,
+    resolve_daemon_cache_file,
+    scan_daemon_listen_port_int,
+)
+
 
 _DEFAULT_DAEMON_JSON = Path.home() / ".armaraos" / "daemon.json"
 
@@ -31,29 +37,6 @@ def _read_daemon_json(daemon_json_path: Optional[str] = None) -> Optional[Dict]:
         return json.loads(path.read_text())
     except Exception:
         return None
-
-
-def _scan_openfang_port() -> Optional[int]:
-    """Scan lsof output for a listening openfang process and return its port."""
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["lsof", "-iTCP", "-sTCP:LISTEN", "-n", "-P"],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in r.stdout.splitlines():
-            if "openfang" in line.lower():
-                # e.g. "openfang-  1234 ...  TCP 127.0.0.1:63557 (LISTEN)"
-                parts = line.split()
-                for p in parts:
-                    if ":" in p and "(LISTEN)" not in p:
-                        try:
-                            return int(p.rsplit(":", 1)[1])
-                        except ValueError:
-                            pass
-    except Exception:
-        pass
-    return None
 
 
 _URL_CACHE_TTL = 1800  # 30 minutes
@@ -67,10 +50,11 @@ def discover_daemon(
     Discover the ArmaraOS daemon URL and PID.
 
     Strategy (fastest first):
-    1. Plugin-local cache (a2a/openfang_url.json) written by startup hook — valid 30 min
+    1. Plugin-local cache (a2a/armaraos_daemon_url.json) — valid 30 min
     2. daemon.json recorded listen_addr — check if port is still open
-    3. lsof scan for live openfang process (dynamic port on restart)
+    3. lsof scan for live ArmaraOS daemon (dynamic port on restart)
     """
+    cache_file = resolve_daemon_cache_file(cache_file)
     # ── 1. Plugin-local cache ─────────────────────────────────────────────────
     if cache_file:
         try:
@@ -113,7 +97,7 @@ def discover_daemon(
                 pass
 
     # ── 3. lsof scan ─────────────────────────────────────────────────────────
-    live_port = _scan_openfang_port()
+    live_port = scan_daemon_listen_port_int()
     if live_port:
         return f"http://127.0.0.1:{live_port}", pid
 
@@ -223,7 +207,7 @@ def send_to_agent(
     """
     daemon_url, _ = discover_daemon(daemon_json_path, cache_file=cache_file)
     if not daemon_url:
-        return {"error": "ArmaraOS daemon not found — is openfang running?", "reachable": False}
+        return {"error": DAEMON_NOT_FOUND_ERROR, "reachable": False}
     result = _post_json(
         f"{daemon_url}/api/agents/{agent_id}/message",
         {"message": message_text},

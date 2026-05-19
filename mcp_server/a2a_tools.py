@@ -84,7 +84,9 @@ class A2ATools:
         self.project_id = project_id
         self.cfg = config.get("a2a", {})
         self.daemon_json = self.cfg.get("daemon_json", "~/.armaraos/daemon.json")
-        self.daemon_cache = str(plugin_root / "a2a" / "openfang_url.json")
+        from shared.armaraos_daemon import daemon_url_cache_path
+
+        self.daemon_cache = str(daemon_url_cache_path(plugin_root))
         self.registry_path = plugin_root / "a2a" / "agents" / "registry.json"
         self.tasks_dir = plugin_root / "a2a" / "tasks"
         self.monitors_path = plugin_root / "a2a" / "monitors" / "monitor_configs.json"
