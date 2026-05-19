@@ -244,25 +244,30 @@ _SEVERITY_PREFIX = {
 
 
 def format_banner(new_notifs: List[Dict[str, Any]], update_msgs: List[str]) -> str:
-    """Render a ━━━ NOTIFICATIONS ━━━ block for the SessionStart system message."""
+    """Compact notification lines for SessionStart (no large box)."""
     if not new_notifs and not update_msgs:
         return ""
 
-    lines = ["\n━━━ AINL CORTEX NOTIFICATIONS ━━━"]
-    for n in new_notifs:
-        severity = n.get("severity", "info")
-        prefix = _SEVERITY_PREFIX.get(severity, "🔵")
-        title = n.get("title", "(no title)")
-        body = n.get("body", "")
-        action = n.get("action_url")
-        lines.append(f"  {prefix} [{severity.upper()}] {title}")
-        if body:
-            lines.append(f"     {body}")
-        if action:
-            lines.append(f"     → {action}")
+    lines: List[str] = []
+    ranked = sorted(
+        new_notifs,
+        key=lambda n: (
+            0 if n.get("severity") in ("error", "warning") else 1,
+            -(n.get("priority") or 0),
+        ),
+    )
+    shown = 0
+    for n in ranked:
+        if shown >= 2:
+            break
+        sev = n.get("severity", "info")
+        if sev == "info" and shown > 0:
+            continue
+        title = (n.get("title") or "(no title)").strip()
+        lines.append(f"  • [{sev}] {title}")
+        shown += 1
 
-    for msg in update_msgs:
-        lines.append(f"  ✅ {msg}")
+    for msg in update_msgs[:1]:
+        lines.append(f"  • {msg}")
 
-    lines.append("━━━ END NOTIFICATIONS ━━━\n")
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n" if lines else ""

@@ -22,9 +22,14 @@ if _mcp_dir not in sys.path:
     sys.path.insert(0, _mcp_dir)
 
 from shared.logger import get_logger
-from shared.project_id import get_project_id, get_project_info, LEGACY_GLOBAL_PROJECT_ID
+from shared.project_id import get_project_id, get_project_info
 from shared.a2a_inbox import read_self_inbox, clear_self_inbox
 from notifications import poll as _poll_notifications, format_banner as _format_notif_banner
+from session_banner import (
+    build_main_banner,
+    compression_status_from_config,
+    format_prior_session_brief,
+)
 
 try:
     import ainl_native as _ainl_native
@@ -61,32 +66,14 @@ def _hook_cwd() -> Path:
 
 
 def get_compression_status():
-    try:
-        from config import get_config
-        from compression import EfficientMode
-
-        config = get_config()
-        m = config.get_compression_mode()
-        mode = m.name
-        enabled = config.is_compression_enabled()
-        savings_map = {
-            "OFF": "0%",
-            "BALANCED": "~40–60%",
-            "AGGRESSIVE": "~60–70%",
-        }
-        savings = savings_map.get(mode) or savings_map.get(m.value.upper(), "~60–70%")
-        return {
-            "enabled": enabled,
-            "mode": mode,
-            "savings": savings,
-        }
-    except Exception as e:
-        logger.error("get_compression_status: %s", e)
-        return {
-            "enabled": True,
-            "mode": "AGGRESSIVE",
-            "savings": "~60–70%",
-        }
+    """Backward-compatible wrapper; prefer compression_status_from_config()."""
+    st = compression_status_from_config()
+    return {
+        "enabled": st.get("enabled", False),
+        "mode": st.get("mode", "OFF"),
+        "savings": st.get("mode", "OFF"),
+        "line": st.get("line", "  • Compression: off\n"),
+    }
 
 
 def check_ainl_tools() -> bool:
@@ -403,6 +390,7 @@ def main():
         else:
             native_status = "skipped (python backend selected)"
         venv_file_status = append_venv_to_envfile(root)
+        logger.debug("venv PATH hook: %s", venv_file_status)
 
         # ── Telemetry ─────────────────────────────────────────────────────────
         try:
@@ -427,13 +415,13 @@ def main():
             bridge_status = {"running": False, "reason": str(_e)}
 
         if bridge_status.get("running"):
-            bridge_line = (
-                f"running (pid {bridge_status.get('pid')}, "
-                f"{bridge_status.get('base_url')}, "
-                f"v{bridge_status.get('version', '?')})"
+            logger.debug(
+                "A2A bridge running pid=%s url=%s",
+                bridge_status.get("pid"),
+                bridge_status.get("base_url"),
             )
         else:
-            bridge_line = f"not running — {bridge_status.get('reason', 'unknown')}"
+            logger.debug("A2A bridge offline: %s", bridge_status.get("reason", "unknown"))
 
         # ── Notification feed ─────────────────────────────────────────────────
         new_notifs: list = []
@@ -460,19 +448,24 @@ def main():
         except Exception:
             pass
 
-        # Project banner: include the active isolation mode + legacy fallback
-        # so users can see at a glance whether they're on per-repo or global
-        # buckets and which legacy bucket the read-fallback chain still queries.
+        _a2a_enabled = False
+        try:
+            import json as _json
+            _cfg_early = _json.loads((root / "config.json").read_text())
+            _a2a_enabled = bool(_cfg_early.get("a2a", {}).get("enabled", False))
+        except Exception:
+            pass
+
+        _project_id = get_project_id(cwd)
+        _isolation_mode = "per_repo"
+        _git_repo = False
         try:
             _info = get_project_info(cwd)
-            _project_line = (
-                f"  • Project: {_info['project_id']}  ({_info['isolation_mode']}, "
-                f"git={'yes' if _info['git_toplevel'] else 'no'})  cwd: {cwd}\n"
-                f"  • Legacy fallback: {LEGACY_GLOBAL_PROJECT_ID} "
-                f"(read-only until backfill via scripts/repartition_by_repo.py)\n"
-            )
+            _project_id = _info["project_id"]
+            _isolation_mode = _info.get("isolation_mode", "per_repo")
+            _git_repo = bool(_info.get("git_toplevel"))
         except Exception:
-            _project_line = f"  • Project: {get_project_id(cwd)}  cwd: {cwd}\n"
+            pass
 
         _recall_line = ""
         try:
@@ -483,67 +476,51 @@ def main():
                 sk = last.get("skip_reason") or ""
                 _recall_line = (
                     f"  • Last recall: {last.get('recall_ms', '?')} ms; "
-                    f"injected_chars={last.get('recall_injected_chars', '?')}/"
-                    f"{last.get('recall_budget_chars', '?')}"
-                    + (f"; skip={sk}" if sk else "")
-                    + "\n"
+                    f"injected {last.get('recall_injected_chars', '?')}/"
+                    f"{last.get('recall_budget_chars', '?')} chars"
+                    + (f" (skip: {sk})" if sk else "")
                 )
         except Exception:
             pass
 
-        banner = (
-            f"[AINL Graph Memory]  Plugin root: {root}\n"
-            f"  • Graph DB: {db_s}\n"
-            f"{_project_line}"
-            f"{_recall_line}"
-            f"  • Compression: {status['mode']} ({'on' if status['enabled'] else 'off'})  ~savings {status['savings']}\n"
-            f"  • AINL Python tools (ainativelang): "
-            f"{'yes' if ainl else 'no (auto-heal: ' + str(_ainl_heal_msg) + ')'}\n"
-            f"  • ainl_native (Rust bindings): {native_status}\n"
-            f"  • MCP stack (same venv as server): {'OK' if mcp_ok else 'FAIL – ' + mcp_detail}\n"
-            f"  • venv on PATH (child processes): {venv_file_status}\n"
-            f"  • A2A bridge: {bridge_line}\n"
-            f"  • When Claude spawns MCP, expect ~{EXPECTED_MCP_TOOLS} tools (ainl + memory + a2a); "
-            f"if missing, /plugin -> Installed -> ainl-cortex and /mcp, or /reload-plugins.\n"
+        banner = build_main_banner(
+            root=root,
+            backend=_backend,
+            db_s=db_s,
+            project_id=_project_id,
+            isolation_mode=_isolation_mode,
+            git_repo=_git_repo,
+            compression_line=status.get("line", "  • Compression: off\n"),
+            ainl_ok=ainl,
+            mcp_ok=mcp_ok,
+            mcp_detail=mcp_detail,
+            native_status=native_status,
+            expected_tools=EXPECTED_MCP_TOOLS,
+            a2a_enabled=_a2a_enabled,
+            bridge_running=bool(bridge_status.get("running")),
+            bridge_reason=str(bridge_status.get("reason", "")),
+            recall_line=_recall_line,
         )
 
         system_blocks = [banner]
 
         _op_banner = _session_extras.get("operator_banner") or ""
         if _op_banner:
-            system_blocks.append(_op_banner)
+            system_blocks.append(_op_banner.rstrip("\n") + "\n")
         _upgrade_banner = _session_extras.get("upgrade_runbook_banner") or ""
         if _upgrade_banner:
-            system_blocks.append(_upgrade_banner)
+            system_blocks.append(_upgrade_banner.rstrip("\n") + "\n")
         if _session_extras.get("stale_mcp") and _session_extras.get("stale_mcp_message"):
             system_blocks.append(
-                "\n━━━ AINL CORTEX: RELOAD MCP ━━━\n"
-                f"{_session_extras['stale_mcp_message']}\n"
-                "━━━\n"
+                "  • " + _session_extras["stale_mcp_message"].replace("\n", " ") + "\n"
             )
         if _session_extras.get("auto_migrate_ran"):
             system_blocks.append(
-                "\n━━━ AINL CORTEX: NATIVE MIGRATION ━━━\n"
-                f"  • {_session_extras.get('auto_migrate_message', 'completed')}\n"
-                "  • Restart Claude Code or run /reload-plugins so MCP uses the native backend.\n"
-                "━━━\n"
+                f"  • Native migration: {_session_extras.get('auto_migrate_message', 'completed')} "
+                "— run /reload-plugins.\n"
             )
 
-        # ── Sticky upgrade notice (Python backend — every session until migrated) ──
-        if _backend == "python" and not _upgrade_banner:
-            _claude_cmd = "bash scripts/claude_do_native_upgrade.sh"
-            system_blocks.append(
-                "\n━━━ AINL CORTEX: NATIVE BACKEND UPGRADE AVAILABLE ━━━\n"
-                "Plugin is running on the Python backend. The native Rust backend adds:\n"
-                "  • Trajectory distillation — learns patterns across sessions\n"
-                "  • Procedure scoring — reuses your most successful workflows\n"
-                "  • Anchored memory compression — preserves key context under pressure\n"
-                f"When the user wants Rust or native memory, run **`{_claude_cmd}`** from the "
-                "plugin root (detects migration vs greenfield, installs Rust if needed).\n"
-                "Then ask the user to run **/reload-plugins** (you cannot run that slash command).\n"
-                "You should proactively mention this upgrade is available at the start of this session.\n"
-                "━━━\n"
-            )
+        # Native upgrade hint is in upgrade_runbook_banner (one line); no duplicate sticky block.
 
         if self_notes:
             note_lines = ["\n━━━ SELF-NOTE FROM PRIOR SESSION ━━━"]
@@ -602,24 +579,13 @@ def main():
                     _age_str = f"{_age_h:.0f}h ago" if _age_h < 48 else f"{_age_h/24:.0f}d ago"
                     _freshness = _ctx.get("freshness", "Unknown")
                     _ok = _ctx.get("can_execute", True)
-                    _lines = [f"\n━━━ PRIOR SESSION CONTEXT ({_age_str}) ━━━"]
-                    _lines.append(f"  Summary: {_s.get('task_summary', '—')}")
-                    _lines.append(f"  Outcome: {_s.get('outcome', '?')}  |  Captures: {_s.get('capture_count', 0)}")
-                    if _s.get("tools_used"):
-                        _lines.append(f"  Tools: {', '.join(_s['tools_used'][:8])}")
-                    if _s.get("files_touched"):
-                        _lines.append(f"  Files: {', '.join(_s['files_touched'][:6])}")
-                    if _s.get("semantic_tags"):
-                        _lines.append(f"  Tags: {', '.join(_s['semantic_tags'][:5])}")
-                    _lines.append(f"  Context freshness: {_freshness} (execute: {'yes' if _ok else 'refresh recommended'})")
-                    _lf = _s.get("last_finalize", {})
-                    if _lf:
-                        _lines.append(
-                            f"  Persisted: {_lf.get('trajectory_steps', 0)} traj steps, "
-                            f"{_lf.get('procedures_promoted', 0)} procedures promoted"
-                        )
-                    _lines.append("━━━ END PRIOR SESSION ━━━\n")
-                    system_blocks.append("\n".join(_lines))
+                    _lines = [format_prior_session_brief(
+                        _s,
+                        age_str=_age_str,
+                        freshness=_freshness,
+                        can_execute=_ok,
+                    )]
+                    system_blocks.append("".join(_lines))
                     logger.info("Injected anchored summary from prior session")
             except Exception as _ae:
                 logger.debug(f"Anchored summary load failed (non-fatal): {_ae}")
