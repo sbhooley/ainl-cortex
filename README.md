@@ -197,6 +197,7 @@ After the user restarts, confirm the install worked by checking:
 | No banner at session start | Check `~/.claude/settings.json` has `"ainl-cortex@ainl-local": true` under `enabledPlugins`; if missing, re-run `bash setup.sh` |
 | Banner shows `MCP stack: FAIL` | Run `cd ~/.claude/plugins/ainl-cortex && bash setup.sh` again — setup re-installs deps |
 | `ainl_native (Rust bindings): build failed` | Re-run `bash scripts/install_ainl_native.sh` or `bash setup.sh`. PyPI wheels cover macOS/Linux/Windows; Rust is only needed on unsupported platforms. |
+| `No module named node_types` on `memory_store_failure` (smoke passes) | Fixed on `main` since May 2026 (`19dd4b5`). Run `git pull`, `bash setup.sh`, then **fully quit and restart Claude Code** so the MCP server reloads — `setup.sh` does not restart a running MCP process. Verify: `bash scripts/smoke_test.sh` step **[0b]** must pass. |
 
 ### What activates automatically (no config needed)
 

@@ -47,6 +47,36 @@ PYEOF
 then ok "MCP server importable in package mode"
 else fail "MCP server package-mode import failed — bare inline import without relative fallback"; fi
 
+# ── [0b] Live MCP tool: memory_store_failure (package mode) ───────────────────
+# Step [2] uses mcp_server.node_types directly; Claude Code calls server tools.
+echo "[0b] MCP memory_store_failure (live tool path)"
+if "$PYTHON" - <<PYEOF 2>/dev/null
+import sys, asyncio, logging, tempfile
+from pathlib import Path
+logging.disable(logging.CRITICAL)
+ROOT = Path('$PLUGIN_DIR')
+sys.path.insert(0, str(ROOT))
+import mcp_server.server as srv
+from mcp_server.graph_store import SQLiteGraphStore
+
+async def _run():
+    db = Path(tempfile.mktemp(suffix='.db'))
+    srv.memory_server.store = SQLiteGraphStore(db)
+    return await srv.memory_store_failure(
+        project_id='smoke-live-$TEST_PROJECT',
+        error_type='smoke',
+        tool='test',
+        error_message='package-mode live tool check',
+    )
+
+r = asyncio.run(_run())
+assert 'node_id' in r, r
+assert 'error' not in r, r
+print('ok:', r.get('node_id', '')[:20])
+PYEOF
+then ok "memory_store_failure callable in package mode"
+else fail "memory_store_failure failed (node_types / packaging) — git pull + restart Claude Code"; fi
+
 
 # ── [1] Episode storage & recall ──────────────────────────────────────────────
 echo "[1] Episode storage & recall"

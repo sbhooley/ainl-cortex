@@ -98,7 +98,10 @@ def _write_snapshot(
 
     Uses the stable UUID so this is always an in-place upsert.
     """
-    from node_types import GraphNode, NodeType
+    try:
+        from .node_types import GraphNode, NodeType
+    except ImportError:
+        from node_types import GraphNode, NodeType
 
     now = int(time.time())
     node_id = _snapshot_node_id(project_id)
@@ -147,7 +150,10 @@ def _cleanup_legacy_snapshots(store, project_id: str, keep_id: str) -> None:
     project, on the first session after upgrading to the fixed code).
     """
     try:
-        from node_types import NodeType
+        try:
+            from .node_types import NodeType
+        except ImportError:
+            from node_types import NodeType
         nodes = store.query_by_type(NodeType.SEMANTIC, project_id, limit=500, min_confidence=0.0)
         for node in nodes:
             data = node.data if isinstance(node.data, dict) else {}

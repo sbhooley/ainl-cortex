@@ -254,7 +254,10 @@ class FailureAdvisor:
             return resolution[:200]
 
         try:
-            from node_types import EdgeType
+            try:
+                from .node_types import EdgeType
+            except ImportError:
+                from node_types import EdgeType
             edges = self.store.get_edges_to(failure_node.id, EdgeType.RESOLVES)
             if edges:
                 fix_episode = self.store.get_node(edges[0].from_node)

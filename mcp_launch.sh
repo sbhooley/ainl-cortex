@@ -2,7 +2,9 @@
 # Claude Code may copy the plugin without the venv's `python` shim; support fallbacks.
 set -euo pipefail
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")" && pwd)}"
-export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+# Include mcp_server/ so legacy `from node_types import …` in tool bodies resolves
+# the same way as hooks (see commit 19dd4b5 / package-mode MCP launch).
+export PYTHONPATH="${ROOT}/mcp_server:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "$ROOT"
 
 for py in .venv/bin/python .venv/bin/python3 .venv/bin/python3.14 .venv/bin/python3.13 .venv/bin/python3.12 .venv/bin/python3.11; do
