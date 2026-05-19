@@ -728,6 +728,13 @@ def flush_pending_captures(project_id: str) -> int:
                         write_goals(sidecar_store, project_id, episode_data)
                     except Exception as e:
                         logger.warning(f"Goal write failed (strict-native sidecar): {e}")
+                    if episode_data and episode_data.get("outcome") == "success":
+                        try:
+                            link_resolutions(sidecar_store, project_id, episode_data)
+                        except Exception as e:
+                            logger.warning(
+                                f"Resolution linking failed (strict-native per-prompt flush): {e}"
+                            )
             else:
                 store, episode_data = write_episode(project_id, session_data)
                 write_failures(store, project_id, session_data)
@@ -810,6 +817,11 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
                 write_goals(sidecar_store, project_id, episode_data)
             except Exception as e:
                 logger.warning(f"Goal write failed (strict-native sidecar): {e}")
+            if episode_data and episode_data.get("outcome") == "success":
+                try:
+                    link_resolutions(sidecar_store, project_id, episode_data)
+                except Exception as e:
+                    logger.warning(f"Resolution linking failed (strict-native sidecar): {e}")
     else:
         # Python or hybrid: full Python pipeline as before.
         store = None

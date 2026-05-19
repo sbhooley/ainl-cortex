@@ -582,8 +582,11 @@ def main():
             from goal_tracker import GoalTracker
             from failure_advisor import FailureAdvisor
 
-            db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
-            if db_path.exists():
+            gm_dir = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+            db_path = gm_dir / "ainl_memory.db"
+            # Native-only installs may have ainl_native.db before the Python sidecar exists.
+            if db_path.exists() or (gm_dir / "ainl_native.db").exists():
+                gm_dir.mkdir(parents=True, exist_ok=True)
                 _store = get_graph_store(db_path)
 
                 # Active goals

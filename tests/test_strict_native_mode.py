@@ -7,7 +7,8 @@ loaded successfully. In that mode the Python pipeline must skip:
   - write_persona (Rust EvolutionEngine drives persona)
   - write_patterns (Rust procedure learning drives procedurals)
   - write_semantics (Rust tag_turn drives semantics)
-  - link_resolutions (depends on write_episode having run on the same store)
+  - link_resolutions on the Python sidecar only (episode nodes live in Rust DB;
+    RESOLVES edges to native episodes are best-effort)
 
 Two carve-outs MUST still run on the Python sidecar:
   - write_failures (Rust derives only from trajectory steps; Python's
@@ -114,14 +115,14 @@ class TestStrictNativeMode:
         # The Rust pipeline ran exactly once.
         mock_native.assert_called_once()
 
-        # Python episode/persona/patterns/semantics/link_resolutions all skipped.
+        # Python episode/persona/patterns/semantics skipped; resolutions on sidecar.
         mock_write_episode.assert_not_called()
         mock_write_persona.assert_not_called()
         mock_write_patterns.assert_not_called()
         mock_write_semantics.assert_not_called()
-        mock_link.assert_not_called()
+        mock_link.assert_called_once()
 
-        # Python sidecar opened once for failures + goals.
+        # Python sidecar opened once for failures + goals + resolution linking.
         mock_open_sidecar.assert_called_once_with("proj_abc")
 
         # Carve-outs still ran.
@@ -211,6 +212,36 @@ class TestStrictNativeMode:
             mock_write_semantics.assert_not_called()
             mock_write_failures.assert_called_once()
             mock_write_goals.assert_called_once()
+
+    def test_strict_native_link_resolutions_marks_sidecar_failure(self, tmp_path):
+        """Successful strict-native sessions must mark matching sidecar failures resolved."""
+        stop_mod = _import_stop_with_strict_native()
+        from graph_store import SQLiteGraphStore
+        from node_types import create_failure_node, NodeType
+
+        project_id = "proj_link_res"
+        sidecar_path = tmp_path / "graph_memory" / "ainl_memory.db"
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        store = SQLiteGraphStore(sidecar_path)
+
+        fail = create_failure_node(
+            project_id, "tool_error", "bash", "command failed", file="/tmp/x.py"
+        )
+        store.write_node(fail)
+
+        session_data = {
+            "tool_captures": [{"tool": "bash", "success": True, "file": "/tmp/x.py"}],
+            "files_touched": ["/tmp/x.py"],
+            "tools_used": ["bash"],
+            "had_errors": False,
+        }
+        episode_data = stop_mod._build_episode_data_only(session_data)
+
+        linked = stop_mod.link_resolutions(store, project_id, episode_data)
+        assert linked == 1
+        updated = store.get_node(fail.id)
+        assert updated.data.get("resolved_at")
+        assert updated.data.get("resolution")
 
     def test_build_episode_data_only_does_not_persist(self):
         stop_mod = _import_stop_with_strict_native()
