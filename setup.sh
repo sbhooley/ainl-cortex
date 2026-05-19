@@ -6,6 +6,7 @@
 #     bash setup.sh --python-only    # never install Rust, never build native, never migrate
 #     bash setup.sh --no-rust        # alias for --python-only
 #     bash setup.sh --auto-install-rust   # unattended install of Rust via rustup
+#     bash setup.sh --restore-from ~/.claude/backups/ainl-cortex-<timestamp>
 #     bash setup.sh --help
 #
 # Env override (takes precedence over flags):
@@ -27,6 +28,7 @@ MARKETPLACE="$HOME/.claude/ainl-local-marketplace"
 # ── Argument parsing ───────────────────────────────────────────────────────
 INSTALL_MODE=""   # one of: python_only, auto_rust, interactive (or empty)
 SHOW_HELP=false
+RESTORE_FROM=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -38,6 +40,14 @@ while [ $# -gt 0 ]; do
             ;;
         --interactive)
             INSTALL_MODE="interactive"
+            ;;
+        --restore-from)
+            shift
+            RESTORE_FROM="${1:-}"
+            if [ -z "$RESTORE_FROM" ]; then
+                echo "ERROR: --restore-from requires a backup directory path" >&2
+                exit 1
+            fi
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -203,7 +213,9 @@ if cfg["memory"].get("store_backend") not in ("python", "native"):
 # don't have the field set; existing installs keep their setting.
 cfg["memory"].setdefault("project_isolation_mode", "per_repo")
 
-cfg.setdefault("a2a", {})["enabled"] = False
+cfg.setdefault("a2a", {})
+cfg["a2a"].setdefault("enabled", False)
+# Legacy field removed from older configs
 cfg["a2a"].pop("bridge_script", None)
 
 cfg.setdefault("install_id", str(uuid.uuid4()))
@@ -243,7 +255,13 @@ print('yes' if dbs else 'no')
     echo "  ainl_native is installed but the plugin is currently configured"
     echo "  to use the Python backend (safe default)."
     if [ "$HAS_DATA" = "yes" ]; then
-        echo "  You have existing memory data. To migrate to native, run:"
+        echo "  You have existing graph_memory data under ~/.claude/projects/."
+        echo "  Before reinstalling the plugin directory, back it up:"
+        echo "      bash scripts/backup_install.sh"
+        echo "  Restore after a fresh clone:"
+        echo "      bash scripts/restore_install.sh ~/.claude/backups/ainl-cortex-<timestamp>"
+        echo ""
+        echo "  To migrate to native, run:"
         echo "      bash scripts/migrate_python_to_native.sh"
         echo "  This runs dry-run -> migrate -> verify -> flip in 5 phases,"
         echo "  with rollback available via migrate_to_python.py."
@@ -340,6 +358,16 @@ if [ "$NATIVE_READY" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
     echo "  To switch to native: bash scripts/migrate_python_to_native.sh"
     echo ""
 fi
+if [ -n "$RESTORE_FROM" ]; then
+    echo "  Restoring from backup: $RESTORE_FROM"
+    if bash "$PLUGIN_DIR/scripts/restore_install.sh" "$RESTORE_FROM"; then
+        echo "  [ok] Backup restored (config + graph_memory)"
+    else
+        echo "  [warn] Restore failed — see messages above" >&2
+    fi
+    echo ""
+fi
+
 echo "Next step: restart Claude Code."
 echo ""
 echo "You should see:"

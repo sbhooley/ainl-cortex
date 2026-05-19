@@ -127,6 +127,25 @@ bash scripts/migrate_python_to_native.sh   # 5 phases: dry-run → migrate → v
 See [scripts/MIGRATION.md](scripts/MIGRATION.md) for the full migration flow,
 rollback options, and what the JSON reports under `logs/` mean.
 
+### Backup and reinstall
+
+Graph memory lives under `~/.claude/projects/*/graph_memory/` (not inside the plugin
+repo). Re-cloning the plugin does **not** delete memory, but it **resets** `config.json`
+to repo defaults unless you restore.
+
+```bash
+# Before replacing ~/.claude/plugins/ainl-cortex
+bash scripts/backup_install.sh
+# → ~/.claude/backups/ainl-cortex-YYYYMMDD-HHMMSS/
+
+# Fresh clone + setup + restore in one flow
+git clone https://github.com/sbhooley/ainl-cortex.git ~/.claude/plugins/ainl-cortex
+cd ~/.claude/plugins/ainl-cortex
+bash setup.sh --restore-from ~/.claude/backups/ainl-cortex-YYYYMMDD-HHMMSS
+```
+
+Or restore later: `bash scripts/restore_install.sh <backup-dir>`
+
 ---
 
 ## 🤖 For AI Agents — Complete Install Instructions
