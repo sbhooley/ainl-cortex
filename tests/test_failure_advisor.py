@@ -291,7 +291,52 @@ class TestFormatWarnings:
         assert result == ""
 
 
-# ── E. Native backend — get_unresolved_failures must not use FTS "*" ─────────
+# ── E. GoalTracker — strict-native episode_node_id for GOAL_TRACKS ───────────
+
+class TestGoalTracksEpisodeNodeId:
+
+    def test_auto_update_links_goal_tracks_via_episode_node_id(self, tmp_path):
+        from goal_tracker import GoalTracker
+        from node_types import NodeType, GraphNode, EdgeType
+
+        store = _make_store(tmp_path)
+        ep_id = str(uuid.uuid4())
+        now = int(time.time())
+        store.write_node(GraphNode(
+            id=ep_id,
+            node_type=NodeType.EPISODE,
+            project_id="proj_gt",
+            agent_id="claude-code",
+            created_at=now,
+            updated_at=now,
+            confidence=1.0,
+            data={
+                "turn_id": "native-turn-uuid",
+                "task_description": "fix pytest failures",
+                "files_touched": ["/tmp/test_failure_advisor.py"],
+                "tool_calls": ["pytest"],
+            },
+        ))
+        tracker = GoalTracker(store, "proj_gt")
+        goal_id = tracker.create_goal(
+            title="Fix pytest failures",
+            description="stabilize test_failure_advisor suite",
+        )
+        updated = tracker.auto_update_from_episode({
+            "turn_id": "synthetic-in-memory-turn",
+            "episode_node_id": ep_id,
+            "task_description": "fix pytest failures in test_failure_advisor",
+            "files_touched": ["/tmp/test_failure_advisor.py"],
+            "tool_calls": ["pytest"],
+            "outcome": "success",
+        })
+        assert updated == 1
+        edges = store.get_edges_from(goal_id, EdgeType.GOAL_TRACKS)
+        assert len(edges) == 1
+        assert edges[0].to_node == ep_id
+
+
+# ── F. Native backend — get_unresolved_failures must not use FTS "*" ─────────
 
 try:
     import native_graph_store as _ngs

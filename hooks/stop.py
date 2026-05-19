@@ -731,6 +731,62 @@ def _build_episode_data_only(session_data: dict) -> dict:
     }
 
 
+def _enrich_episode_data_from_native(
+    episode_data: dict,
+    native_result: Optional[dict],
+    *,
+    read_store=None,
+) -> dict:
+    """Attach Rust episode identity after finalize_session for sidecar writers."""
+    enriched = dict(episode_data)
+    if not native_result:
+        return enriched
+    episode_id = native_result.get("episode_id")
+    if episode_id:
+        enriched["episode_node_id"] = episode_id
+    if read_store and episode_id:
+        try:
+            node = read_store.get_node(episode_id)
+            if node:
+                turn_id = node.data.get("turn_id")
+                if turn_id:
+                    enriched["turn_id"] = turn_id
+        except Exception:
+            pass
+    return enriched
+
+
+def _strict_native_sidecar_after_native(
+    sidecar_store,
+    project_id: str,
+    session_data: dict,
+    episode_data: dict,
+    native_result: Optional[dict],
+) -> None:
+    """Sidecar failures/goals/resolution links after Rust finalize_session."""
+    try:
+        write_failures(sidecar_store, project_id, session_data)
+    except Exception as e:
+        logger.warning(f"Failure nodes write failed (strict-native sidecar): {e}")
+
+    ep_read = _open_native_episode_store(project_id)
+    enriched = _enrich_episode_data_from_native(
+        episode_data, native_result, read_store=ep_read,
+    )
+    try:
+        write_goals(
+            sidecar_store,
+            project_id,
+            enriched,
+            read_store=ep_read,
+        )
+    except Exception as e:
+        logger.warning(f"Goal write failed (strict-native sidecar): {e}")
+    _strict_native_link_after_finalize(
+        sidecar_store, project_id, enriched, native_result,
+    )
+
+
 def _native_finalize_session(project_id: str, session_data: dict, capture_count: int):
     """Invoke ainl_native.finalize_session with the standard payload shape.
     Returns the result dict on success, None on any failure (non-fatal)."""
@@ -790,21 +846,17 @@ def flush_pending_captures(project_id: str) -> int:
                     sidecar_store = _open_python_sidecar_store(project_id)
                 except Exception as e:
                     logger.warning(f"Python sidecar open failed (per-prompt flush): {e}")
+                native_result = None
+                if _NATIVE_OK:
+                    native_result = _native_finalize_session(project_id, session_data, count)
                 if sidecar_store:
-                    _ep_read = _open_native_episode_store(project_id)
-                    try:
-                        write_failures(sidecar_store, project_id, session_data)
-                    except Exception as e:
-                        logger.warning(f"Failure write failed (strict-native sidecar): {e}")
-                    try:
-                        write_goals(
-                            sidecar_store,
-                            project_id,
-                            episode_data,
-                            read_store=_ep_read,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Goal write failed (strict-native sidecar): {e}")
+                    _strict_native_sidecar_after_native(
+                        sidecar_store,
+                        project_id,
+                        session_data,
+                        episode_data,
+                        native_result,
+                    )
             else:
                 store, episode_data = write_episode(project_id, session_data)
                 write_failures(store, project_id, session_data)
@@ -815,16 +867,6 @@ def flush_pending_captures(project_id: str) -> int:
                 write_patterns(store, project_id)
                 write_semantics(store, project_id)
                 write_goals(store, project_id, episode_data)
-
-            # Native finalize: source of truth in strict mode, parallel learning
-            # side-channel in hybrid mode.
-            native_result = None
-            if _NATIVE_OK:
-                native_result = _native_finalize_session(project_id, session_data, count)
-            if _STRICT_NATIVE and sidecar_store and episode_data:
-                _strict_native_link_after_finalize(
-                    sidecar_store, project_id, episode_data, native_result
-                )
 
             logger.info(
                 f"Per-prompt flush ({'strict-native' if _STRICT_NATIVE else 'python'}): "
@@ -871,33 +913,18 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
         _delta_session_id = str(uuid.uuid4())
         _delta_started_at = time.time()
 
+    episode_data = None
+    sidecar_store = None
     if _STRICT_NATIVE:
-        # Strict-native: Rust handles the bulk of the pipeline. Python sidecar
-        # only writes failures + goals to ainl_memory.db.
+        # Strict-native: Rust owns episode/persona/patterns/semantics; sidecar
+        # failures/goals run after native finalize (_strict_native_sidecar_after_native).
         episode_data = _build_episode_data_only(session_data)
-        sidecar_store = None
         try:
             sidecar_store = _open_python_sidecar_store(project_id)
         except Exception as e:
             logger.warning(f"Python sidecar open failed: {e}")
-
-        if sidecar_store:
-            _ep_read = _open_native_episode_store(project_id)
-            if _wrap_delta:
-                _wrap_delta(sidecar_store, delta_entries)
-            try:
-                write_failures(sidecar_store, project_id, session_data)
-            except Exception as e:
-                logger.warning(f"Failure nodes write failed (strict-native sidecar): {e}")
-            try:
-                write_goals(
-                    sidecar_store,
-                    project_id,
-                    episode_data,
-                    read_store=_ep_read,
-                )
-            except Exception as e:
-                logger.warning(f"Goal write failed (strict-native sidecar): {e}")
+        if sidecar_store and _wrap_delta:
+            _wrap_delta(sidecar_store, delta_entries)
     else:
         # Python or hybrid: full Python pipeline as before.
         store = None
@@ -1035,8 +1062,8 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             )
 
     if _STRICT_NATIVE and sidecar_store and episode_data:
-        _strict_native_link_after_finalize(
-            sidecar_store, project_id, episode_data, native_result
+        _strict_native_sidecar_after_native(
+            sidecar_store, project_id, session_data, episode_data, native_result,
         )
 
     # Append session delta record (non-fatal — must never break session close)

@@ -213,6 +213,52 @@ class TestStrictNativeMode:
             mock_write_failures.assert_called_once()
             mock_write_goals.assert_called_once()
 
+    def test_strict_native_finalize_runs_native_before_goals(self):
+        """write_goals must see episode_node_id from Rust finalize_session."""
+        stop_mod = _import_stop_with_strict_native()
+        native_ep = "deadbeef-cafe-1111-2222-aaaaaaaaaaaa"
+        order = []
+
+        session_data = {
+            "tool_captures": [{"tool": "bash", "success": True}],
+            "files_touched": ["/tmp/x.py"],
+            "tools_used": ["bash"],
+            "had_errors": False,
+        }
+
+        def track_native(*_a, **_k):
+            order.append("native")
+            return {
+                "episode_id": native_ep,
+                "trajectory_steps": 0,
+                "procedures_promoted": 0,
+                "summary_saved": True,
+            }
+
+        def track_failures(*_a, **_k):
+            order.append("failures")
+
+        def track_goals(_store, _pid, episode_data, read_store=None):
+            order.append("goals")
+            assert episode_data.get("episode_node_id") == native_ep
+
+        with mock.patch.object(stop_mod, "_open_python_sidecar_store",
+                              return_value=mock.MagicMock()), \
+                mock.patch.object(stop_mod, "_open_native_episode_store",
+                              return_value=None), \
+                mock.patch.object(stop_mod, "_native_finalize_session",
+                              side_effect=track_native), \
+                mock.patch.object(stop_mod, "write_failures",
+                              side_effect=track_failures), \
+                mock.patch.object(stop_mod, "write_goals",
+                              side_effect=track_goals), \
+                mock.patch.object(stop_mod, "_strict_native_link_after_finalize"):
+            stop_mod.finalize_session("proj_order", session_data, PLUGIN_ROOT)
+
+        assert order[0] == "native"
+        assert "goals" in order
+        assert order.index("native") < order.index("goals")
+
     def test_strict_native_link_resolutions_marks_sidecar_failure(self, tmp_path):
         """Successful strict-native sessions must mark matching sidecar failures resolved."""
         stop_mod = _import_stop_with_strict_native()

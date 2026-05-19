@@ -216,11 +216,21 @@ class GoalTracker:
 
             self.store.update_node_data(node.id, patch)
 
-            # Write GOAL_TRACKS edge if we have the episode node ID
+            # Write GOAL_TRACKS edge when we know the episode node (strict-native).
             try:
                 from node_types import create_edge, EdgeType
-                recent = self.store.query_episodes_since(int(time.time()) - 30, limit=10, project_id=self.project_id)
-                ep_node = next((e for e in recent if e.data.get('turn_id') == episode_id), None)
+                ep_node = None
+                ep_nid = episode_data.get("episode_node_id")
+                if ep_nid:
+                    ep_node = self.store.get_node(ep_nid)
+                if not ep_node and episode_id:
+                    recent = self.store.query_episodes_since(
+                        int(time.time()) - 30, limit=10, project_id=self.project_id,
+                    )
+                    ep_node = next(
+                        (e for e in recent if e.data.get("turn_id") == episode_id),
+                        None,
+                    )
                 if ep_node:
                     edge = create_edge(
                         from_node=node.id,
