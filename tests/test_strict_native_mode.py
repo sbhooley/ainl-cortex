@@ -175,7 +175,7 @@ class TestStrictNativeMode:
         # Native helper still invoked but returns None because _NATIVE_OK=False
         mock_native.assert_not_called()
 
-    def test_strict_native_per_prompt_flush_skips_python_episode(self):
+    def test_strict_native_per_prompt_flush_accumulates_without_native_finalize(self):
         stop_mod = _import_stop_with_strict_native()
         session_data = {
             "tool_captures": [{"tool": "bash", "success": True}],
@@ -185,33 +185,51 @@ class TestStrictNativeMode:
         }
 
         with mock.patch.object(stop_mod, "drain_session_inbox", return_value=session_data), \
+                mock.patch.object(stop_mod, "accumulate_into_pending") as mock_accum, \
+                mock.patch.object(stop_mod, "_per_prompt_persist_failures") as mock_failures, \
+                mock.patch.object(stop_mod, "_native_finalize_session") as mock_native, \
                 mock.patch.object(stop_mod, "write_episode") as mock_write_episode, \
-                mock.patch.object(stop_mod, "write_persona") as mock_write_persona, \
-                mock.patch.object(stop_mod, "write_patterns") as mock_write_patterns, \
-                mock.patch.object(stop_mod, "write_semantics") as mock_write_semantics, \
-                mock.patch.object(stop_mod, "write_failures") as mock_write_failures, \
-                mock.patch.object(stop_mod, "write_goals") as mock_write_goals, \
-                mock.patch.object(stop_mod, "_open_python_sidecar_store",
-                                  return_value=mock.MagicMock()), \
-                mock.patch.object(stop_mod, "_native_finalize_session", return_value=None):
-            # Touch an inbox file so flush_pending_captures gets past its early returns.
+                mock.patch.object(stop_mod, "write_goals") as mock_write_goals:
             inbox = PLUGIN_ROOT / "inbox" / "proj_strict_test_captures.jsonl"
             inbox.parent.mkdir(parents=True, exist_ok=True)
             inbox.write_text('{"tool":"bash","success":true}\n')
+            pending = PLUGIN_ROOT / "inbox" / "proj_strict_test_session_pending.json"
             try:
                 count = stop_mod.flush_pending_captures("proj_strict_test")
             finally:
-                # drain_session_inbox normally unlinks; we mocked it, so do it ourselves
                 if inbox.exists():
                     inbox.unlink()
-            # Drain returned 1 capture so we should have flushed.
+                if pending.exists():
+                    pending.unlink()
             assert count == 1
+            mock_accum.assert_called_once()
+            mock_failures.assert_called_once()
+            mock_native.assert_not_called()
             mock_write_episode.assert_not_called()
-            mock_write_persona.assert_not_called()
-            mock_write_patterns.assert_not_called()
-            mock_write_semantics.assert_not_called()
-            mock_write_failures.assert_called_once()
-            mock_write_goals.assert_called_once()
+            mock_write_goals.assert_not_called()
+
+    def test_link_resolutions_runs_for_partial_outcome(self, tmp_path):
+        stop_mod = _import_stop_with_strict_native()
+        from graph_store import SQLiteGraphStore
+        from node_types import create_failure_node
+
+        store = SQLiteGraphStore(tmp_path / "ainl_memory.db")
+        fail = create_failure_node(
+            "proj", "tool_error", "bash", "err", file="/tmp/x.py"
+        )
+        store.write_node(fail)
+        episode_data = {
+            "turn_id": "t1",
+            "outcome": "partial",
+            "files_touched": ["/tmp/x.py"],
+            "tool_calls": ["bash"],
+            "task_description": "fixed with caveats",
+        }
+        linked = stop_mod.link_resolutions(store, "proj", episode_data)
+        assert linked == 1
+        updated = store.get_node(fail.id)
+        assert updated.data.get("resolved_at")
+        assert "partial" in (updated.data.get("resolution") or "").lower()
 
     def test_strict_native_finalize_runs_native_before_goals(self):
         """write_goals must see episode_node_id from Rust finalize_session."""

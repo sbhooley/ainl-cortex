@@ -39,6 +39,12 @@ struct SessionInput {
     outcome: String,
     #[serde(default)]
     capture_count: usize,
+    /// Stable turn id from Python pending session (optional).
+    #[serde(default)]
+    turn_id: Option<String>,
+    /// Claude Code session UUID from startup hook (optional).
+    #[serde(default)]
+    claude_session_id: Option<String>,
 }
 
 // ── Public PyO3 functions ─────────────────────────────────────────────────────
@@ -62,15 +68,16 @@ pub fn finalize_session(
     session_json: &str,
     step_file_path: Option<&str>,
 ) -> PyResult<PyObject> {
-    let input: SessionInput = serde_json::from_str(session_json)
-        .unwrap_or_else(|_| SessionInput {
-            tool_calls: vec![],
-            files_touched: vec![],
-            had_errors: false,
-            task_summary: String::new(),
-            outcome: "success".to_string(),
-            capture_count: 0,
-        });
+    let input: SessionInput = serde_json::from_str(session_json).unwrap_or(SessionInput {
+        tool_calls: vec![],
+        files_touched: vec![],
+        had_errors: false,
+        task_summary: String::new(),
+        outcome: "success".to_string(),
+        capture_count: 0,
+        turn_id: None,
+        claude_session_id: None,
+    });
 
     if let Some(parent) = Path::new(db_path).parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -92,15 +99,30 @@ pub fn finalize_session(
 
     let timestamp = Utc::now().timestamp();
 
-    // 1. Record episode node
-    let turn_id = Uuid::new_v4();
-    let episode_node = AinlMemoryNode::new_episode(
+    // 1. Record episode node (plugin_data mirrors Python episode shape for recall/goals)
+    let turn_id = input
+        .turn_id
+        .as_deref()
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or_else(Uuid::new_v4);
+    let mut episode_node = AinlMemoryNode::new_episode(
         turn_id,
         timestamp,
         input.tool_calls.clone(),
         None,
         None,
     );
+    episode_node.project_id = Some(project_id.to_string());
+    episode_node.plugin_data = Some(serde_json::json!({
+        "task_description": input.task_summary,
+        "files_touched": input.files_touched,
+        "outcome": input.outcome,
+        "had_errors": input.had_errors,
+        "capture_count": input.capture_count,
+        "py_node_type": "episode",
+        "session_id": input.claude_session_id,
+        "turn_id": turn_id.to_string(),
+    }));
     let episode_id = episode_node.id;
     let _ = store.write_node(&episode_node);
 
