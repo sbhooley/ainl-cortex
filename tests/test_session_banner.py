@@ -10,7 +10,11 @@ if str(HOOKS) not in sys.path:
 if str(ROOT / "mcp_server") not in sys.path:
     sys.path.insert(0, str(ROOT / "mcp_server"))
 
-from session_banner import compression_status_from_config, build_main_banner
+from session_banner import (
+    compression_status_from_config,
+    build_main_banner,
+    format_prior_session_context,
+)
 
 
 def test_compression_banner_lists_compresses_and_not():
@@ -45,3 +49,22 @@ def test_build_main_banner_expands_compression_lines():
     )
     assert "compresses:" in banner
     assert banner.count("  • Compression:") == 1
+
+
+def test_prior_session_context_box():
+    text = format_prior_session_context(
+        {
+            "task_summary": "Session — tools: bash",
+            "outcome": "success",
+            "capture_count": 4,
+            "tools_used": ["bash"],
+            "semantic_tags": ["tooling", "formal"],
+            "last_finalize": {"trajectory_steps": 74, "procedures_promoted": 0},
+        },
+        age_str="17h ago",
+        freshness="Fresh",
+        can_execute=True,
+    )
+    assert "PRIOR SESSION CONTEXT" in text
+    assert "END PRIOR SESSION" in text
+    assert "traj steps" in text

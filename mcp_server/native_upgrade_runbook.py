@@ -185,24 +185,29 @@ def assess(root: Optional[Path] = None) -> Dict[str, Any]:
 
 
 def format_banner(state: Dict[str, Any]) -> str:
-    """One-line upgrade / reload hint for SessionStart (not a full runbook box)."""
-    backend = state.get("store_backend", "python")
-    hints: list[str] = []
-
-    if state.get("needs_mcp_reload"):
-        hints.append("/reload-plugins (disk code ≠ running MCP)")
-
-    if backend == "native" and state.get("unmigrated_project_hashes"):
-        n = len(state["unmigrated_project_hashes"])
-        hints.append(
-            f"native DB empty for {n} project(s) — bash scripts/migrate_python_to_native.sh"
+    """SessionStart upgrade runbook box (backend status + recommended actions)."""
+    lines = [
+        "\n━━━ AINL CORTEX: CLAUDE CODE UPGRADE RUNBOOK ━━━",
+        f"  • Backend: {state['store_backend']}  |  graph data: "
+        f"{'yes' if state['graph_memory_has_data'] else 'no'}  |  "
+        f"ainl_native: {'ok' if state['ainl_native_importable'] else 'missing'}",
+    ]
+    if state.get("unmigrated_project_hashes"):
+        lines.append(
+            f"  • Unmigrated projects: {', '.join(state['unmigrated_project_hashes'][:5])}"
+            + (" …" if len(state["unmigrated_project_hashes"]) > 5 else "")
         )
-    elif backend == "python":
-        hints.append("optional native: bash scripts/claude_do_native_upgrade.sh")
-
-    if not hints:
-        return ""
-    return "  • " + " · ".join(hints) + "\n"
+    for act in state["recommended_actions"]:
+        if act["type"] == "shell":
+            lines.append(f"  • RUN: {act['command']}  ({act['id']})")
+        elif act["type"] == "user":
+            lines.append(f"  • USER: {act.get('command', '/reload-plugins')}")
+    lines.append(
+        "  • Agent: run `.venv/bin/python scripts/native_upgrade_status.py --execute` "
+        "when the user asks to install Rust or upgrade to native."
+    )
+    lines.append("━━━\n")
+    return "\n".join(lines)
 
 
 def execute_recommended(

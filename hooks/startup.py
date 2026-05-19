@@ -28,7 +28,7 @@ from notifications import poll as _poll_notifications, format_banner as _format_
 from session_banner import (
     build_main_banner,
     compression_status_from_config,
-    format_prior_session_brief,
+    format_prior_session_context,
 )
 
 try:
@@ -522,7 +522,7 @@ def main():
                 "— run /reload-plugins.\n"
             )
 
-        # Native upgrade hint is in upgrade_runbook_banner (one line); no duplicate sticky block.
+        # Full upgrade runbook is in upgrade_runbook_banner (see native_upgrade_runbook.format_banner).
 
         if self_notes:
             note_lines = ["\n━━━ SELF-NOTE FROM PRIOR SESSION ━━━"]
@@ -581,13 +581,14 @@ def main():
                     _age_str = f"{_age_h:.0f}h ago" if _age_h < 48 else f"{_age_h/24:.0f}d ago"
                     _freshness = _ctx.get("freshness", "Unknown")
                     _ok = _ctx.get("can_execute", True)
-                    _lines = [format_prior_session_brief(
-                        _s,
-                        age_str=_age_str,
-                        freshness=_freshness,
-                        can_execute=_ok,
-                    )]
-                    system_blocks.append("".join(_lines))
+                    system_blocks.append(
+                        format_prior_session_context(
+                            _s,
+                            age_str=_age_str,
+                            freshness=_freshness,
+                            can_execute=_ok,
+                        )
+                    )
                     logger.info("Injected anchored summary from prior session")
             except Exception as _ae:
                 logger.debug(f"Anchored summary load failed (non-fatal): {_ae}")

@@ -182,6 +182,38 @@ def format_upgrade_hint(state: Dict[str, Any]) -> str:
     return "  • " + " · ".join(hints) + "\n"
 
 
+def format_prior_session_context(
+    summary: Dict[str, Any],
+    *,
+    age_str: str,
+    freshness: str,
+    can_execute: bool,
+) -> str:
+    """Prior-session anchored summary box for SessionStart."""
+    lines = [f"\n━━━ PRIOR SESSION CONTEXT ({age_str}) ━━━"]
+    lines.append(f"  Summary: {summary.get('task_summary', '—')}")
+    lines.append(
+        f"  Outcome: {summary.get('outcome', '?')}  |  "
+        f"Captures: {summary.get('capture_count', 0)}"
+    )
+    if summary.get("tools_used"):
+        lines.append(f"  Tools: {', '.join(summary['tools_used'][:8])}")
+    if summary.get("files_touched"):
+        lines.append(f"  Files: {', '.join(summary['files_touched'][:6])}")
+    if summary.get("semantic_tags"):
+        lines.append(f"  Tags: {', '.join(summary['semantic_tags'][:5])}")
+    exec_note = "yes" if can_execute else "refresh recommended"
+    lines.append(f"  Context freshness: {freshness} (execute: {exec_note})")
+    last_finalize = summary.get("last_finalize") or {}
+    if last_finalize:
+        lines.append(
+            f"  Persisted: {last_finalize.get('trajectory_steps', 0)} traj steps, "
+            f"{last_finalize.get('procedures_promoted', 0)} procedures promoted"
+        )
+    lines.append("━━━ END PRIOR SESSION ━━━\n")
+    return "\n".join(lines)
+
+
 def format_prior_session_brief(
     summary: Dict[str, Any],
     *,
@@ -189,7 +221,7 @@ def format_prior_session_brief(
     freshness: str,
     can_execute: bool,
 ) -> str:
-    """Two lines max for prior-session context."""
+    """Compact prior-session line (used when full box is disabled)."""
     task = (summary.get("task_summary") or "—").strip()
     if len(task) > 100:
         task = task[:97] + "…"
