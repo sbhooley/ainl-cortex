@@ -23,8 +23,8 @@ PY=".venv/bin/python"
 
 echo "==> Phase 1: ainl_native availability check"
 if ! "$PY" -c "import ainl_native" 2>/dev/null; then
-    echo "ERROR: ainl_native module not built." >&2
-    echo "       Run: cd ainl_native && ../.venv/bin/maturin develop --release" >&2
+    echo "ERROR: ainl_native is not installed." >&2
+    echo "       Run: bash scripts/install_ainl_native.sh   (or re-run setup.sh)" >&2
     exit 1
 fi
 echo "  ainl_native is importable."

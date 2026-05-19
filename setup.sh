@@ -85,7 +85,7 @@ echo "  What this script does:"
 echo "    1. Verifies Python 3.10+"
 echo "    2. (Optionally) installs Rust toolchain — see install mode above"
 echo "    3. Creates a Python venv and installs dependencies"
-echo "    4. (Optionally) builds the ainl_native Rust extension"
+echo "    4. Installs ainl_native (PyPI wheel; maturin only if wheel unavailable)"
 echo "    5. Registers the plugin with Claude Code"
 echo "    6. Runs verification tests"
 echo ""
@@ -219,32 +219,28 @@ echo "  [ok] Config updated"
 # Read current backend (untouched by setup.sh — the user set it).
 CURRENT_BACKEND=$(python3 -c "import json; print(json.load(open('$PLUGIN_DIR/config.json'))['memory']['store_backend'])")
 
-# ── 5. Build native extension (only if Rust is available) ──────────────────
-NATIVE_BUILT=false
-if [ "$RUST_AVAILABLE" = "true" ]; then
-    echo "  Building ainl_native Rust extension..."
-    "$PLUGIN_DIR/.venv/bin/pip" install maturin --quiet 2>/dev/null || true
-    if PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
-        "$PLUGIN_DIR/.venv/bin/maturin" develop --release \
-        --manifest-path "$PLUGIN_DIR/ainl_native/Cargo.toml" 2>&1 | tail -3; then
-        NATIVE_BUILT=true
-        echo "  [ok] ainl_native built"
-    else
-        echo "  [warn] ainl_native build failed — Python backend will be used"
-    fi
+# ── 5. Install ainl_native (PyPI first; maturin fallback) ─────────────────
+NATIVE_READY=false
+if [ "$INSTALL_MODE" = "python_only" ]; then
+    echo "  Installing ainl_native (PyPI; optional for native migration later)..."
 else
-    echo "  [info] Skipping ainl_native build (Rust not installed)"
+    echo "  Installing ainl_native for strict-native graph memory..."
+fi
+if bash "$PLUGIN_DIR/scripts/install_ainl_native.sh"; then
+    NATIVE_READY=true
+else
+    echo "  [warn] ainl_native not installed — Python backend works; native needs a wheel or Rust"
 fi
 
 # ── 6. Migration deferral notice ───────────────────────────────────────────
-if [ "$NATIVE_BUILT" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
+if [ "$NATIVE_READY" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
     HAS_DATA=$(python3 -c "
 import pathlib
 dbs = list(pathlib.Path.home().glob('.claude/projects/*/graph_memory/ainl_memory.db'))
 print('yes' if dbs else 'no')
 ")
     echo ""
-    echo "  Native extension is built but the plugin is currently configured"
+    echo "  ainl_native is installed but the plugin is currently configured"
     echo "  to use the Python backend (safe default)."
     if [ "$HAS_DATA" = "yes" ]; then
         echo "  You have existing memory data. To migrate to native, run:"
@@ -337,10 +333,10 @@ PYEOF
 echo "=== Setup complete! ==="
 echo ""
 echo "  Plugin dir : $PLUGIN_DIR"
-echo "  Backend    : $CURRENT_BACKEND  (native built: $NATIVE_BUILT)"
+echo "  Backend    : $CURRENT_BACKEND  (ainl_native ready: $NATIVE_READY)"
 echo "  Venv       : $PLUGIN_DIR/.venv"
 echo ""
-if [ "$NATIVE_BUILT" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
+if [ "$NATIVE_READY" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
     echo "  To switch to native: bash scripts/migrate_python_to_native.sh"
     echo ""
 fi

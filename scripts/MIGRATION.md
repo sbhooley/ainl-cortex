@@ -132,7 +132,7 @@ file stay in sync (or run with `--force` to skip the gate).
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ERROR: ainl_native module not built` | `.venv/bin/maturin develop` was never run, or Rust isn't installed. | `bash setup.sh --auto-install-rust` then re-run the wrapper. |
+| `ERROR: ainl_native is not installed` | Setup did not install the PyPI wheel (unusual platform) and no Rust build. | `bash scripts/install_ainl_native.sh` or re-run `bash setup.sh`. |
 | Phase 3 reports `errors > 0` | Schema drift between Python and Rust types (rare; usually a hand-edited DB). | Inspect the per-project `errors` array in `logs/migration_latest.json`; the offending node id + node_type point you at the row. Fix the source DB and re-run, or skip just that project with `--project-hash <other_id>`. |
 | Phase 4 reports `mismatches` | A field round-trip lost data (most often a Goal whose `plugin_data` schema changed). | The verifier's per-mismatch entry shows `python` vs `rust` values — usually a missing back-compat branch in `_ainl_to_node`. Don't flip the config; report the mismatch (or roll back). |
 | `ERROR: migration report is stale` | More than 5 minutes elapsed between phase 3 and phase 5. | Re-run phase 3; the freshness window is intentional so a long-stale report can't be replayed days later. |

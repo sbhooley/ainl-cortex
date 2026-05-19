@@ -146,7 +146,7 @@ bash setup.sh
 - Registers the plugin in `~/.claude/settings.json` under `enabledPlugins`
 - Registers it in the local marketplace at `~/.claude/ainl-local-marketplace/`
 - **Default:** Python backend (`store_backend = "python"`). Setup never auto-installs Rust unless `--auto-install-rust` is passed (or you answer `1` to the interactive prompt). When stdin is not a tty (CI, agent invocation) the default is python-only — no surprise rustup.
-- If Rust is already on `PATH`, builds `ainl_native` so the optional native backend is ready, but does **not** flip `store_backend`.
+- Installs `ainl_native` from PyPI (platform wheels; no Rust required on macOS/Linux/Windows). Falls back to `maturin develop` only if the wheel is unavailable and Rust is installed. Does **not** flip `store_backend`.
 - Runs a smoke test to confirm the MCP server starts correctly
 
 To switch to the native backend after install, run `bash scripts/migrate_python_to_native.sh` — see [scripts/MIGRATION.md](scripts/MIGRATION.md).
@@ -177,7 +177,7 @@ After the user restarts, confirm the install worked by checking:
 | No `a2a_*` tools visible | A2A is opt-in. Set `"a2a": {"enabled": true}` in `config.json` and restart Claude Code (the daemon must also be reachable). |
 | No banner at session start | Check `~/.claude/settings.json` has `"ainl-cortex@ainl-local": true` under `enabledPlugins`; if missing, re-run `bash setup.sh` |
 | Banner shows `MCP stack: FAIL` | Run `cd ~/.claude/plugins/ainl-cortex && bash setup.sh` again — setup re-installs deps |
-| `ainl_native (Rust bindings): build failed` | Safe to ignore — plugin falls back to the Python backend automatically. To enable native backend: install Rust 1.75+ from [rustup.rs](https://rustup.rs) then restart Claude Code. |
+| `ainl_native (Rust bindings): build failed` | Re-run `bash scripts/install_ainl_native.sh` or `bash setup.sh`. PyPI wheels cover macOS/Linux/Windows; Rust is only needed on unsupported platforms. |
 
 ### What activates automatically (no config needed)
 
@@ -445,7 +445,7 @@ That's it. All `ainl-*` crates (`ainl-memory`, `ainl-trajectory`, `ainl-persona`
 
 #### Auto-Build at SessionStart
 
-When `store_backend = "native"`, the plugin auto-builds `ainl_native` at every SessionStart via `_ensure_ainl_native()` in `hooks/startup.py`. This runs:
+When `store_backend = "native"`, SessionStart ensures `ainl_native` is installed via `_ensure_ainl_native()` in `hooks/startup.py` (`pip install` from PyPI first, then maturin if needed). After `setup.sh`, this is usually already satisfied. This runs:
 
 ```bash
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release \
