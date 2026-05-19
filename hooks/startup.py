@@ -22,7 +22,7 @@ if _mcp_dir not in sys.path:
     sys.path.insert(0, _mcp_dir)
 
 from shared.logger import get_logger
-from shared.project_id import get_project_id, get_project_info, get_git_branch, LEGACY_GLOBAL_PROJECT_ID
+from shared.project_id import get_project_id, get_project_info, LEGACY_GLOBAL_PROJECT_ID
 from shared.a2a_inbox import read_self_inbox, clear_self_inbox
 from notifications import poll as _poll_notifications, format_banner as _format_notif_banner
 
@@ -35,7 +35,7 @@ except ImportError:
 
 logger = get_logger("startup")
 
-TOOL_COUNT_MEMORY = 21  # 7 core + session_history + evolve_persona + expand_node + 4 goals + 5 autonomous + executions audit + begin_task_execution + approve_task
+TOOL_COUNT_MEMORY = 12  # 7 core + 4 goal management + memory_expand_node
 TOOL_COUNT_AINL = 12
 TOOL_COUNT_A2A = 7
 EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL + TOOL_COUNT_A2A
@@ -190,33 +190,54 @@ def append_venv_to_envfile(plugin_root: Path) -> str:
         return f"could not write CLAUDE_ENV_FILE: {e}"
 
 
-def _ensure_ainl_native(plugin_root: Path) -> str:
-    """
-    Ensure ainl_native Rust extension is built and installed.
-    Returns a short status string for the banner.
-    """
+def _ainl_native_installed_so() -> Optional[Path]:
+    """Return path to the compiled extension module, if importable."""
     try:
         import importlib.util
+
         spec = importlib.util.find_spec("ainl_native")
-        if spec is not None:
-            return "ok (already installed)"
+        if spec is None or not spec.origin:
+            return None
+        pkg = Path(spec.origin).resolve().parent
+        for name in ("ainl_native.abi3.so", "ainl_native.so", "ainl_native.pyd"):
+            candidate = pkg / name
+            if candidate.is_file():
+                return candidate
     except Exception:
-        pass
+        return None
+    return None
 
+
+def _ainl_native_sources_stale(plugin_root: Path, installed_so: Path) -> bool:
+    """True when Rust sources are newer than the installed extension binary."""
     native_dir = plugin_root / "ainl_native"
-    if not native_dir.is_dir():
-        return "skipped (ainl_native/ directory not found)"
+    try:
+        built_mtime = installed_so.stat().st_mtime
+    except OSError:
+        return True
+    watch = [native_dir / "Cargo.toml", native_dir / "Cargo.lock"]
+    watch.extend((native_dir / "src").glob("**/*.rs"))
+    for path in watch:
+        if not path.is_file():
+            continue
+        try:
+            if path.stat().st_mtime > built_mtime:
+                return True
+        except OSError:
+            continue
+    return False
 
-    py = _venv_python(plugin_root)
-    if py is None:
-        return "skipped (no venv python)"
 
+def _run_maturin_develop(plugin_root: Path, native_dir: Path, py: Path) -> str:
     maturin = plugin_root / ".venv" / "bin" / "maturin"
     if not maturin.is_file():
         try:
-            r = subprocess.run(
+            subprocess.run(
                 [str(py), "-m", "pip", "install", "maturin", "--quiet"],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
             )
         except Exception as e:
             return f"could not install maturin: {e}"
@@ -233,139 +254,39 @@ def _ensure_ainl_native(plugin_root: Path) -> str:
         )
         if r.returncode == 0:
             return "built + installed"
-        else:
-            err = (r.stderr or r.stdout or "").strip()[-200:]
-            return f"build failed: {err}"
+        err = (r.stderr or r.stdout or "").strip()[-200:]
+        return f"build failed: {err}"
     except subprocess.TimeoutExpired:
         return "build timed out (>5 min)"
     except Exception as e:
         return f"build error: {e}"
 
 
-def _inject_autonomous_blocks(
-    system_blocks: list,
-    store,
-    project_id: str,
-    cwd: str,
-    at_cfg: dict,
-) -> None:
+def _ensure_ainl_native(plugin_root: Path) -> str:
     """
-    Query the task store and append DUE / PENDING-APPROVAL blocks to system_blocks.
-    Extracted from main() so it can be called and tested independently.
+    Ensure ainl_native Rust extension is built and installed.
+    Rebuilds when Rust sources are newer than the installed .so (git pull / plugin update).
+    Returns a short status string for the banner.
     """
-    import json as _inj_json
-    lookahead_s = at_cfg.get("due_tasks_lookahead_minutes", 60) * 60
-    all_active = store.list_autonomous_tasks(project_id=project_id, status='active', due_only=False)
+    native_dir = plugin_root / "ainl_native"
+    if not native_dir.is_dir():
+        return "skipped (ainl_native/ directory not found)"
 
-    due_tasks = []
-    pending_approval = []
-    for t in all_active:
-        # Gap 3: path_scope filter — skip tasks whose cwd restriction doesn't match
-        scope_raw = t.get('path_scope')
-        if scope_raw:
-            try:
-                scope_paths = _inj_json.loads(scope_raw) if isinstance(scope_raw, str) else scope_raw
-                # Anchor at path separator to avoid false prefix matches
-                # (e.g. /home/user/myproject-other should NOT match /home/user/myproject)
-                if not any(cwd == sp or cwd.startswith(sp.rstrip('/') + '/') for sp in scope_paths):
-                    continue
-            except Exception:
-                pass
-        tier = t.get('risk_tier', 'read_only')
-        approved = t.get('approved_by')
-        nra = t.get('next_run_at')
-        is_due = nra is not None and nra <= time.time() + lookahead_s
-        if tier != 'read_only' and not approved:
-            pending_approval.append(t)
-        elif is_due:
-            due_tasks.append(t)
+    py = _venv_python(plugin_root)
+    if py is None:
+        return "skipped (no venv python)"
 
-    def _fmt_due(ts):
-        if ts is None:
-            return "now"
-        delta = ts - time.time()
-        if delta <= 60:
-            return "OVERDUE" if delta < 0 else "now"
-        if delta < 3600:
-            return f"in {int(delta / 60)}m"
-        return f"in {int(delta / 3600)}h {int((delta % 3600) / 60)}m"
+    installed_so = _ainl_native_installed_so()
+    if installed_so is not None and not _ainl_native_sources_stale(plugin_root, installed_so):
+        return "ok (already installed)"
 
-    def _fmt_actions(raw):
-        if raw is None:
-            return ""
-        try:
-            acts = _inj_json.loads(raw) if isinstance(raw, str) else raw
-            return f"  → authorized: {', '.join(acts)}" if acts else ""
-        except Exception:
-            return ""
+    if installed_so is not None:
+        status = _run_maturin_develop(plugin_root, native_dir, py)
+        if status == "built + installed":
+            return "rebuilt (sources newer than extension)"
+        return status
 
-    if due_tasks:
-        sorted_due = sorted(
-            due_tasks,
-            key=lambda x: (-x.get('priority', 5), x.get('next_run_at') or 0),
-        )[:10]
-        task_lines = []
-        for t in sorted_due:
-            tier = t.get('risk_tier', 'read_only')
-            line = (
-                f"  [{t.get('priority', 5):2d}] {t['description']}"
-                f"  [{t.get('trigger_type', 'scheduled')}|{tier}]"
-                f"  {_fmt_due(t.get('next_run_at'))}"
-                f"  id={t['task_id']}"
-            )
-            acts = _fmt_actions(t.get('allowed_actions'))
-            if acts:
-                line += f"\n{acts}"
-            task_lines.append(line)
-        system_blocks.append(
-            "\n━━━ AUTONOMOUS TASKS DUE ━━━\n"
-            + "\n".join(task_lines) + "\n\n"
-            + "Before executing each task call memory_begin_task_execution(task_id, project_id) "
-            "to activate the scope lock, then execute in priority order, "
-            "then call memory_complete_task(task_id=…, note=…).\n"
-            "━━━ END AUTONOMOUS TASKS ━━━\n"
-        )
-        logger.info("Injected %d autonomous task(s) due in startup", len(due_tasks))
-
-    if pending_approval:
-        appr_lines = []
-        for t in pending_approval[:5]:
-            appr_lines.append(
-                f"  [{t.get('priority', 5):2d}] {t['description']}"
-                f"  [risk={t.get('risk_tier','?')}]"
-                f"  id={t['task_id']}"
-            )
-        system_blocks.append(
-            "\n━━━ TASKS AWAITING YOUR APPROVAL ━━━\n"
-            + "\n".join(appr_lines) + "\n\n"
-            + "These tasks have risk_tier != 'read_only' and require explicit user approval "
-            "before they will fire. Present them to the user and call "
-            "memory_approve_task(task_id) if they consent.\n"
-            "━━━ END PENDING APPROVAL ━━━\n"
-        )
-        logger.info("Flagged %d task(s) awaiting approval", len(pending_approval))
-
-
-def _clear_stale_scope_lock(root: Path) -> None:
-    """Clear active_task.json left by a crashed or orphaned session.
-
-    The file is written by memory_begin_task_execution and deleted by
-    memory_complete_task.  If a session exits without calling complete_task
-    (crash, SIGKILL, etc.) the file persists, causing every subsequent
-    tool call to return tool_blocked_by_task_scope until manually cleared.
-
-    Session start is the safe moment to release the lock: the session that
-    wrote it is gone by definition.  Multi-window edge case: if two Claude
-    Code windows share the same plugin root, starting the second window
-    releases the first window's lock — acceptable, as the lock was not
-    designed for cross-process isolation."""
-    try:
-        at_file = root / "logs" / "active_task.json"
-        if at_file.exists():
-            at_file.unlink()
-            logger.info("Cleared stale active_task.json scope lock at session start")
-    except Exception:
-        pass
+    return _run_maturin_develop(plugin_root, native_dir, py)
 
 
 def main():
@@ -375,8 +296,6 @@ def main():
         cwd = _hook_cwd()
         logger.info("SessionStart: plugin=%s cwd=%s", root, cwd)
 
-        _clear_stale_scope_lock(root)
-
         status = get_compression_status()
         ainl = check_ainl_tools()
         db_path = get_db_path(cwd)
@@ -384,23 +303,6 @@ def main():
             db_s = warm_database(db_path)
         except OSError as e:
             db_s = f"error: {e}"
-
-        # Generate and persist a session UUID for audit delta tracking
-        try:
-            from shared.session_delta import write_session_id
-            _project_id_for_sid = get_project_id(cwd)
-            write_session_id(_project_id_for_sid, root)
-        except Exception:
-            pass
-
-        # Persist the current session's project_id so hooks without cwd in
-        # their payload (PreCompact, PostCompact) can find it.
-        try:
-            _cid_file = root / "inbox" / "current_project_id.txt"
-            _cid_file.parent.mkdir(parents=True, exist_ok=True)
-            _cid_file.write_text(get_project_id(cwd))
-        except Exception:
-            pass
 
         mcp_ok, mcp_detail = verify_mcp_imports(root)
         # Only attempt native build when config explicitly requests it
@@ -496,11 +398,9 @@ def main():
         # buckets and which legacy bucket the read-fallback chain still queries.
         try:
             _info = get_project_info(cwd)
-            _branch = get_git_branch(cwd)
-            _branch_str = f"  branch: {_branch}" if _branch else ""
             _project_line = (
                 f"  • Project: {_info['project_id']}  ({_info['isolation_mode']}, "
-                f"git={'yes' if _info['git_toplevel'] else 'no'}{_branch_str})  cwd: {cwd}\n"
+                f"git={'yes' if _info['git_toplevel'] else 'no'})  cwd: {cwd}\n"
                 f"  • Legacy fallback: {LEGACY_GLOBAL_PROJECT_ID} "
                 f"(read-only until backfill via scripts/repartition_by_repo.py)\n"
             )
@@ -606,34 +506,6 @@ def main():
         notif_banner = _format_notif_banner(new_notifs, update_msgs)
         if notif_banner:
             system_blocks.append(notif_banner)
-
-        # ── Compaction recovery brief (Python backend only) ───────────────────
-        # Native backend has its own anchored summary (richer); only inject the
-        # delta-based brief when Rust is not available.
-        if not _NATIVE_OK:
-            try:
-                from shared.session_delta import build_compaction_brief
-                _comp_brief = build_compaction_brief(root)
-                if _comp_brief:
-                    system_blocks.append(
-                        "\n━━━ COMPACTION RECOVERY — RECENT SESSION WRITES ━━━\n"
-                        + _comp_brief
-                        + "\n━━━ END RECOVERY ━━━\n"
-                    )
-            except Exception as _cb_e:
-                logger.debug("Compaction recovery brief failed (non-fatal): %s", _cb_e)
-
-        # ── Autonomous tasks due ──────────────────────────────────────────────
-        try:
-            import json as _at_json
-            _at_cfg = _at_json.loads((root / "config.json").read_text()).get("autonomous_mode", {})
-            if _at_cfg.get("enabled", False) and _at_cfg.get("inject_due_tasks_in_startup", True):
-                from graph_store import get_graph_store as _get_at_gs
-                _at_project_id = get_project_id(cwd)
-                _at_store = _get_at_gs(db_path)
-                _inject_autonomous_blocks(system_blocks, _at_store, _at_project_id, str(cwd), _at_cfg)
-        except Exception as _at_e:
-            logger.debug("Autonomous task injection failed (non-fatal): %s", _at_e)
 
         # ── Anchored summary + freshness gate (prior-session context) ─────────
         if _NATIVE_OK:
