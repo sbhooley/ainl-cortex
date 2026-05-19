@@ -328,6 +328,66 @@ class TestStrictNativeMode:
         assert len(edges) == 1
         assert edges[0].from_node == ep_id
 
+    def test_link_resolutions_writes_resolves_edge_on_native_db(self, tmp_path):
+        """RESOLVES must land on native when episode_node_id points at Rust DB."""
+        stop_mod = _import_stop_with_strict_native()
+        try:
+            import native_graph_store as ngs
+        except ImportError:
+            pytest.skip("ainl_native not built")
+        if not ngs._NATIVE_OK:
+            pytest.skip("ainl_native not built")
+
+        from node_types import NodeType, GraphNode, EdgeType, create_failure_node
+        import time
+
+        native_db = tmp_path / "ainl_native.db"
+        sidecar_db = tmp_path / "ainl_memory.db"
+        native = ngs.NativeGraphStore(native_db)
+        sidecar_path = sidecar_db.parent
+        sidecar_path.mkdir(parents=True, exist_ok=True)
+
+        ep_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        turn_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        now = int(time.time())
+        native.write_node(GraphNode(
+            id=ep_id,
+            node_type=NodeType.EPISODE,
+            project_id="proj_res_native",
+            agent_id="claude-code",
+            created_at=now,
+            updated_at=now,
+            confidence=1.0,
+            data={
+                "turn_id": turn_id,
+                "files_touched": ["/tmp/x.py"],
+                "tool_calls": ["bash"],
+            },
+        ))
+        fail = create_failure_node(
+            "proj_res_native", "tool_error", "bash", "err", file="/tmp/x.py"
+        )
+        native.write_node(fail)
+
+        episode_data = {
+            "turn_id": "wrong-turn",
+            "outcome": "success",
+            "files_touched": ["/tmp/x.py"],
+            "tool_calls": ["bash"],
+            "task_description": "fixed bash error",
+            "episode_node_id": ep_id,
+        }
+        linked = stop_mod.link_resolutions(
+            native,
+            "proj_res_native",
+            episode_data,
+            episode_store=native,
+        )
+        assert linked == 1
+        edges = native.get_edges_to(fail.id, EdgeType.RESOLVES)
+        assert len(edges) == 1
+        assert edges[0].from_node == ep_id
+
     def test_build_episode_data_only_does_not_persist(self):
         stop_mod = _import_stop_with_strict_native()
         session_data = {

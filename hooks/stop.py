@@ -288,7 +288,11 @@ def link_resolutions(
                     project_id=project_id,
                     metadata={"matched_on": "file" if file_match else "tool"}
                 )
-                store.write_edge(edge)
+                # Strict-native: episode lives in ainl_native.db; sidecar SQLite
+                # FK rejects a native from_node. Persist RESOLVES on native when
+                # episode_store is the native facade (failure mirrored there too).
+                edge_store = episode_store if episode_store is not None else store
+                edge_store.write_edge(edge)
         except Exception as edge_err:
             logger.debug(f"Could not write RESOLVES edge: {edge_err}")
 
@@ -764,12 +768,14 @@ def _strict_native_sidecar_after_native(
     native_result: Optional[dict],
 ) -> None:
     """Sidecar failures/goals/resolution links after Rust finalize_session."""
+    ep_read = _open_native_episode_store(project_id)
     try:
-        write_failures(sidecar_store, project_id, session_data)
+        # NativeGraphStore.write_node mirrors FAILURE to sidecar + native so
+        # RESOLVES edges (native episode → failure) satisfy FK on ainl_native.db.
+        failure_store = ep_read if ep_read is not None else sidecar_store
+        write_failures(failure_store, project_id, session_data)
     except Exception as e:
         logger.warning(f"Failure nodes write failed (strict-native sidecar): {e}")
-
-    ep_read = _open_native_episode_store(project_id)
     enriched = _enrich_episode_data_from_native(
         episode_data, native_result, read_store=ep_read,
     )
