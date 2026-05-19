@@ -77,6 +77,38 @@ PYEOF
 then ok "memory_store_failure callable in package mode"
 else fail "memory_store_failure failed (node_types / packaging) — git pull + restart Claude Code"; fi
 
+# ── [0c] Package alias without mcp_server/ on PYTHONPATH (Claude -m launch) ───
+echo "[0c] node_types alias (plugin root only on sys.path)"
+if "$PYTHON" - <<PYEOF 2>/dev/null
+import sys, asyncio, logging, tempfile
+from pathlib import Path
+logging.disable(logging.CRITICAL)
+ROOT = Path('$PLUGIN_DIR')
+# Simulate python -m mcp_server.server: package root on path, not mcp_server/ itself
+sys.path.insert(0, str(ROOT))
+if str(ROOT / 'mcp_server') in sys.path:
+    sys.path.remove(str(ROOT / 'mcp_server'))
+import mcp_server.server as srv
+from mcp_server.graph_store import SQLiteGraphStore
+from node_types import failure_content_id  # bare import must work via __init__ alias
+
+async def _run():
+    db = Path(tempfile.mktemp(suffix='.db'))
+    srv.memory_server.store = SQLiteGraphStore(db)
+    return await srv.memory_store_failure(
+        project_id='smoke-alias-$TEST_PROJECT',
+        error_type='smoke',
+        tool='test',
+        error_message='node_types sys.modules alias check',
+    )
+
+r = asyncio.run(_run())
+assert 'node_id' in r and 'error' not in r, r
+print('ok: bare node_types + memory_store_failure')
+PYEOF
+then ok "node_types sys.modules alias (package-mode)"
+else fail "node_types alias missing — update mcp_server/__init__.py"; fi
+
 
 # ── [1] Episode storage & recall ──────────────────────────────────────────────
 echo "[1] Episode storage & recall"

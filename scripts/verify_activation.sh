@@ -130,6 +130,39 @@ else
   fail "Server import failed — check logs: $PLUGIN_DIR/logs/mcp_server.log"
 fi
 
+# 11. Live memory_store_failure (same path as Claude Code MCP)
+echo "[11] memory_store_failure (mcp_launch env)"
+if (
+  cd "$PLUGIN_DIR"
+  export PYTHONPATH="${PLUGIN_DIR}/mcp_server:${PLUGIN_DIR}"
+  "$PYTHON" - <<'PY' 2>/dev/null
+import asyncio, logging, sys, tempfile
+from pathlib import Path
+logging.disable(logging.CRITICAL)
+import mcp_server.server as srv
+from mcp_server.graph_store import SQLiteGraphStore
+from node_types import failure_content_id  # noqa: F401
+
+async def main():
+    db = Path(tempfile.mktemp(suffix=".db"))
+    srv.memory_server.store = SQLiteGraphStore(db)
+    r = await srv.memory_store_failure(
+        project_id="verify-activation",
+        error_type="verify",
+        tool="test",
+        error_message="activation check",
+    )
+    assert "node_id" in r and "error" not in r, r
+
+asyncio.run(main())
+print("ok")
+PY
+); then
+  ok "memory_store_failure works under mcp_launch PYTHONPATH"
+else
+  fail "memory_store_failure failed — git pull, bash setup.sh, restart Claude Code"
+fi
+
 # Summary
 echo ""
 echo "  Passed: $PASS / $((PASS + FAIL))"

@@ -17,7 +17,7 @@ done
 if [[ -d .venv/lib ]]; then
   for d in .venv/lib/python*; do
     if [[ -d "$d/site-packages" ]]; then
-      export PYTHONPATH="${ROOT}:${d}/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
+      export PYTHONPATH="${ROOT}/mcp_server:${ROOT}:${d}/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
     fi
   done
 fi
