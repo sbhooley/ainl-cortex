@@ -33,6 +33,17 @@ PLUGIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 SETTINGS="$HOME/.claude/settings.json"
 MARKETPLACE="$HOME/.claude/ainl-local-marketplace"
 
+# Do not register disposable /tmp verification clones as the user's marketplace plugin.
+case "$PLUGIN_DIR" in
+  /tmp/*|/private/tmp/*)
+    echo "ERROR: setup.sh was run from a temp directory:" >&2
+    echo "  $PLUGIN_DIR" >&2
+    echo "  That would repoint $MARKETPLACE/plugins/ainl-cortex at a throwaway clone." >&2
+    echo "  Run instead: cd ~/.claude/plugins/ainl-cortex && bash setup.sh" >&2
+    exit 1
+    ;;
+esac
+
 # ── Argument parsing ───────────────────────────────────────────────────────
 INSTALL_MODE=""   # one of: python_only, auto_rust, interactive (or empty)
 SHOW_HELP=false
