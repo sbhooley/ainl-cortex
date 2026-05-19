@@ -387,6 +387,13 @@ class TestStrictNativeMode:
         edges = native.get_edges_to(fail.id, EdgeType.RESOLVES)
         assert len(edges) == 1
         assert edges[0].from_node == ep_id
+        unresolved = native.get_unresolved_failures("proj_res_native")
+        assert not any(n.id == fail.id for n in unresolved)
+        from graph_store import SQLiteGraphStore
+        sidecar = SQLiteGraphStore(sidecar_db)
+        sidecar_fail = sidecar.get_node(fail.id)
+        assert sidecar_fail is not None
+        assert sidecar_fail.data.get("resolved_at")
 
     def test_build_episode_data_only_does_not_persist(self):
         stop_mod = _import_stop_with_strict_native()

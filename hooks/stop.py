@@ -240,8 +240,9 @@ def link_resolutions(
     episode_task = episode_data.get("task_description", "")
     now = int(_time.time())
     ep_store = episode_store if episode_store is not None else store
+    patch_store = episode_store if episode_store is not None else store
 
-    unresolved = store.get_unresolved_failures(project_id)
+    unresolved = ep_store.get_unresolved_failures(project_id)
     linked = 0
 
     for failure in unresolved:
@@ -254,8 +255,8 @@ def link_resolutions(
         if not (file_match or tool_match):
             continue
 
-        # Update the failure node with resolution info
-        store.update_node_data(failure.id, {
+        # Update the failure node with resolution info (native facade mirrors to sidecar)
+        patch_store.update_node_data(failure.id, {
             "resolution": f"Resolved by: {episode_task[:150]}",
             "resolution_turn_id": episode_id,
             "resolved_at": now,
