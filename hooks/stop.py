@@ -262,14 +262,23 @@ def link_resolutions(
         })
 
         # Write RESOLVES edge (episode → failure) — need the episode node ID
-        # The episode was just written; query it by turn_id
         try:
-            recent = ep_store.query_episodes_since(now - 10, limit=5, project_id=project_id)
-            ep_node_id = None
-            for ep in recent:
-                if ep.data.get("turn_id") == episode_id:
-                    ep_node_id = ep.id
-                    break
+            ep_node_id = episode_data.get("episode_node_id")
+            if not ep_node_id:
+                recent = ep_store.query_episodes_since(
+                    now - 300, limit=10, project_id=project_id
+                )
+                for ep in recent:
+                    if episode_id and ep.data.get("turn_id") == episode_id:
+                        ep_node_id = ep.id
+                        break
+                if not ep_node_id and recent:
+                    for ep in recent:
+                        ep_files = set(ep.data.get("files_touched") or [])
+                        ep_tools = set(ep.data.get("tool_calls") or [])
+                        if (episode_files & ep_files) or (episode_tools & ep_tools):
+                            ep_node_id = ep.id
+                            break
 
             if ep_node_id:
                 edge = create_edge(
@@ -620,7 +629,12 @@ def write_patterns(store, project_id: str) -> int:
     return count
 
 
-def write_goals(store, project_id: str, episode_data: Optional[dict] = None) -> int:
+def write_goals(
+    store,
+    project_id: str,
+    episode_data: Optional[dict] = None,
+    read_store=None,
+) -> int:
     """
     Update active goals from the latest episode and, at session end,
     auto-infer new goals from episode clusters if none exist yet.
@@ -634,6 +648,7 @@ def write_goals(store, project_id: str, episode_data: Optional[dict] = None) -> 
         sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
         from goal_tracker import GoalTracker
 
+    read_store = read_store or store
     tracker = GoalTracker(store, project_id)
     updated = 0
 
@@ -646,9 +661,11 @@ def write_goals(store, project_id: str, episode_data: Optional[dict] = None) -> 
 
     # If there are no active goals at all, try to infer some from recent episodes
     try:
-        active = store.query_goals(project_id, status="active", limit=1)
+        active = read_store.query_goals(project_id, status="active", limit=1)
         if not active:
-            recent_eps = store.query_episodes_since(since=0, limit=20, project_id=project_id)
+            recent_eps = read_store.query_episodes_since(
+                since=0, limit=20, project_id=project_id
+            )
             if recent_eps:
                 new_ids = tracker.infer_goals_from_episodes(recent_eps)
                 updated += len(new_ids)
@@ -667,6 +684,32 @@ def _open_python_sidecar_store(project_id: str):
     db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return SQLiteGraphStore(db_path)
+
+
+
+def _strict_native_link_after_finalize(
+    sidecar_store,
+    project_id: str,
+    episode_data: dict,
+    native_result: Optional[dict],
+) -> None:
+    """Link sidecar failures to the Rust episode after finalize_session."""
+    if not (sidecar_store and episode_data and episode_data.get("outcome") == "success"):
+        return
+    enriched = dict(episode_data)
+    if native_result and native_result.get("episode_id"):
+        enriched["episode_node_id"] = native_result["episode_id"]
+    try:
+        ep_store = _open_native_episode_store(project_id)
+        link_resolutions(
+            sidecar_store,
+            project_id,
+            enriched,
+            episode_store=ep_store,
+        )
+    except Exception as e:
+        logger.warning(f"Resolution linking failed (strict-native): {e}")
+
 
 
 def _build_episode_data_only(session_data: dict) -> dict:
@@ -748,27 +791,20 @@ def flush_pending_captures(project_id: str) -> int:
                 except Exception as e:
                     logger.warning(f"Python sidecar open failed (per-prompt flush): {e}")
                 if sidecar_store:
+                    _ep_read = _open_native_episode_store(project_id)
                     try:
                         write_failures(sidecar_store, project_id, session_data)
                     except Exception as e:
                         logger.warning(f"Failure write failed (strict-native sidecar): {e}")
                     try:
-                        write_goals(sidecar_store, project_id, episode_data)
+                        write_goals(
+                            sidecar_store,
+                            project_id,
+                            episode_data,
+                            read_store=_ep_read,
+                        )
                     except Exception as e:
                         logger.warning(f"Goal write failed (strict-native sidecar): {e}")
-                    if episode_data and episode_data.get("outcome") == "success":
-                        try:
-                            _ep_store = _open_native_episode_store(project_id)
-                            link_resolutions(
-                                sidecar_store,
-                                project_id,
-                                episode_data,
-                                episode_store=_ep_store,
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"Resolution linking failed (strict-native per-prompt flush): {e}"
-                            )
             else:
                 store, episode_data = write_episode(project_id, session_data)
                 write_failures(store, project_id, session_data)
@@ -782,8 +818,13 @@ def flush_pending_captures(project_id: str) -> int:
 
             # Native finalize: source of truth in strict mode, parallel learning
             # side-channel in hybrid mode.
+            native_result = None
             if _NATIVE_OK:
-                _native_finalize_session(project_id, session_data, count)
+                native_result = _native_finalize_session(project_id, session_data, count)
+            if _STRICT_NATIVE and sidecar_store and episode_data:
+                _strict_native_link_after_finalize(
+                    sidecar_store, project_id, episode_data, native_result
+                )
 
             logger.info(
                 f"Per-prompt flush ({'strict-native' if _STRICT_NATIVE else 'python'}): "
@@ -841,6 +882,7 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             logger.warning(f"Python sidecar open failed: {e}")
 
         if sidecar_store:
+            _ep_read = _open_native_episode_store(project_id)
             if _wrap_delta:
                 _wrap_delta(sidecar_store, delta_entries)
             try:
@@ -848,20 +890,14 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             except Exception as e:
                 logger.warning(f"Failure nodes write failed (strict-native sidecar): {e}")
             try:
-                write_goals(sidecar_store, project_id, episode_data)
+                write_goals(
+                    sidecar_store,
+                    project_id,
+                    episode_data,
+                    read_store=_ep_read,
+                )
             except Exception as e:
                 logger.warning(f"Goal write failed (strict-native sidecar): {e}")
-            if episode_data and episode_data.get("outcome") == "success":
-                try:
-                    _ep_store = _open_native_episode_store(project_id)
-                    link_resolutions(
-                        sidecar_store,
-                        project_id,
-                        episode_data,
-                        episode_store=_ep_store,
-                    )
-                except Exception as e:
-                    logger.warning(f"Resolution linking failed (strict-native sidecar): {e}")
     else:
         # Python or hybrid: full Python pipeline as before.
         store = None
@@ -986,16 +1022,22 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
     # Consolidated native finalization: trajectory + persona + procedure
     # learning + anchored summary. In strict-native mode this is the source
     # of truth; in hybrid mode it runs in parallel as a learning side-channel.
+    native_result = None
     if _NATIVE_OK:
-        result = _native_finalize_session(project_id, session_data, capture_count)
-        if result:
+        native_result = _native_finalize_session(project_id, session_data, capture_count)
+        if native_result:
             mode_label = "strict" if _STRICT_NATIVE else "hybrid"
             logger.info(
-                f"Native finalize_session ({mode_label}): episode={result.get('episode_id', '?')[:8]}, "
-                f"traj_steps={result.get('trajectory_steps', 0)}, "
-                f"procedures={result.get('procedures_promoted', 0)}, "
-                f"summary={result.get('summary_saved', False)}"
+                f"Native finalize_session ({mode_label}): episode={native_result.get('episode_id', '?')[:8]}, "
+                f"traj_steps={native_result.get('trajectory_steps', 0)}, "
+                f"procedures={native_result.get('procedures_promoted', 0)}, "
+                f"summary={native_result.get('summary_saved', False)}"
             )
+
+    if _STRICT_NATIVE and sidecar_store and episode_data:
+        _strict_native_link_after_finalize(
+            sidecar_store, project_id, episode_data, native_result
+        )
 
     # Append session delta record (non-fatal — must never break session close)
     try:

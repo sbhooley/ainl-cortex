@@ -243,6 +243,45 @@ class TestStrictNativeMode:
         assert updated.data.get("resolved_at")
         assert updated.data.get("resolution")
 
+    def test_link_resolutions_uses_episode_node_id_without_lookup(self, tmp_path):
+        """Strict-native passes Rust episode_id so RESOLVES edges do not depend on turn_id."""
+        stop_mod = _import_stop_with_strict_native()
+        from graph_store import SQLiteGraphStore
+        from node_types import create_failure_node, NodeType, GraphNode, EdgeType
+        import time
+
+        store = SQLiteGraphStore(tmp_path / "ainl_memory.db")
+        ep_id = "native-episode-node-id"
+        now = int(time.time())
+        store.write_node(GraphNode(
+            id=ep_id,
+            node_type=NodeType.EPISODE,
+            project_id="proj",
+            agent_id="claude-code",
+            created_at=now,
+            updated_at=now,
+            confidence=1.0,
+            data={"turn_id": "other-turn", "files_touched": [], "tool_calls": []},
+        ))
+        fail = create_failure_node(
+            "proj", "tool_error", "bash", "err", file="/tmp/x.py"
+        )
+        store.write_node(fail)
+
+        episode_data = {
+            "turn_id": "wrong-turn-id",
+            "outcome": "success",
+            "files_touched": ["/tmp/x.py"],
+            "tool_calls": ["bash"],
+            "task_description": "fixed it",
+            "episode_node_id": ep_id,
+        }
+        linked = stop_mod.link_resolutions(store, "proj", episode_data)
+        assert linked == 1
+        edges = store.get_edges_to(fail.id, EdgeType.RESOLVES)
+        assert len(edges) == 1
+        assert edges[0].from_node == ep_id
+
     def test_build_episode_data_only_does_not_persist(self):
         stop_mod = _import_stop_with_strict_native()
         session_data = {
