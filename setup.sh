@@ -328,6 +328,11 @@ print(f"    {settings_path} updated")
 PYEOF
 echo "  [ok] Plugin registered"
 
+# ── 8b. MCP import compat (node_types alias for package-mode launch) ───────
+if [[ -x "$PLUGIN_DIR/.venv/bin/python" ]]; then
+  "$PLUGIN_DIR/.venv/bin/python" "$PLUGIN_DIR/scripts/ensure_mcp_import_compat.py" 2>/dev/null || true
+fi
+
 # ── 9. Self-verification ───────────────────────────────────────────────────
 echo "  Running self-verification..."
 echo ""

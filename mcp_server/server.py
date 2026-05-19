@@ -97,38 +97,19 @@ except ImportError:
 
 
 
-def _assert_bare_node_types_importable() -> None:
-    """
-    Fail at MCP startup (not on first tool call) if bare ``from node_types import …`` breaks.
+from .import_compat import ensure_node_types_alias, heal_import_error, is_node_types_import_error
 
-    Claude Code uses ``python -m mcp_server.server``. Lazy imports in goal_tracker,
-    memory_reconcile, etc. expect ``node_types`` in sys.modules — registered in
-    ``mcp_server.__init__`` and re-checked here.
-    """
-    import sys
 
-    try:
-        from . import node_types as _pkg_node_types
-    except ImportError as exc:
-        raise RuntimeError(
-            "mcp_server package import failed; re-run setup.sh from the plugin directory."
-        ) from exc
-    sys.modules.setdefault("node_types", _pkg_node_types)
-    try:
-        from node_types import (  # noqa: F401
-            create_failure_node,
-            failure_content_id,
-            NodeType,
+def _bootstrap_import_compat() -> None:
+    """Heal bare ``node_types`` imports; never block MCP startup."""
+    if not ensure_node_types_alias():
+        logger.warning(
+            "node_types import alias not registered at startup; "
+            "will auto-heal on first tool call"
         )
-    except ImportError as exc:
-        raise RuntimeError(
-            "Bare 'node_types' import failed at MCP startup. "
-            "Run: cd ~/.claude/plugins/ainl-cortex && git pull && bash setup.sh, "
-            "then fully quit and restart Claude Code."
-        ) from exc
 
 
-_assert_bare_node_types_importable()
+_bootstrap_import_compat()
 
 
 class AINLGraphMemoryServer:
@@ -818,6 +799,7 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls"""
     try:
+        ensure_node_types_alias()
         logger.info(f"Tool called: {name}")
         try:
             import sys as _sys
@@ -1055,35 +1037,39 @@ async def memory_store_failure(
     **kwargs
 ) -> Dict[str, Any]:
     """Store a failure node"""
-    try:
-        # Auto-populate file from error_message when not explicitly provided
-        if not kwargs.get('file') and error_message:
-            import re as _re
-            _fp = _re.search(
-                r'[\w./\\-]+\.(?:py|ts|tsx|js|json|yaml|yml|sql|sh|ainl|lang|toml|cfg|txt)\b',
-                error_message,
-            )
-            if _fp:
-                kwargs['file'] = _fp.group(0)
+    for attempt in range(2):
+        try:
+            # Auto-populate file from error_message when not explicitly provided
+            if not kwargs.get('file') and error_message:
+                import re as _re
+                _fp = _re.search(
+                    r'[\w./\\-]+\.(?:py|ts|tsx|js|json|yaml|yml|sql|sh|ainl|lang|toml|cfg|txt)\b',
+                    error_message,
+                )
+                if _fp:
+                    kwargs['file'] = _fp.group(0)
 
-        node = create_failure_node(
-            project_id=project_id,
-            error_type=error_type,
-            tool=tool,
-            error_message=error_message,
-            **kwargs
-        )
-        # Deterministic ID deduplicates identical errors via INSERT OR REPLACE
-        node.id = failure_content_id(project_id, error_type, tool, error_message)
-        memory_server.store.write_node(node)
-        return {
-            "node_id": node.id,
-            "node_type": "failure",
-            "error_type": error_type
-        }
-    except Exception as e:
-        logger.error(f"Failed to store failure: {e}")
-        return {"error": str(e)}
+            node = create_failure_node(
+                project_id=project_id,
+                error_type=error_type,
+                tool=tool,
+                error_message=error_message,
+                **kwargs
+            )
+            # Deterministic ID deduplicates identical errors via INSERT OR REPLACE
+            node.id = failure_content_id(project_id, error_type, tool, error_message)
+            memory_server.store.write_node(node)
+            return {
+                "node_id": node.id,
+                "node_type": "failure",
+                "error_type": error_type
+            }
+        except Exception as e:
+            if attempt == 0 and is_node_types_import_error(e) and heal_import_error(e):
+                continue
+            logger.error(f"Failed to store failure: {e}")
+            return {"error": str(e)}
+    return {"error": "Failed to store failure after import heal retry"}
 
 
 async def memory_promote_pattern(

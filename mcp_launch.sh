@@ -7,8 +7,14 @@ ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")" && pwd)}"
 export PYTHONPATH="${ROOT}/mcp_server:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "$ROOT"
 
+_preflight_import_compat() {
+  local py="$1"
+  "$py" "$ROOT/scripts/ensure_mcp_import_compat.py" 2>/dev/null || true
+}
+
 for py in .venv/bin/python .venv/bin/python3 .venv/bin/python3.14 .venv/bin/python3.13 .venv/bin/python3.12 .venv/bin/python3.11; do
   if [[ -x "$py" ]]; then
+    _preflight_import_compat "$py"
     exec "$py" -m mcp_server.server
   fi
 done
@@ -23,6 +29,7 @@ if [[ -d .venv/lib ]]; then
 fi
 
 if command -v python3 >/dev/null 2>&1; then
+  _preflight_import_compat python3
   exec python3 -m mcp_server.server
 fi
 

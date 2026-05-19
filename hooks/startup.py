@@ -139,7 +139,12 @@ def verify_mcp_imports(plugin_root: Path) -> Tuple[bool, str]:
     Resolves a Python that can import mcp (venv binary preferred; else system
     python3 + venv site-packages — same strategy as mcp_launch.sh).
     """
-    pycheck = "import mcp.server; import mcp_server.graph_store; import mcp_server.server"
+    pycheck = (
+        "from mcp_server.import_compat import ensure_node_types_alias, verify_bare_node_types_import; "
+        "ensure_node_types_alias(); "
+        "import mcp.server; import mcp_server.graph_store; import mcp_server.server; "
+        "assert verify_bare_node_types_import()"
+    )
     tried: list[str] = []
     py = _venv_python(plugin_root)
     if py:
