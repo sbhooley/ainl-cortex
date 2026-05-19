@@ -23,6 +23,24 @@ def _output_compression_enabled(config: Any) -> bool:
         return False
 
 
+def _compression_flags_from_raw(raw: Dict[str, Any]) -> tuple[str, bool, bool, bool, bool, int]:
+    """Parse config.json compression block without PluginConfig (hook-safe)."""
+    comp = raw.get("compression") if isinstance(raw.get("compression"), dict) else {}
+    enabled = bool(comp.get("enabled", True))
+    mode_str = str(comp.get("mode", "balanced")).strip().lower()
+    if mode_str in ("off", "none", "disabled", "0", "false"):
+        return "OFF", False, False, False, False, int(comp.get("min_tokens_for_compression", 80))
+    mode = mode_str.upper()
+    if mode not in ("BALANCED", "AGGRESSIVE"):
+        mode = "BALANCED"
+    mem = enabled and bool(comp.get("compress_memory_context", True))
+    user = enabled and bool(comp.get("compress_user_prompt", True))
+    out_block = comp.get("output") if isinstance(comp.get("output"), dict) else {}
+    output = enabled and bool(out_block.get("enabled", comp.get("compress_output", False)))
+    min_tok = int(comp.get("min_tokens_for_compression", 80) or 80)
+    return mode, enabled, mem, user, output, min_tok
+
+
 def compression_status_from_config() -> Dict[str, Any]:
     """Compression mode plus what eco mode does and does not touch."""
     mode = "OFF"
@@ -33,7 +51,7 @@ def compression_status_from_config() -> Dict[str, Any]:
     min_tok = 80
 
     try:
-        from config import get_config
+        from mcp_server.config import get_config
 
         config = get_config()
         mode = config.get_compression_mode().name
@@ -43,8 +61,14 @@ def compression_status_from_config() -> Dict[str, Any]:
         output = _output_compression_enabled(config)
         min_tok = config.get_min_tokens_for_compression()
     except Exception:
-        mode, enabled = "AGGRESSIVE", True
-        mem, user = True, True
+        try:
+            from shared.config import read_config
+
+            mode, enabled, mem, user, output, min_tok = _compression_flags_from_raw(
+                read_config()
+            )
+        except Exception:
+            mode, enabled, mem, user, output, min_tok = "BALANCED", True, True, True, False, 80
 
     if not enabled or mode == "OFF":
         off = "  • Compression: off (graph recall and prompts sent verbatim)\n"
