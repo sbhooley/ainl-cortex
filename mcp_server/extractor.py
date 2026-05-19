@@ -10,10 +10,7 @@ from collections import Counter, defaultdict
 import re
 import logging
 
-try:
-    from .node_types import NodeType
-except ImportError:
-    from node_types import NodeType
+from .node_types import NodeType
 
 logger = logging.getLogger(__name__)
 

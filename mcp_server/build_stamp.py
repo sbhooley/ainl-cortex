@@ -69,6 +69,8 @@ def write_mcp_runtime_stamp(root: Optional[Path] = None) -> Optional[str]:
             json.dumps(payload, indent=2),
             encoding="utf-8",
         )
+        from .mcp_reload import clear_reload_request
+        clear_reload_request(root)
     except OSError:
         return None
     return sha
@@ -86,30 +88,10 @@ def read_mcp_runtime(root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
 
 
 def stale_mcp_message(root: Optional[Path] = None) -> Optional[str]:
-    """
-    If plugin code on disk is newer than the last MCP boot SHA, tell user to restart once.
-    """
-    root = root or plugin_root()
-    disk_sha = current_git_head(root)
-    if not disk_sha:
-        return None
-    runtime = read_mcp_runtime(root)
-    if not runtime:
-        return None
-    run_sha = runtime.get("git_sha")
-    if not run_sha or run_sha == disk_sha:
-        return None
-    short_disk = disk_sha[:8]
-    short_run = str(run_sha)[:8]
-    return (
-        f"Plugin updated on disk ({short_disk}) but MCP is still running build {short_run}. "
-        "Fully quit and restart Claude Code once so MCP reloads the new code."
-    )
+    from .mcp_reload import reload_nudge_message
+    return reload_nudge_message(root)
 
 
 def check_stale_mcp(root: Optional[Path] = None) -> Tuple[bool, str]:
-    """Returns (is_stale, message)."""
-    msg = stale_mcp_message(root)
-    if msg:
-        return True, msg
-    return False, ""
+    from .mcp_reload import check_reload_needed
+    return check_reload_needed(root)

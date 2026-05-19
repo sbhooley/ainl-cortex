@@ -18,6 +18,7 @@ import json
 import os
 import ssl
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -136,6 +137,14 @@ def _try_auto_update(plugin_root: Path, notif: Dict[str, Any], current_version: 
             timeout=30,
         )
         if r.returncode == 0:
+            try:
+                sys.path.insert(0, str(plugin_root))
+                from mcp_server.build_stamp import write_install_stamp
+                from mcp_server.mcp_reload import request_mcp_reload
+                write_install_stamp(plugin_root)
+                request_mcp_reload(plugin_root, reason="git_pull_auto_update")
+            except Exception:
+                pass
             return f"auto-updated ainl-cortex: {r.stdout.strip()[:200]}"
         else:
             return f"auto-update attempted but failed: {(r.stderr or r.stdout or '').strip()[:200]}"

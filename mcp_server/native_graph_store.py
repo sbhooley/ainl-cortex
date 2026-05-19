@@ -62,8 +62,8 @@ try:
     from .graph_store import GraphStore
     from .node_types import GraphNode, GraphEdge, NodeType, EdgeType
 except ImportError:
-    from graph_store import GraphStore  # type: ignore[no-redef]
-    from node_types import GraphNode, GraphEdge, NodeType, EdgeType  # type: ignore[assignment]
+    from .graph_store import GraphStore  # type: ignore[no-redef]
+from .node_types import GraphNode, GraphEdge, NodeType, EdgeType  # type: ignore[assignment]
 
 
 # ── Conversion helpers ────────────────────────────────────────────────────────
@@ -838,11 +838,11 @@ class NativeGraphStore(GraphStore):
         """Open a SQLiteGraphStore against the Python sidecar DB."""
         from pathlib import Path as _P
         try:
-            from graph_store import SQLiteGraphStore as _S
+            from .graph_store import SQLiteGraphStore as _S
         except ImportError:
             import sys as _sys
             _sys.path.insert(0, str(_P(__file__).parent))
-            from graph_store import SQLiteGraphStore as _S
+            from .graph_store import SQLiteGraphStore as _S
         _py_db = _P(str(self._db_path)).parent / "ainl_memory.db"
         return _S(_py_db)
 

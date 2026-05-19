@@ -28,13 +28,13 @@ try:
     )
     from .graph_store import GraphStore
 except ImportError:
-    from a2a_store import (
+    from .a2a_store import (
         store_message_node,
         store_task_episode,
         store_thread_summary,
         query_thread_history,
     )
-    from graph_store import GraphStore
+from .graph_store import GraphStore
 
 # Lazy imports of hook-side stdlib utilities (no venv needed)
 def _a2a_log():

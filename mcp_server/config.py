@@ -10,11 +10,7 @@ from typing import Optional, List
 import json
 import logging
 
-try:
-    from .compression import EfficientMode
-except ImportError:
-    # Fallback for when module is imported without package context
-    from compression import EfficientMode
+from .compression import EfficientMode
 
 logger = logging.getLogger(__name__)
 

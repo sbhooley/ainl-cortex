@@ -1,8 +1,9 @@
 """
 Import compatibility for package-mode MCP (``python -m mcp_server.server``).
 
-Registers legacy top-level module names in ``sys.modules`` and normalizes
-``sys.path`` for hooks + mcp_server.
+Primary fix: all mcp_server modules use relative imports (see scripts/codemod_relative_imports.py).
+This module keeps sys.path normalization and a minimal legacy shim set for package-root-only
+launches and verification smoke tests.
 """
 
 from __future__ import annotations
@@ -12,35 +13,19 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
 _healed_once = False
 
-# Bare imports used across mcp_server (package-mode safe names).
+# Minimal legacy shims (full list removed after relative-import codemod).
 MCP_BARE_MODULES: Sequence[str] = (
     "node_types",
     "graph_store",
     "retrieval",
     "similarity",
     "native_graph_store",
-    "persona_engine",
-    "extractor",
-    "goal_tracker",
-    "ainl_tools",
-    "a2a_tools",
-    "config",
-    "compression",
-    "compression_pipeline",
-    "output_compression",
-    "project_profiles",
-    "cache_awareness",
-    "adaptive_eco",
-    "failure_advisor",
-    "memory_reconcile",
-    "anchored_summary",
-    "a2a_store",
 )
 
 
@@ -74,7 +59,6 @@ def ensure_sys_path(root: Optional[Path] = None) -> None:
 
 
 def ensure_hooks_path(root: Optional[Path] = None) -> None:
-    """Hooks tree: ``from shared.project_id`` and ``from compression`` (mcp_server)."""
     root = root or plugin_root()
     hooks = root / "hooks"
     if hooks.is_dir() and str(hooks) not in sys.path:
@@ -93,10 +77,7 @@ def _module_file_matches(mod: object, expected: Path) -> bool:
 
 def _load_mcp_bare_module(bare_name: str, root: Path):
     ensure_sys_path(root)
-    try:
-        return importlib.import_module(f"mcp_server.{bare_name}")
-    except ImportError:
-        return importlib.import_module(bare_name)
+    return importlib.import_module(f"mcp_server.{bare_name}")
 
 
 def _register_bare_module(bare_name: str, root: Path, *, force: bool = False) -> bool:
@@ -120,27 +101,22 @@ def _register_bare_module(bare_name: str, root: Path, *, force: bool = False) ->
 
 
 def ensure_mcp_module_shims(*, force: bool = False) -> bool:
-    """Register all legacy bare mcp_server modules in sys.modules."""
     global _healed_once
     root = plugin_root()
     ensure_sys_path(root)
     ensure_hooks_path(root)
-    ok = True
-    for name in MCP_BARE_MODULES:
-        if not _register_bare_module(name, root, force=force):
-            ok = False
+    ok = all(_register_bare_module(name, root, force=force) for name in MCP_BARE_MODULES)
     if ok:
         _healed_once = True
     return ok
 
 
 def ensure_node_types_alias(*, force: bool = False) -> bool:
-    """Backward-compatible alias for node_types shim."""
     return _register_bare_module("node_types", plugin_root(), force=force)
 
 
 def is_mcp_import_error(exc: BaseException) -> bool:
-    names: Iterable[str] = MCP_BARE_MODULES + ("shared", "compression", "compiler_v2")
+    names = list(MCP_BARE_MODULES) + ["shared", "compression", "compiler_v2", "mcp_server"]
     if isinstance(exc, ModuleNotFoundError):
         n = exc.name or ""
         return any(n == x or n.startswith(x + ".") for x in names)
@@ -151,10 +127,7 @@ def is_mcp_import_error(exc: BaseException) -> bool:
 
 
 def is_node_types_import_error(exc: BaseException) -> bool:
-    return is_mcp_import_error(exc) and (
-        (isinstance(exc, ModuleNotFoundError) and exc.name == "node_types")
-        or "node_types" in str(exc).lower()
-    )
+    return is_mcp_import_error(exc) and "node_types" in str(exc).lower()
 
 
 def heal_import_error(exc: BaseException) -> bool:

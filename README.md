@@ -199,7 +199,8 @@ After the user restarts, confirm the install worked by checking:
 | `ainl_native (Rust bindings): build failed` | Re-run `bash scripts/install_ainl_native.sh` or `bash setup.sh`. PyPI wheels cover macOS/Linux/Windows; Rust is only needed on unsupported platforms. |
 | `No module named node_types` / import errors on memory tools | **Auto-healed** by `mcp_server/runtime_bootstrap.py` (see [`docs/SELF_HEALING.md`](docs/SELF_HEALING.md)). Preflight: `scripts/ensure_runtime_preflight.py`. Smoke: steps **[0b]–[0e]**. After `git pull`, restart Claude Code **once** if SessionStart shows a stale-MCP banner. |
 | Missing `ainl_*` MCP tools | SessionStart + first `ainl_*` call run `pip install` into the plugin venv automatically. If still missing: `bash setup.sh`. |
-| Native backend errors | Auto `pip install ainl_native`; on failure `store_backend` is set to `python` in `config.json` with reason in `logs/native_fallback.json`. |
+| Stale MCP after `git pull` / setup | SessionStart banner recommends **`/reload-plugins`** first (then full restart if needed). Auto-update and preflight call `request_mcp_reload()`. |
+| Native backend + unmigrated Python data | When `store_backend=native`, SessionStart auto-runs `migrate_python_to_native.sh` (24h cooldown). Opt out: `"auto_migrate_to_native": false`. |
 
 ### What activates automatically (no config needed)
 

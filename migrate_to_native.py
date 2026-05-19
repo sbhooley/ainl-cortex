@@ -45,12 +45,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 PLUGIN_ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(PLUGIN_ROOT / "mcp_server"))
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from graph_store import SQLiteGraphStore  # noqa: E402
-from native_graph_store import NativeGraphStore, _NATIVE_OK  # noqa: E402
-from node_types import GraphNode, GraphEdge, NodeType, EdgeType  # noqa: E402
+from mcp_server.graph_store import SQLiteGraphStore  # noqa: E402
+from mcp_server.native_graph_store import NativeGraphStore, _NATIVE_OK  # noqa: E402
+from mcp_server.node_types import GraphNode, GraphEdge, NodeType, EdgeType  # noqa: E402
 
 LOGS_DIR = PLUGIN_ROOT / "logs"
 REPORT_FRESHNESS_S = 5 * 60  # flip-config refuses anything older than this

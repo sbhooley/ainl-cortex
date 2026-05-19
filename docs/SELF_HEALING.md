@@ -10,58 +10,61 @@ setup.sh / mcp_launch.sh / SessionStart / every call_tool
         │
         ▼
   runtime_bootstrap.bootstrap_runtime()
-        ├── import_compat   — sys.path + bare mcp_server module shims
+        ├── import_compat   — sys.path + minimal legacy shims (relative imports primary)
         ├── deps_compat     — ainativelang pip heal + AINLTools reload
         ├── native_compat   — ainl_native pip heal + config→python fallback
-        ├── build_stamp     — git SHA runtime vs disk (stale MCP banner)
+        ├── migration_compat — auto migrate_python_to_native when native + unmigrated data
+        ├── build_stamp     — git SHA runtime vs disk
+        ├── mcp_reload      — /reload-plugins nudge after git pull / setup
         └── operator_checks — plugin enabled, venv, Python version banners
 ```
 
-## Area checklist (6 long-term fixes)
+## Area checklist (6 core + 3 follow-ups)
 
 | # | Area | Status | Implementation |
 |---|------|--------|----------------|
-| 1 | Bare `mcp_server` imports | **Done** | `import_compat.ensure_mcp_module_shims()` registers all legacy top-level names |
-| 2 | Missing `ainativelang` | **Done** | `deps_compat.ensure_ainativelang()` + `call_tool` retry + SessionStart |
-| 3 | Native backend / `ainl_native` | **Done** | `native_compat` pip heal; `get_graph_store()` syncs config to `python` on failure |
-| 4 | Stale MCP after `git pull` | **Done** | `build_stamp` — `logs/mcp_runtime.json` vs `git HEAD` → SessionStart banner |
-| 5 | Hooks ↔ MCP paths | **Done** | `ensure_hooks_path()` in bootstrap (hooks + `shared.*` imports) |
-| 6 | Operator-only failures | **Done** | `operator_checks` — clear banner lines (no silent failure) |
+| 1 | Bare `mcp_server` imports | **Done** | Relative imports in all `mcp_server/*.py`; `scripts/codemod_relative_imports.py`; minimal shims |
+| 2 | Missing `ainativelang` | **Done** | `deps_compat.ensure_ainativelang()` |
+| 3 | Native backend / `ainl_native` | **Done** | `native_compat` + `get_graph_store()` fallback |
+| 4 | Stale MCP after `git pull` | **Done** | `build_stamp` + `mcp_reload` → **`/reload-plugins`** first |
+| 5 | Hooks ↔ MCP paths | **Done** | `ensure_hooks_path()` |
+| 6 | Operator-only failures | **Done** | `operator_checks` |
+| 7 | Relative-import codemod | **Done** | `scripts/codemod_relative_imports.py` |
+| 8 | MCP reload without full restart | **Done** | `mcp_reload.request_mcp_reload()` after pull/setup; SessionStart banner |
+| 9 | Auto native migration | **Done** | `migration_compat.scan_and_auto_migrate_all_projects()` on SessionStart when `store_backend=native` |
+
+## MCP reload flow
+
+1. `git pull`, `setup.sh`, or notification auto-update → `request_mcp_reload()` writes `logs/mcp_reload_requested.json`
+2. SessionStart → banner: run **`/reload-plugins`** (Claude Code built-in)
+3. MCP restart → `write_mcp_runtime_stamp()` clears reload request when new process boots
+4. If still stale → full Claude Code quit (platform limit)
+
+There is no public API to SIGKILL the MCP child from a hook; `/reload-plugins` is the supported hot-reload path.
+
+## Auto native migration
+
+When **`memory.store_backend`** is **`native`**, **`ainl_native`** is importable, **`ainl_memory.db`** has data, and **`ainl_native.db`** is empty:
+
+- SessionStart runs **`scripts/migrate_python_to_native.sh`** once per 24h (per `logs/auto_migrate_state.json`)
+- Opt out: `"memory": { "auto_migrate_to_native": false }`
 
 ## Preflight entrypoints
 
 | Entry | Command / call |
 |-------|----------------|
-| Setup | `scripts/ensure_runtime_preflight.py` (after venv install) |
-| MCP launch | `mcp_launch.sh` → preflight before `exec -m mcp_server.server` |
-| Package import | `mcp_server/__init__.py` → `bootstrap_runtime()` |
-| MCP server | `server._bootstrap_import_compat()` → full bootstrap |
-| Tool dispatch | `call_tool` → `bootstrap_runtime(quick=True)` |
-| SessionStart | `verify_mcp_imports` + `operator_checks` + stale MCP line |
+| Setup | `scripts/ensure_runtime_preflight.py` |
+| Codemod | `python3 scripts/codemod_relative_imports.py [--check]` |
+| MCP launch | `mcp_launch.sh` → preflight |
+| SessionStart | `session_start_extras()` — reload nudge + auto-migrate |
 
 ## Smoke / verify
 
-- `[0b]` live `memory_store_failure`
-- `[0c]` bare `node_types` without `mcp_server/` on PYTHONPATH
-- `[0d]` `graph_store` + `retrieval` bare imports
-- `[0e]` `ensure_ainativelang` import check (compiler_v2)
-- `verify_activation.sh` — runtime preflight + memory_store_failure
-
-## Future (optional)
-
-- Mechanical codemod: replace all bare imports with `from .module import` (delete shims)
-- Claude Code API to reconnect MCP without full IDE restart (platform-dependent)
-- Auto-run `migrate_python_to_native.sh` when native empty + python DB populated
-
-## Active todos (maintenance)
-
-All six production areas below are implemented on `main`. Optional follow-ups:
-
-- [ ] Codemod: replace bare imports with `from .module import` and shrink `MCP_BARE_MODULES`
-- [ ] Claude Code MCP hot-reload API (platform) to avoid full IDE restart after `git pull`
-- [ ] Auto-invoke `migrate_python_to_native.sh` when native DB empty and python DB has data
+- `[0b]`–`[0e]` — import compat + ainativelang
+- `scripts/codemod_relative_imports.py --check` — CI gate for bare imports
 
 ## Related commits
 
-- `2e549d0` — `node_types` import_compat (initial)
-- (runtime_bootstrap series) — full six-area self-healing stack
+- `2e549d0` — `node_types` import_compat
+- `dad9799` — runtime_bootstrap six-area stack
+- (follow-ups) — relative imports, mcp_reload, migration_compat

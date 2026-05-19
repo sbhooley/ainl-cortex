@@ -8,12 +8,8 @@ import time
 import uuid
 from typing import Optional, List
 
-try:
-    from .node_types import GraphNode, NodeType
-    from .graph_store import GraphStore
-except ImportError:
-    from node_types import GraphNode, NodeType
-    from graph_store import GraphStore
+from .node_types import GraphNode, NodeType
+from .graph_store import GraphStore
 
 
 def store_message_node(

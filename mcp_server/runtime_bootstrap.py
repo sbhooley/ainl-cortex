@@ -82,10 +82,21 @@ def ensure_ainl_tools_on_server(memory_server) -> bool:
 def session_start_extras(root: Optional[Path] = None) -> dict:
     """Extra banner fragments for SessionStart."""
     root = root or import_compat.plugin_root()
-    stale, stale_msg = build_stamp.check_stale_mcp(root)
+    from .build_stamp import check_stale_mcp
+    from .mcp_reload import check_reload_needed, read_reload_request
+    from .migration_compat import scan_and_auto_migrate_all_projects
+
+    stale, stale_msg = check_stale_mcp(root)
+    reload_needed, reload_msg = check_reload_needed(root)
     operator_banner = operator_checks.format_operator_banner(root)
+
+    migrate_ran, migrate_msg = scan_and_auto_migrate_all_projects(root)
+
     return {
-        "stale_mcp": stale,
-        "stale_mcp_message": stale_msg,
+        "stale_mcp": stale or reload_needed,
+        "stale_mcp_message": reload_msg or stale_msg,
         "operator_banner": operator_banner,
+        "auto_migrate_ran": migrate_ran,
+        "auto_migrate_message": migrate_msg,
+        "reload_requested": read_reload_request(root) is not None,
     }

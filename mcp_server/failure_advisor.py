@@ -171,7 +171,7 @@ class FailureAdvisor:
         if len(failures) < _TFIDF_MIN_DOCS:
             return {}
         try:
-            from similarity import get_or_build_index
+            from .similarity import get_or_build_index
             cache_dir = self.cache_dir or (
                 Path.home() / ".claude" / "projects" / self.project_id / "graph_memory"
             )
@@ -229,7 +229,7 @@ class FailureAdvisor:
 
         # Signal 3: TF-IDF + Jaccard hybrid (replaces snake_case-only keyword overlap)
         try:
-            from similarity import lexical_jaccard_overlap
+            from .similarity import lexical_jaccard_overlap
             embed = (
                 node.embedding_text
                 or f"{data.get('error_type', '')} {data.get('error_message', '')}"
@@ -257,7 +257,7 @@ class FailureAdvisor:
             try:
                 from .node_types import EdgeType
             except ImportError:
-                from node_types import EdgeType
+                from .node_types import EdgeType
             edges = self.store.get_edges_to(failure_node.id, EdgeType.RESOLVES)
             if edges:
                 fix_episode = self.store.get_node(edges[0].from_node)

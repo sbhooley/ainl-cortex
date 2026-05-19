@@ -20,6 +20,11 @@ from mcp_server.runtime_bootstrap import bootstrap_runtime
 if __name__ == "__main__":
     write_install_stamp(ROOT)
     ok, detail = bootstrap_runtime(ROOT, heal_deps=True)
+    try:
+        from mcp_server.mcp_reload import request_mcp_reload
+        request_mcp_reload(ROOT, reason="setup_or_preflight")
+    except Exception:
+        pass
     checks = (
         verify_bare_node_types_import(),
         verify_bare_graph_store_import(),

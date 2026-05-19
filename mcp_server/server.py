@@ -64,36 +64,19 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Import our modules
-try:
-    from .graph_store import get_graph_store
-    from .node_types import (
-        create_episode_node, create_semantic_node, create_procedural_node,
-        create_persona_node, create_failure_node, create_edge,
-        NodeType, EdgeType, failure_content_id
-    )
-    from .retrieval import MemoryRetrieval, RetrievalContext
-    from .persona_engine import PersonaEvolutionEngine
-    from .extractor import PatternExtractor, canonicalize_tool_sequence
-    from .ainl_tools import AINLTools
-    from .a2a_tools import A2ATools
-    from .goal_tracker import GoalTracker
-except ImportError:
-    # Fallback for when run as script
-    sys.path.insert(0, str(Path(__file__).parent))
-    from graph_store import get_graph_store
-    from node_types import (
-        create_episode_node, create_semantic_node, create_procedural_node,
-        create_persona_node, create_failure_node, create_edge,
-        NodeType, EdgeType, failure_content_id
-    )
-    from retrieval import MemoryRetrieval, RetrievalContext
-    from persona_engine import PersonaEvolutionEngine
-    from extractor import PatternExtractor, canonicalize_tool_sequence
-    from ainl_tools import AINLTools
-    from a2a_tools import A2ATools
-    from goal_tracker import GoalTracker
-
+# Import our modules (package mode: python -m mcp_server.server)
+from .graph_store import get_graph_store
+from .node_types import (
+    create_episode_node, create_semantic_node, create_procedural_node,
+    create_persona_node, create_failure_node, create_edge,
+    NodeType, EdgeType, failure_content_id,
+)
+from .retrieval import MemoryRetrieval, RetrievalContext
+from .persona_engine import PersonaEvolutionEngine
+from .extractor import PatternExtractor, canonicalize_tool_sequence
+from .ainl_tools import AINLTools
+from .a2a_tools import A2ATools
+from .goal_tracker import GoalTracker
 
 
 
@@ -1517,7 +1500,7 @@ async def memory_complete_task(
         try:
             from .graph_store import append_execution_log
         except ImportError:
-            from graph_store import append_execution_log
+            from .graph_store import append_execution_log
         _session_id = None
         try:
             _sid_file = _plugin_root() / "inbox" / f"{task['project_id']}_session_id.txt"

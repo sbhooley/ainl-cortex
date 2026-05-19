@@ -10,10 +10,7 @@ from typing import Tuple, Optional
 from dataclasses import dataclass
 import logging
 
-try:
-    from .compression import EfficientMode, CompressionMetrics, compress_text
-except ImportError:
-    from compression import EfficientMode, CompressionMetrics, compress_text
+from .compression import EfficientMode, CompressionMetrics, compress_text
 
 logger = logging.getLogger(__name__)
 

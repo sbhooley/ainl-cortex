@@ -397,7 +397,7 @@ def main():
                         finally:
                             _conn.close()
                     if _native_empty:
-                        native_status += " — ⚠️  unmigrated data detected: re-run setup.sh to migrate"
+                        native_status += " — unmigrated data detected (auto-migrate will run on SessionStart when store_backend=native)"
             except Exception:
                 pass
         else:
@@ -514,8 +514,15 @@ def main():
             system_blocks.append(_op_banner)
         if _session_extras.get("stale_mcp") and _session_extras.get("stale_mcp_message"):
             system_blocks.append(
-                "\n━━━ AINL CORTEX: RESTART RECOMMENDED ━━━\n"
-                f"  • {_session_extras['stale_mcp_message']}\n"
+                "\n━━━ AINL CORTEX: RELOAD MCP ━━━\n"
+                f"{_session_extras['stale_mcp_message']}\n"
+                "━━━\n"
+            )
+        if _session_extras.get("auto_migrate_ran"):
+            system_blocks.append(
+                "\n━━━ AINL CORTEX: NATIVE MIGRATION ━━━\n"
+                f"  • {_session_extras.get('auto_migrate_message', 'completed')}\n"
+                "  • Restart Claude Code or run /reload-plugins so MCP uses the native backend.\n"
                 "━━━\n"
             )
 

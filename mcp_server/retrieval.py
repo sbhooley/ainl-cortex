@@ -11,18 +11,9 @@ from pathlib import Path
 import time
 import logging
 
-try:
-    from .node_types import GraphNode, NodeType
-except ImportError:
-    from node_types import GraphNode, NodeType
-try:
-    from .graph_store import GraphStore
-except ImportError:
-    from graph_store import GraphStore
-try:
-    from .similarity import get_or_build_index
-except ImportError:
-    from similarity import get_or_build_index
+from .node_types import GraphNode, NodeType
+from .graph_store import GraphStore
+from .similarity import get_or_build_index
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +111,7 @@ class MemoryRetrieval:
                 self._sim_scores[node_id] = score
             mode = "tfidf"
             try:
-                from config import get_config
+                from .config import get_config
                 mode = str(
                     (get_config().config.get("retrieval") or {}).get("retrieval_mode", "tfidf")
                 ).lower()
@@ -128,7 +119,7 @@ class MemoryRetrieval:
                 pass
             if mode == "hybrid":
                 try:
-                    from similarity import lexical_jaccard_overlap
+                    from .similarity import lexical_jaccard_overlap
                     for n in nodes:
                         et = n.embedding_text or ""
                         lex = lexical_jaccard_overlap(query_text, et)
@@ -333,7 +324,7 @@ class MemoryRetrieval:
             from dataclasses import replace
 
             from recall_budget import format_memory_context_markdown, recall_budget_from_memory_config
-            from config import get_config
+            from .config import get_config
 
             b = recall_budget_from_memory_config(get_config().get_memory_block())
             b = replace(b, max_chars=max(256, int(max_tokens) * 4))
