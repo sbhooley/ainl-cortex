@@ -11,23 +11,15 @@ import json
 import logging
 
 from .compression import EfficientMode
+from .config_loader import (
+    LOCAL_CONFIG_FILENAME,
+    deep_merge as _deep_merge,
+    load_config_files,
+    split_merged_config,
+    write_local_config,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge override into base (override wins for scalars/lists)."""
-    out = dict(base)
-    for key, val in override.items():
-        if (
-            key in out
-            and isinstance(out[key], dict)
-            and isinstance(val, dict)
-        ):
-            out[key] = _deep_merge(out[key], val)
-        else:
-            out[key] = val
-    return out
 
 
 # Full defaults used when config.json is missing or partial (nested keys merge).
@@ -84,6 +76,7 @@ DEFAULT_PLUGIN_CONFIG: dict = {
     "memory": {
         "max_context_tokens": 800,
         "project_isolation": True,
+        "project_isolation_mode": "per_repo",
         "enable_persona_evolution": True,
         "enable_pattern_extraction": True,
         # Recall budget + gates (see mcp_server/recall_budget.py)
@@ -133,31 +126,39 @@ class PluginConfig:
     def __init__(self):
         root = os.environ.get("CLAUDE_PLUGIN_ROOT")
         if root:
-            self.config_path = Path(root) / "config.json"
+            self.plugin_root = Path(root)
         else:
-            self.config_path = Path(__file__).resolve().parent.parent / "config.json"
+            self.plugin_root = Path(__file__).resolve().parent.parent
+        self.config_path = self.plugin_root / "config.json"
+        self.local_config_path = self.plugin_root / LOCAL_CONFIG_FILENAME
         self.config = self._load_config()
 
     def _load_config(self) -> dict:
-        """Load configuration from file and deep-merge with DEFAULT_PLUGIN_CONFIG."""
-        if self.config_path.exists():
-            try:
-                with open(self.config_path, 'r') as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    return _deep_merge(DEFAULT_PLUGIN_CONFIG, loaded)
-            except Exception as e:
-                logger.warning(f"Failed to load config: {e}, using defaults")
+        """Load config.json + config.local.json and deep-merge with defaults."""
+        try:
+            loaded = load_config_files(self.plugin_root)
+            if loaded:
+                return _deep_merge(DEFAULT_PLUGIN_CONFIG, loaded)
+        except Exception as e:
+            logger.warning(f"Failed to load config: {e}, using defaults")
 
         return _deep_merge({}, DEFAULT_PLUGIN_CONFIG)
 
     def save_config(self) -> None:
-        """Save configuration to file"""
+        """Save tracked config.json and machine-only config.local.json."""
         try:
+            main_payload, local_payload = split_merged_config(self.config)
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, 'w') as f:
-                json.dump(self.config, f, indent=2)
-            logger.info(f"Configuration saved to {self.config_path}")
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(main_payload, f, indent=2)
+                f.write("\n")
+            if local_payload:
+                write_local_config(self.plugin_root, local_payload)
+            logger.info(
+                "Configuration saved to %s (local: %s)",
+                self.config_path,
+                self.local_config_path if local_payload else "unchanged",
+            )
         except Exception as e:
             logger.error(f"Failed to save config: {e}")
 

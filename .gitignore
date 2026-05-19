@@ -28,6 +28,7 @@ ENV/
 
 # Per-machine Claude Code / plugin runtime
 profiles/
+config.local.json
 
 # IDE
 .vscode/

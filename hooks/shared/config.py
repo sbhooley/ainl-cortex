@@ -12,8 +12,8 @@ without editing config.json.
 
 from __future__ import annotations
 
-import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -23,15 +23,18 @@ _CACHE: tuple[float, Dict[str, Any]] | None = None
 _CACHE_TTL_S = 30.0
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
-_CONFIG_PATH = _PLUGIN_ROOT / "config.json"
 
 
 def _load_raw() -> Dict[str, Any]:
-    """Read and parse config.json. Returns {} on any error so callers can
-    use `.get()` chains without try/except."""
+    """Read config.json + config.local.json. Returns {} on any error."""
     try:
-        return json.loads(_CONFIG_PATH.read_text())
-    except (OSError, json.JSONDecodeError, ValueError):
+        root = str(_PLUGIN_ROOT)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from mcp_server.config_loader import load_config_files
+
+        return load_config_files(_PLUGIN_ROOT)
+    except Exception:
         return {}
 
 

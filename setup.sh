@@ -231,7 +231,17 @@ python3 - "$PLUGIN_DIR" <<'PYEOF'
 import json, pathlib, sys, uuid
 
 plugin_dir = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(plugin_dir))
+from mcp_server.config_loader import (
+    LOCAL_CONFIG_FILENAME,
+    migrate_install_id_to_local,
+    write_local_config,
+)
+
 config_path = plugin_dir / "config.json"
+local_path = plugin_dir / LOCAL_CONFIG_FILENAME
+
+migrate_install_id_to_local(plugin_dir)
 
 with open(config_path) as f:
     cfg = json.load(f)
@@ -241,8 +251,7 @@ cfg.setdefault("memory", {})
 if cfg["memory"].get("store_backend") not in ("python", "native"):
     cfg["memory"]["store_backend"] = "python"
 
-# Default to per-repo project isolation (issue 1) for fresh installs that
-# don't have the field set; existing installs keep their setting.
+# Default to per-repo project isolation for fresh installs; existing keep theirs.
 cfg["memory"].setdefault("project_isolation_mode", "per_repo")
 
 cfg.setdefault("a2a", {})
@@ -250,13 +259,24 @@ cfg["a2a"].setdefault("enabled", False)
 # Legacy field removed from older configs
 cfg["a2a"].pop("bridge_script", None)
 
-cfg.setdefault("install_id", str(uuid.uuid4()))
 cfg.setdefault("telemetry", {}).setdefault("remote", {}).setdefault("enabled", True)
 
 with open(config_path, "w") as f:
     json.dump(cfg, f, indent=2)
-print(f"    config.json: store_backend={cfg['memory']['store_backend']!r} "
-      f"project_isolation_mode={cfg['memory'].get('project_isolation_mode')!r}")
+    f.write("\n")
+
+local_cfg = {}
+if local_path.is_file():
+    with open(local_path) as f:
+        local_cfg = json.load(f)
+local_cfg.setdefault("install_id", str(uuid.uuid4()))
+write_local_config(plugin_dir, local_cfg)
+
+print(
+    f"    config.json: store_backend={cfg['memory']['store_backend']!r} "
+    f"project_isolation_mode={cfg['memory'].get('project_isolation_mode')!r} "
+    f"(install_id in {LOCAL_CONFIG_FILENAME})"
+)
 PYEOF
 echo "  [ok] Config updated"
 

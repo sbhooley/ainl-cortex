@@ -8,6 +8,7 @@ What is captured:
 
 Nothing from user prompts, code, file paths, or memory DB is ever sent.
 Opt-out: set "telemetry": {"remote": {"enabled": false}} in config.json
+Machine-only keys (e.g. install_id): config.local.json (gitignored).
 """
 
 from __future__ import annotations
@@ -27,7 +28,12 @@ POSTHOG_URL = "https://us.i.posthog.com/capture/"
 
 def _load_config(plugin_root: Path) -> Dict[str, Any]:
     try:
-        return json.loads((plugin_root / "config.json").read_text())
+        root = str(plugin_root.resolve())
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from mcp_server.config_loader import load_config_files
+
+        return load_config_files(plugin_root)
     except Exception:
         return {}
 
