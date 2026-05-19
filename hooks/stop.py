@@ -190,7 +190,30 @@ def write_failures(store, project_id: str, session_data: dict) -> int:
     return count
 
 
-def link_resolutions(store, project_id: str, episode_data: dict) -> int:
+
+def _open_native_episode_store(project_id: str):
+    """Open NativeGraphStore for episode lookups (strict-native episodes live in Rust DB)."""
+    if not _NATIVE_OK:
+        return None
+    try:
+        from graph_store import get_graph_store
+
+        gm_dir = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+        if not (gm_dir / "ainl_native.db").exists():
+            return None
+        py_db = gm_dir / "ainl_memory.db"
+        return get_graph_store(py_db)
+    except Exception as e:
+        logger.debug(f"Native episode store open failed: {e}")
+        return None
+
+
+def link_resolutions(
+    store,
+    project_id: str,
+    episode_data: dict,
+    episode_store=None,
+) -> int:
     """
     Retrospectively link open failure nodes to the episode that resolved them.
 
@@ -198,6 +221,10 @@ def link_resolutions(store, project_id: str, episode_data: dict) -> int:
     If the episode touched the same file(s) or used the same tool as the failure,
     assume the episode resolved it: write a RESOLVES edge and update the failure
     node's resolution/resolved_at fields.
+
+    ``episode_store`` is optional: in strict-native mode failures live on the
+    Python sidecar but episodes are written to ``ainl_native.db`` — pass the
+    native graph store so RESOLVES edges can be linked to the fixing episode.
 
     Returns the number of failures linked.
     """
@@ -212,6 +239,7 @@ def link_resolutions(store, project_id: str, episode_data: dict) -> int:
     episode_id = episode_data.get("turn_id", "")
     episode_task = episode_data.get("task_description", "")
     now = int(_time.time())
+    ep_store = episode_store if episode_store is not None else store
 
     unresolved = store.get_unresolved_failures(project_id)
     linked = 0
@@ -236,7 +264,7 @@ def link_resolutions(store, project_id: str, episode_data: dict) -> int:
         # Write RESOLVES edge (episode → failure) — need the episode node ID
         # The episode was just written; query it by turn_id
         try:
-            recent = store.query_episodes_since(now - 10, limit=5, project_id=project_id)
+            recent = ep_store.query_episodes_since(now - 10, limit=5, project_id=project_id)
             ep_node_id = None
             for ep in recent:
                 if ep.data.get("turn_id") == episode_id:
@@ -730,7 +758,13 @@ def flush_pending_captures(project_id: str) -> int:
                         logger.warning(f"Goal write failed (strict-native sidecar): {e}")
                     if episode_data and episode_data.get("outcome") == "success":
                         try:
-                            link_resolutions(sidecar_store, project_id, episode_data)
+                            _ep_store = _open_native_episode_store(project_id)
+                            link_resolutions(
+                                sidecar_store,
+                                project_id,
+                                episode_data,
+                                episode_store=_ep_store,
+                            )
                         except Exception as e:
                             logger.warning(
                                 f"Resolution linking failed (strict-native per-prompt flush): {e}"
@@ -819,7 +853,13 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
                 logger.warning(f"Goal write failed (strict-native sidecar): {e}")
             if episode_data and episode_data.get("outcome") == "success":
                 try:
-                    link_resolutions(sidecar_store, project_id, episode_data)
+                    _ep_store = _open_native_episode_store(project_id)
+                    link_resolutions(
+                        sidecar_store,
+                        project_id,
+                        episode_data,
+                        episode_store=_ep_store,
+                    )
                 except Exception as e:
                     logger.warning(f"Resolution linking failed (strict-native sidecar): {e}")
     else:

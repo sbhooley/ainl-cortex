@@ -484,7 +484,7 @@ class AINLTools:
                         project_id=project_id
                     )
                     self.trajectory_store.record_trajectory(trajectory)
-                except:
+                except Exception:
                     pass  # Silent failure
 
             return response

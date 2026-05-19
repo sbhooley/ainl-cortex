@@ -457,6 +457,12 @@ class NativeGraphStore(GraphStore):
     # ── Core writes ───────────────────────────────────────────────────────────
 
     def write_node(self, node: GraphNode) -> None:
+        # Strict-native hooks persist failures/goals on the Python sidecar only.
+        if node.node_type in (NodeType.GOAL, NodeType.FAILURE):
+            try:
+                self._sidecar_store().write_node(node)
+            except Exception:
+                pass
         ainl_dict = _node_to_ainl(node)
         self._store.write_node(ainl_dict)
         # Maintain the goal index in lockstep with goal writes so query_goals
@@ -503,13 +509,26 @@ class NativeGraphStore(GraphStore):
 
     def get_node(self, node_id: str) -> Optional[GraphNode]:
         raw = self._store.read_node(node_id)
-        return _ainl_to_node(raw) if raw else None
+        if raw:
+            return _ainl_to_node(raw)
+        try:
+            return self._sidecar_store().get_node(node_id)
+        except Exception:
+            return None
 
     def update_node_data(self, node_id: str, data_patch: Dict[str, Any]) -> None:
-        node = self.get_node(node_id)
-        if node:
+        raw = self._store.read_node(node_id)
+        if raw:
+            node = _ainl_to_node(raw)
             node.data.update(data_patch)
             self.write_node(node)
+            return
+        try:
+            sidecar = self._sidecar_store()
+            if sidecar.get_node(node_id):
+                sidecar.update_node_data(node_id, data_patch)
+        except Exception:
+            pass
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
@@ -594,6 +613,25 @@ class NativeGraphStore(GraphStore):
             for n in raw_nodes
         ]
 
+    def _merge_sidecar_edges_to(
+        self,
+        edges: List[GraphEdge],
+        node_id: str,
+        edge_type: Optional[EdgeType],
+    ) -> List[GraphEdge]:
+        """RESOLVES edges for sidecar failures live in ainl_memory.db."""
+        try:
+            sidecar_edges = self._sidecar_store().get_edges_to(node_id, edge_type)
+        except Exception:
+            return edges
+        seen = {(e.from_node, e.to_node, e.edge_type) for e in edges}
+        for e in sidecar_edges:
+            key = (e.from_node, e.to_node, e.edge_type)
+            if key not in seen:
+                edges.append(e)
+                seen.add(key)
+        return edges
+
     def get_edges_to(
         self, node_id: str, edge_type: Optional[EdgeType] = None
     ) -> List[GraphEdge]:
@@ -611,9 +649,9 @@ class NativeGraphStore(GraphStore):
                         created_at=int(time.time()),
                         confidence=1.0,
                     ))
-            return edges
+            return self._merge_sidecar_edges_to(edges, node_id, edge_type)
         raw_nodes = self._store.walk_edges_to(node_id, label)
-        return [
+        edges = [
             GraphEdge(
                 id=str(uuid.uuid4()),
                 edge_type=edge_type,  # type: ignore[arg-type]
@@ -624,6 +662,7 @@ class NativeGraphStore(GraphStore):
             )
             for n in raw_nodes
         ]
+        return self._merge_sidecar_edges_to(edges, node_id, edge_type)
 
     def get_unresolved_failures(self, project_id: str, limit: int = 100) -> List[GraphNode]:
         # Do NOT use FTS with "*" — fts5_prefix_match_query treats that as an

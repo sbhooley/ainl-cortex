@@ -376,3 +376,25 @@ class TestNativeSidecarGoals:
         active = store.query_goals(pid, status="active", limit=10)
         assert len(active) == 1
         assert active[0].data.get("title") == "Ship native merge"
+
+    def test_get_node_and_update_goal_on_sidecar(self, tmp_path):
+        """memory_update_goal must reach goals written only to the sidecar."""
+        from graph_store import SQLiteGraphStore
+        from node_types import create_goal_node
+
+        native_db = tmp_path / "ainl_native.db"
+        sidecar_db = tmp_path / "ainl_memory.db"
+        store = _ngs.NativeGraphStore(native_db)
+        py_store = SQLiteGraphStore(sidecar_db)
+        pid = "proj_goal_update"
+
+        goal = create_goal_node(pid, "Sidecar goal", "Update via native store facade")
+        py_store.write_node(goal)
+
+        found = store.get_node(goal.id)
+        assert found is not None
+        assert found.data.get("title") == "Sidecar goal"
+
+        store.update_node_data(goal.id, {"status": "completed"})
+        updated = py_store.get_node(goal.id)
+        assert updated.data.get("status") == "completed"
