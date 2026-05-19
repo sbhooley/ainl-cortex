@@ -104,6 +104,39 @@ def compression_status_from_config() -> Dict[str, Any]:
     return {"enabled": True, "mode": mode, "line": line, "lines": lines}
 
 
+def format_stack_one_liner(
+    *,
+    ainl_ok: bool,
+    ainl_heal_msg: str,
+    native_status: str,
+    mcp_ok: bool,
+    mcp_detail: str,
+    venv_file_status: str,
+    bridge_line: str,
+    expected_tools: int,
+) -> str:
+    """One line with the same fields as the former per-bullet stack diagnostics."""
+    if ainl_ok:
+        ainl_bit = "yes"
+    elif ainl_heal_msg:
+        ainl_bit = f"no (auto-heal: {ainl_heal_msg[:80]})"
+    else:
+        ainl_bit = "no"
+    native_bit = (native_status or "unknown").replace("\n", " ")[:100]
+    mcp_bit = "OK" if mcp_ok else f"FAIL ({mcp_detail[:80]})"
+    venv_bit = (venv_file_status or "n/a").replace("\n", " ")[:120]
+    bridge_bit = (bridge_line or "n/a").replace("\n", " ")[:100]
+    return (
+        "  • Stack: "
+        f"AINL Python tools (ainativelang)={ainl_bit} · "
+        f"ainl_native (Rust bindings)={native_bit} · "
+        f"MCP stack (same venv as server)={mcp_bit} · "
+        f"venv on PATH (child processes)={venv_bit} · "
+        f"A2A bridge={bridge_bit} · "
+        f"~{expected_tools} tools (ainl + memory + a2a; /mcp if missing)"
+    )
+
+
 def build_main_banner(
     *,
     root: Path,
@@ -151,25 +184,22 @@ def build_main_banner(
             if cl.strip():
                 lines.append(cl.rstrip("\n"))
 
-    if ainl_ok:
-        ainl_bit = "yes"
-    elif ainl_heal_msg:
-        ainl_bit = f"no (auto-heal: {ainl_heal_msg[:120]})"
-    else:
-        ainl_bit = "no"
-    lines.append(f"  • AINL Python tools (ainativelang): {ainl_bit}")
-    lines.append(f"  • ainl_native (Rust bindings): {native_status}")
-    mcp_bit = "OK" if mcp_ok else f"FAIL – {mcp_detail[:100]}"
-    lines.append(f"  • MCP stack (same venv as server): {mcp_bit}")
-    if venv_file_status:
-        lines.append(f"  • venv on PATH (child processes): {venv_file_status}")
-    if bridge_line:
-        lines.append(f"  • A2A bridge: {bridge_line}")
     lines.append(
-        f"  • When Claude spawns MCP, expect ~{expected_tools} tools (ainl + memory + a2a); "
-        f"if missing, /plugin -> Installed -> ainl-cortex and /mcp, or /reload-plugins."
+        format_stack_one_liner(
+            ainl_ok=ainl_ok,
+            ainl_heal_msg=ainl_heal_msg,
+            native_status=native_status,
+            mcp_ok=mcp_ok,
+            mcp_detail=mcp_detail,
+            venv_file_status=venv_file_status,
+            bridge_line=bridge_line,
+            expected_tools=expected_tools,
+        )
     )
-    lines.append("  • After git pull or setup.sh: run /reload-plugins if tools act stale.")
+    lines.append(
+        "  • After git pull or setup.sh: run /reload-plugins if tools act stale "
+        "(/plugin → Installed → ainl-cortex)."
+    )
     return "\n".join(lines) + "\n"
 
 

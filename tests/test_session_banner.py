@@ -14,6 +14,7 @@ from session_banner import (
     compression_status_from_config,
     build_main_banner,
     format_prior_session_context,
+    format_stack_one_liner,
 )
 
 
@@ -51,11 +52,32 @@ def test_build_main_banner_expands_compression_lines():
     assert "Graph Memory:" in banner
     assert "compresses:" in banner
     assert "Legacy fallback:" in banner
-    assert "AINL Python tools" in banner
-    assert "ainl_native" in banner
-    assert "MCP stack" in banner
-    assert "venv on PATH" in banner
+    assert banner.count("  • Stack:") == 1
+    assert "AINL Python tools (ainativelang)=yes" in banner
+    assert "ainl_native (Rust bindings)=" in banner
+    assert "MCP stack (same venv as server)=OK" in banner
+    assert "venv on PATH (child processes)=" in banner
+    assert "A2A bridge=" in banner
     assert banner.count("  • Compression:") == 1
+
+
+def test_stack_one_liner_preserves_all_fields():
+    line = format_stack_one_liner(
+        ainl_ok=False,
+        ainl_heal_msg="pip install failed",
+        native_status="skipped (python backend selected)",
+        mcp_ok=False,
+        mcp_detail="import error",
+        venv_file_status="appended to /tmp/sessionstart-hook-0.sh",
+        bridge_line="not running — openfang not found",
+        expected_tools=31,
+    )
+    assert "ainativelang)=no (auto-heal:" in line
+    assert "ainl_native (Rust bindings)=skipped" in line
+    assert "MCP stack (same venv as server)=FAIL" in line
+    assert "venv on PATH (child processes)=appended" in line
+    assert "A2A bridge=not running" in line
+    assert "~31 tools" in line
 
 
 def test_prior_session_context_box():
