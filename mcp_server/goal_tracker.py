@@ -79,8 +79,9 @@ class GoalTracker:
     # Max goals to inject into context
     MAX_CONTEXT_GOALS = 5
 
-    def __init__(self, store, project_id: str):
+    def __init__(self, store, project_id: str, read_store=None):
         self.store = store
+        self.read_store = read_store or store
         self.project_id = project_id
 
     # ------------------------------------------------------------------
@@ -216,30 +217,37 @@ class GoalTracker:
 
             self.store.update_node_data(node.id, patch)
 
-            # Write GOAL_TRACKS edge when we know the episode node (strict-native).
+            # Write GOAL_TRACKS edge (episodes may live in ainl_native.db under strict-native).
             try:
                 from node_types import create_edge, EdgeType
-                ep_node = None
+                ep_to = None
                 ep_nid = episode_data.get("episode_node_id")
                 if ep_nid:
-                    ep_node = self.store.get_node(ep_nid)
-                if not ep_node and episode_id:
-                    recent = self.store.query_episodes_since(
+                    ep_node = self.read_store.get_node(ep_nid)
+                    ep_to = ep_node.id if ep_node else ep_nid
+                if not ep_to and episode_id:
+                    recent = self.read_store.query_episodes_since(
                         int(time.time()) - 30, limit=10, project_id=self.project_id,
                     )
                     ep_node = next(
                         (e for e in recent if e.data.get("turn_id") == episode_id),
                         None,
                     )
-                if ep_node:
+                    if ep_node:
+                        ep_to = ep_node.id
+                if ep_to:
                     edge = create_edge(
                         from_node=node.id,
-                        to_node=ep_node.id,
+                        to_node=ep_to,
                         edge_type=EdgeType.GOAL_TRACKS,
                         project_id=self.project_id,
                         metadata={'similarity': round(sim, 3)},
                     )
-                    self.store.write_edge(edge)
+                    # Strict-native: episode on native DB, goal mirrored there too.
+                    if ep_nid and self.read_store is not self.store:
+                        self.read_store.write_edge(edge)
+                    else:
+                        self.store.write_edge(edge)
             except Exception as edge_err:
                 logger.debug(f"GOAL_TRACKS edge failed: {edge_err}")
 

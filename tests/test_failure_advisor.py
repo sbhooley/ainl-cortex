@@ -400,6 +400,55 @@ class TestNativeUnresolvedFailures:
         assert len(unresolved) == 1
         assert unresolved[0].data.get("error_type") == "compile_error"
 
+    def test_goal_tracks_reads_episode_from_native_db(self, tmp_path):
+        """Strict-native: goals on sidecar, episodes on native — read_store must bridge."""
+        from goal_tracker import GoalTracker
+        from node_types import NodeType, GraphNode, EdgeType, create_goal_node
+
+        native_db = tmp_path / "ainl_native.db"
+        sidecar_db = tmp_path / "ainl_memory.db"
+        native = _ngs.NativeGraphStore(native_db)
+        sidecar = SQLiteGraphStore(sidecar_db)
+        ep_id = str(uuid.uuid4())
+        turn_id = str(uuid.uuid4())
+        now = int(time.time())
+        native.write_node(GraphNode(
+            id=ep_id,
+            node_type=NodeType.EPISODE,
+            project_id="proj_split",
+            agent_id="claude-code",
+            created_at=now,
+            updated_at=now,
+            confidence=1.0,
+            data={
+                "turn_id": turn_id,
+                "task_description": "implement goal tracker bridge",
+                "files_touched": ["/tmp/goal_tracker.py"],
+                "tool_calls": ["edit"],
+            },
+        ))
+        goal = create_goal_node(
+            "proj_split",
+            "Bridge goal tracker",
+            "Wire read_store for native episodes",
+        )
+        native.write_node(goal)
+        tracker = GoalTracker(sidecar, "proj_split", read_store=native)
+        updated = tracker.auto_update_from_episode({
+            "turn_id": "in-memory-only-turn",
+            "episode_node_id": ep_id,
+            "task_description": "implement goal tracker bridge in goal_tracker.py",
+            "files_touched": ["/tmp/goal_tracker.py"],
+            "tool_calls": ["edit"],
+            "outcome": "success",
+        })
+        assert updated == 1
+        edges = native.get_edges_from(goal.id, EdgeType.GOAL_TRACKS)
+        assert len(edges) == 1
+        assert edges[0].to_node == ep_id
+        assert sidecar.get_node(ep_id) is None
+
+
 @pytest.mark.skipif(_ngs is None or not _ngs._NATIVE_OK, reason="ainl_native not built")
 class TestNativeSidecarGoals:
 

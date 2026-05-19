@@ -649,7 +649,7 @@ def write_goals(
         from goal_tracker import GoalTracker
 
     read_store = read_store or store
-    tracker = GoalTracker(store, project_id)
+    tracker = GoalTracker(store, project_id, read_store=read_store)
     updated = 0
 
     # Auto-update active goals with the latest episode
