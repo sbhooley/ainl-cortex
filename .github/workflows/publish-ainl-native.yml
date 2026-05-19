@@ -80,12 +80,12 @@ jobs:
       - name: Merge wheels
         run: |
           mkdir -p dist
-          find wheels -name '*.whl' -exec cp {} dist/ \;
+          find wheels -name '*.whl' -exec cp -t dist {} +
           ls -la dist/
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: upload
-          args: --skip-existing
-          manifest-path: ${{ env.MANIFEST_PATH }}
+      - name: Upload wheels with twine
+        run: |
+          python3 -m pip install --user twine
+          python3 -m twine upload --skip-existing dist/*
         env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_KEY }}
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_KEY }}
