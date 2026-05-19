@@ -79,6 +79,31 @@ class TestTrajectoryStore:
         finally:
             db_path.unlink(missing_ok=True)
 
+    def test_row_to_trajectory_handles_null_json_columns(self, tmp_path):
+        """Corrupt/legacy rows with NULL JSON must not crash readers."""
+        store = TrajectoryStore(tmp_path / "traj.db")
+        row = (
+            "traj-1",
+            "session-1",
+            "project-1",
+            "hash1",
+            "source",
+            None,
+            None,
+            "2020-01-01T00:00:00",
+            1.0,
+            "success",
+            "",
+            None,
+            None,
+        )
+        traj = store._row_to_trajectory(row)
+        assert traj.frame_vars == {}
+        assert traj.adapters_enabled == []
+        assert traj.tags == []
+        assert traj.fitness_delta == 0.0
+        assert traj.steps == []
+
     def test_get_trajectories_by_hash(self):
         """Test retrieving trajectories for specific AINL source."""
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:

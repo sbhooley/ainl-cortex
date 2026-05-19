@@ -686,6 +686,7 @@ class SQLiteGraphStore(GraphStore):
             WHERE node_type = 'failure'
               AND project_id = ?
               AND json_extract(data, '$.resolved_at') IS NULL
+              AND json_extract(data, '$.resolution') IS NULL
             ORDER BY created_at DESC
             LIMIT ?
             """,

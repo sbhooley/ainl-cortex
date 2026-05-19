@@ -13,6 +13,8 @@ import time
 import uuid
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
@@ -287,3 +289,68 @@ class TestFormatWarnings:
         advisor = _advisor(store, "p")
         result = advisor.format_warnings([], trends=None)
         assert result == ""
+
+
+# ── E. Native backend — get_unresolved_failures must not use FTS "*" ─────────
+
+try:
+    import native_graph_store as _ngs
+except ImportError:
+    _ngs = None
+
+
+@pytest.mark.skipif(_ngs is None or not _ngs._NATIVE_OK, reason="ainl_native not built")
+class TestNativeUnresolvedFailures:
+
+    def test_get_unresolved_failures_returns_stored_failures(self, tmp_path):
+        db = tmp_path / "ainl_native.db"
+        store = _ngs.NativeGraphStore(db)
+        pid = "proj_native"
+
+        node = create_failure_node(
+            pid, "adapter_error", "ainl_run", "http adapter registration failed"
+        )
+        store.write_node(node)
+
+        unresolved = store.get_unresolved_failures(pid, limit=10)
+        assert len(unresolved) == 1
+        assert unresolved[0].data.get("error_type") == "adapter_error"
+
+    def test_failure_advisor_fires_on_native_store(self, tmp_path):
+        db = tmp_path / "ainl_native.db"
+        store = _ngs.NativeGraphStore(db)
+        pid = "proj_native"
+
+        _store_failure_native = lambda: store.write_node(
+            create_failure_node(
+                pid, "adapter_error", "ainl_run", "http adapter registration failed"
+            )
+        )
+        _store_failure_native()
+        _store_failure_native()
+
+        warnings = FailureAdvisor(store, pid).analyse_prompt(
+            "please run ainl_run with the http adapter"
+        )
+        assert len(warnings) >= 1
+        assert warnings[0].matched_on in ("command", "semantic", "file")
+
+    def test_get_unresolved_failures_merges_python_sidecar(self, tmp_path):
+        """Strict-native writes failures to ainl_memory.db; native read must merge."""
+        from graph_store import SQLiteGraphStore
+
+        native_db = tmp_path / "ainl_native.db"
+        sidecar_db = tmp_path / "ainl_memory.db"
+        store = _ngs.NativeGraphStore(native_db)
+        py_store = SQLiteGraphStore(sidecar_db)
+        pid = "proj_sidecar_only"
+
+        py_store.write_node(
+            create_failure_node(
+                pid, "compile_error", "ainl_validate", "unexpected token at line 1"
+            )
+        )
+
+        unresolved = store.get_unresolved_failures(pid, limit=10)
+        assert len(unresolved) == 1
+        assert unresolved[0].data.get("error_type") == "compile_error"

@@ -626,12 +626,34 @@ class NativeGraphStore(GraphStore):
         ]
 
     def get_unresolved_failures(self, project_id: str, limit: int = 100) -> List[GraphNode]:
-        rows = self._store.search_failures(self._agent_id, "*", limit)
-        nodes = []
+        # Do NOT use FTS with "*" — fts5_prefix_match_query treats that as an
+        # invalid/empty MATCH and returns zero rows (FailureAdvisor never fired).
+        rows = self._store.find_by_type("failure")
+        nodes: List[GraphNode] = []
         for r in rows:
             n = _ainl_to_node(r)
-            if n.project_id == project_id and not (n.data or {}).get("resolution"):
-                nodes.append(n)
+            if n.project_id != project_id:
+                continue
+            data = n.data or {}
+            if data.get("resolution") or data.get("resolved_at"):
+                continue
+            nodes.append(n)
+        nodes.sort(key=lambda n: n.created_at or 0, reverse=True)
+
+        # Strict-native writes tool failures to ainl_memory.db (sidecar) only.
+        try:
+            sidecar_nodes = self._sidecar_store().get_unresolved_failures(
+                project_id, limit=limit
+            )
+            seen = {n.id for n in nodes}
+            for n in sidecar_nodes:
+                if n.id not in seen:
+                    nodes.append(n)
+                    seen.add(n.id)
+            nodes.sort(key=lambda n: n.created_at or 0, reverse=True)
+        except Exception:
+            pass
+
         return nodes[:limit]
 
     def query_goals(

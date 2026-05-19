@@ -186,6 +186,15 @@ class TrajectoryStore:
         finally:
             conn.close()
 
+    @staticmethod
+    def _json_field(raw, default):
+        if raw is None or raw == "":
+            return default
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return default
+
     def _row_to_trajectory(self, row) -> ExecutionTrajectory:
         """Convert DB row to ExecutionTrajectory."""
         # Parse steps JSONL
@@ -195,7 +204,7 @@ class TrajectoryStore:
                 if line.strip():
                     try:
                         steps.append(TrajectoryStep(**json.loads(line)))
-                    except:
+                    except (json.JSONDecodeError, TypeError, ValueError):
                         pass  # Skip malformed steps
 
         return ExecutionTrajectory(
@@ -204,14 +213,14 @@ class TrajectoryStore:
             project_id=row[2],
             ainl_source_hash=row[3],
             ainl_source=row[4],
-            frame_vars=json.loads(row[5]),
-            adapters_enabled=json.loads(row[6]),
+            frame_vars=self._json_field(row[5], {}),
+            adapters_enabled=self._json_field(row[6], []),
             executed_at=row[7],
             duration_ms=row[8],
             outcome=row[9],
             steps=steps,
-            tags=json.loads(row[11]),
-            fitness_delta=row[12]
+            tags=self._json_field(row[11], []),
+            fitness_delta=row[12] if row[12] is not None else 0.0,
         )
 
 
