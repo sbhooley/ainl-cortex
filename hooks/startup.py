@@ -228,6 +228,41 @@ def _ainl_native_sources_stale(plugin_root: Path, installed_so: Path) -> bool:
     return False
 
 
+_AINL_NATIVE_PYPI_MIN = "0.1.1"
+
+
+def _pip_install_ainl_native(py: Path) -> Optional[str]:
+    """Install prebuilt wheel from PyPI when available for this platform."""
+    if os.environ.get("AINL_NATIVE_BUILD_FROM_SOURCE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return None
+    try:
+        r = subprocess.run(
+            [
+                str(py),
+                "-m",
+                "pip",
+                "install",
+                f"ainl_native>={_AINL_NATIVE_PYPI_MIN}",
+                "--upgrade",
+                "--quiet",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        if r.returncode == 0:
+            return "installed from PyPI"
+    except Exception:
+        pass
+    return None
+
+
 def _run_maturin_develop(plugin_root: Path, native_dir: Path, py: Path) -> str:
     maturin = plugin_root / ".venv" / "bin" / "maturin"
     if not maturin.is_file():
@@ -280,13 +315,22 @@ def _ensure_ainl_native(plugin_root: Path) -> str:
     if installed_so is not None and not _ainl_native_sources_stale(plugin_root, installed_so):
         return "ok (already installed)"
 
+    pip_note = _pip_install_ainl_native(py)
+    installed_so = _ainl_native_installed_so()
+    if installed_so is not None and not _ainl_native_sources_stale(plugin_root, installed_so):
+        return f"ok ({pip_note})" if pip_note else "ok (already installed)"
+
     if installed_so is not None:
         status = _run_maturin_develop(plugin_root, native_dir, py)
         if status == "built + installed":
-            return "rebuilt (sources newer than extension)"
+            suffix = f"; PyPI: {pip_note}" if pip_note else ""
+            return f"rebuilt (sources newer than extension){suffix}"
         return status
 
-    return _run_maturin_develop(plugin_root, native_dir, py)
+    status = _run_maturin_develop(plugin_root, native_dir, py)
+    if status != "built + installed" and pip_note:
+        return f"{status} (PyPI attempt: {pip_note})"
+    return status
 
 
 def main():

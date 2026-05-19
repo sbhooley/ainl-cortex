@@ -1,0 +1,91 @@
+# Build and upload platform wheels for ainl_native to PyPI.
+# Secrets: PYPI_API_KEY (pypi-… token with upload scope for project ainl_native).
+# Trigger: push tag ainl_native-v* or workflow_dispatch.
+
+name: Publish ainl_native
+
+on:
+  push:
+    tags:
+      - "ainl_native-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MANIFEST_PATH: ainl_native/Cargo.toml
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        id: build
+        with:
+          target: ${{ matrix.target }}
+          command: build
+          args: --release --out dist --manifest-path ${{ env.MANIFEST_PATH }}
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  macos:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          command: build
+          args: --release --out dist --manifest-path ${{ env.MANIFEST_PATH }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist --manifest-path ${{ env.MANIFEST_PATH }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows
+          path: dist
+
+  publish:
+    name: Upload to PyPI
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: wheels
+      - name: Merge wheels
+        run: |
+          mkdir -p dist
+          find wheels -name '*.whl' -exec cp {} dist/ \;
+          ls -la dist/
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --skip-existing
+          manifest-path: ${{ env.MANIFEST_PATH }}
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_KEY }}

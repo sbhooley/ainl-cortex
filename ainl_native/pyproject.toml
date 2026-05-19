@@ -5,8 +5,31 @@ build-backend = "maturin"
 [project]
 name = "ainl_native"
 version = "0.1.1"
-description = "Native Rust bindings for AINL Cortex"
+description = "Native Rust graph-memory bindings for AINL Cortex (strict-native mode)"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Steven Hooley" }]
+keywords = ["ainl", "graph-memory", "pyo3", "cortex"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Rust",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+]
+
+[project.urls]
+Homepage = "https://github.com/sbhooley/ainl-cortex"
+Repository = "https://github.com/sbhooley/ainl-cortex"
+Documentation = "https://github.com/sbhooley/ainl-cortex#readme"
 
 [tool.maturin]
 module-name = "ainl_native"
