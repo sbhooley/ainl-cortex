@@ -40,6 +40,22 @@ If you have the [ArmaraOS](https://ainativelang.com/armaraos) source cloned to `
 
 ## Verifying Activation
 
+### SessionStart banner missing after `git clone` / reinstall
+
+Claude Code loads the plugin from **`~/.claude/plugins/installed_plugins.json`**, not only the marketplace symlink. If `installPath` still points at an old **`plugins/cache/ainl-local/ainl-cortex/0.2.0`** directory (deleted or stale), hooks never run from your new tree.
+
+Fix:
+
+```bash
+cd ~/.claude/plugins/ainl-cortex
+python3 scripts/sync_installed_plugins.py
+python3 scripts/configure_marketplace.py
+```
+
+Then quit Claude Code, reopen, **`/clear`** or a new session, and **`/reload-plugins`**.
+
+Confirm: `logs/sessionstart_last.json` updates its timestamp after a new session.
+
 ### 1. SessionStart banner
 
 On every session start you should see:

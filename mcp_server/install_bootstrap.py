@@ -150,10 +150,12 @@ def register_claude_integration(root: Path) -> Tuple[bool, str]:
     try:
         from scripts.configure_marketplace import ensure_local_marketplace
         from scripts.register_claude_settings import register
+        from scripts.sync_installed_plugins import sync_installed_plugins
 
         mp = ensure_local_marketplace(root)
         settings = Path.home() / ".claude" / "settings.json"
         register(settings, mp)
+        sync_installed_plugins(root)
         return True, f"registered in {settings}"
     except Exception as exc:
         logger.warning("register_claude_integration failed: %s", exc)

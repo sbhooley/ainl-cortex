@@ -25,6 +25,17 @@ def register(settings_path: Path, marketplace_path: Path) -> None:
     settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     print(f"  {settings_path} updated")
 
+    try:
+        from scripts.sync_installed_plugins import sync_installed_plugins
+
+        link = marketplace_path / "plugins" / "ainl-cortex"
+        plugin_dir = link.resolve() if link.exists() else link
+        _changed, _msg = sync_installed_plugins(plugin_dir)
+        if _changed:
+            print(f"  installed_plugins.json: {_msg}")
+    except Exception as exc:
+        print(f"  WARNING: installed_plugins sync skipped: {exc}", file=sys.stderr)
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
