@@ -650,6 +650,22 @@ def main():
         # ── Assemble system message ───────────────────────────────────────────
         system_parts = []
 
+        try:
+            from shared.sessionstart_visibility import consume_transcript_pending
+
+            _pending_banner = consume_transcript_pending(
+                plugin_root,
+                str(input_data.get("session_id") or ""),
+            )
+            if _pending_banner:
+                system_parts.append(
+                    f"━━━ {_pending_banner} ━━━\n"
+                    "(AINL Cortex SessionStart — full status was injected at session open; "
+                    "MCP tools are available under /mcp.)"
+                )
+        except Exception as _vis_e:
+            logger.debug("SessionStart transcript banner (non-fatal): %s", _vis_e)
+
         if a2a_blocks["critical"]:
             block = "\n\n".join(a2a_blocks["critical"])
             system_parts.append(f"━━━ CRITICAL A2A MESSAGES ━━━\n{block}\n━━━ END CRITICAL ━━━")

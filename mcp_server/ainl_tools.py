@@ -4,10 +4,13 @@ Uses ainativelang package from PyPI (v1.8.0+).
 """
 import json
 import hashlib
+import logging
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
-# Import from installed ainativelang package
+logger = logging.getLogger(__name__)
+
+# Import from installed ainativelang PyPI package (module: compiler_v2, runtime, …)
 try:
     from compiler_v2 import AICodeCompiler
     from compiler_diagnostics import CompilationDiagnosticError, CompilerContext
@@ -31,10 +34,13 @@ try:
         adapter_contract as _ainl_adapter_contract_payload,
     )
     _HAS_AINL = True
-except ImportError:
+    _AINL_IMPORT_ERROR = ""
+except ImportError as _ainl_imp:
     _HAS_AINL = False
-    print("Warning: ainativelang package not installed. AINL tools will not be available.")
-    print("Install with: pip install ainativelang[mcp]>=1.8.0")
+    _AINL_IMPORT_ERROR = str(_ainl_imp)
+    # Do not print here — SessionStart/MCP stderr is shown to the user and this
+    # fires before venv re-exec or pip heal. Use deps_compat.ainativelang_importable().
+    logger.debug("compiler_v2 not importable yet: %s", _AINL_IMPORT_ERROR)
 
 
 try:

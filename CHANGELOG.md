@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 — 2026-05-19
+
+### Self-healing Claude integration (new-user safe)
+
+- **`claude_integration_heal.py`** — auto-fixes stale `installed_plugins.json` cache paths, missing marketplace/settings registration, wrong MCP launcher (`python` → `python3`), and missing `ainativelang` in venv on SessionStart, MCP launch, and hook bootstrap.
+- **`canonical_plugin_root()`** — prefers live `~/.claude/plugins/ainl-cortex` over stale `plugins/cache/…` copies when both exist.
+- **SessionStart visibility** — stderr mirror on all platforms; first-prompt transcript banner via `sessionstart_visibility.py` (Claude Code 2.1.139+ hides hook UI).
+- **ainativelang health** — checks `import compiler_v2` (pip package `ainativelang`); removes false “not installed” warnings.
+- **Docs** — `ACTIVATION.md`, `SELF_HEALING.md` updated for zero-touch new-user flow.
+
 ## 0.4.0 — 2026-05-18
 
 ### Windows SessionStart visibility + timeout

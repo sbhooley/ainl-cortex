@@ -14,9 +14,9 @@ def resolve_example_path(example_path: str, plugin_root: Optional[Path] = None) 
         plugin_root / rel,
     ]
     try:
-        import ainativelang  # type: ignore
+        import compiler_v2  # PyPI package name: ainativelang
 
-        pkg_root = Path(ainativelang.__file__).resolve().parent.parent
+        pkg_root = Path(compiler_v2.__file__).resolve().parent
         candidates.append(pkg_root / rel)
     except Exception:
         pass

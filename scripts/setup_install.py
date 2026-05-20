@@ -68,7 +68,16 @@ def pip_install(root: Path) -> None:
     _run([str(pip), "install", "--quiet", "--upgrade", "pip"], cwd=root)
     req = root / "requirements-ainl.txt"
     _run([str(pip), "install", "--quiet", "-r", str(req)], cwd=root)
-    print("  [ok] Dependencies installed")
+    _run(
+        [
+            str(vpy),
+            "-c",
+            "import compiler_v2; import importlib.metadata as m; "
+            "print('ainativelang', m.version('ainativelang'), 'compiler_v2 OK')",
+        ],
+        cwd=root,
+    )
+    print("  [ok] Dependencies installed (ainativelang → compiler_v2 import verified)")
 
 
 def configure_config(root: Path) -> None:

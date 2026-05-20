@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" startup",
-            "timeout": 20
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" startup",
+            "timeout": 60
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" user_prompt_submit",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" user_prompt_submit",
             "timeout": 5
           }
         ]
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" ainl_detection",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" ainl_detection",
             "timeout": 3
           }
         ]
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" user_prompt_expansion",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" user_prompt_expansion",
             "timeout": 3
           }
         ]
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" post_tool_use",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" post_tool_use",
             "timeout": 3
           }
         ]
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" ainl_validator",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" ainl_validator",
             "timeout": 5
           }
         ]
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" pre_compact",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" pre_compact",
             "timeout": 3
           }
         ]
@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" post_compact",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" post_compact",
             "timeout": 3
           }
         ]
@@ -90,7 +90,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" stop",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.py\" stop",
             "timeout": 5
           }
         ]

@@ -1,7 +1,7 @@
 {
   "name": "ainl-cortex",
   "displayName": "AINL Cortex",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Graph-native memory, self-learning, and multi-agent coordination for Claude Code. Every session is captured, every pattern learned, every agent connected. WINDOWS AGENTS: git pull then .\\setup.cmd -PythonOnly (never & setup.ps1). SessionStart banner shows install steps when needed.",
   "author": { "name": "Steven Hooley" },
   "repository": "https://github.com/sbhooley/ainl-cortex",
@@ -13,7 +13,7 @@
   "readme": "README.md",
   "mcpServers": {
     "ainl-cortex": {
-      "command": "python",
+      "command": "python3",
       "args": ["${CLAUDE_PLUGIN_ROOT}/mcp_launch.py"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}"
     }

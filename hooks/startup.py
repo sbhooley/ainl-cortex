@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-SessionStart: visible status for Claude (systemMessage) + preflight DB/venv/MCP.
-Claude Code shows stderr from hooks inconsistently; always emit JSON on stdout with
-systemMessage + hookSpecificOutput (see plugin-dev hook-development SKILL).
+SessionStart: preflight DB/venv/MCP + operator banner on stderr (CC 2.1.139+).
+Always emit JSON on stdout with systemMessage + hookSpecificOutput for Claude context;
+mirror the full banner to stderr via _mirror_sessionstart_banner (see hooks reference).
 """
 
 import json
@@ -83,18 +83,21 @@ def _write_sessionstart_probe(
 
 def _mirror_sessionstart_banner(system_message: str) -> None:
     """
-    macOS Claude Code prints hook systemMessage as ``SessionStart:startup says:``.
-    Windows native builds often omit that UI — mirror the banner to stderr.
+    Mirror the full banner to stderr for the operator.
+
+    Claude Code 2.1.139+ does not show ``systemMessage`` for SessionStart in the
+    UI (hooks reference: SessionStart → stderr to user only). Older builds used
+    a ``SessionStart:startup says:`` line from ``systemMessage``; stderr is now
+    the reliable channel on macOS, Linux, and Windows.
     """
     if not (system_message or "").strip():
         return
-    try:
-        from mcp_server.platform_paths import is_windows as _is_windows
-    except Exception:
-        _win = sys.platform == "win32"
-    else:
-        _win = _is_windows()
-    if not _win:
+    if os.environ.get("AINL_CORTEX_SESSIONSTART_STDERR", "1").strip().lower() in (
+        "0",
+        "false",
+        "no",
+        "off",
+    ):
         return
     first = system_message.strip().split("\n", 1)[0]
     print(f"SessionStart:startup says: {first}", file=sys.stderr, flush=True)
@@ -123,14 +126,6 @@ def get_compression_status():
         "line": st.get("line", "  • Compression: off\n"),
         "lines": st.get("lines", []),
     }
-
-
-def check_ainl_tools() -> bool:
-    try:
-        from ainl_tools import AINLTools  # noqa: F401
-        return True
-    except ImportError:
-        return False
 
 
 def get_db_path(cwd: Path) -> Path:
@@ -563,12 +558,59 @@ def main():
     try:
         _ss_t0 = time.perf_counter()
         root = _plugin_root()
+        from shared.stdin import read_stdin_json
+        from shared.sessionstart_visibility import (
+            build_sessionstart_terminal_sequence,
+            first_banner_line,
+            write_transcript_pending,
+        )
+
+        _hook_input = read_stdin_json(hook_name="startup")
+        _session_id = str(_hook_input.get("session_id") or "").strip()
         _clear_stale_scope_lock(root)
-        cwd = _hook_cwd()
-        logger.info("SessionStart: plugin=%s cwd=%s", root, cwd)
+        _cwd_raw = _hook_input.get("cwd")
+        cwd = Path(_cwd_raw) if _cwd_raw else Path.cwd()
+        logger.info("SessionStart: plugin=%s cwd=%s session=%s", root, cwd, _session_id or "?")
+
+        # Self-heal Claude wiring + ainativelang before any status banner (new-user safe).
+        _integration_heal_banner = ""
+        try:
+            sys.path.insert(0, str(root))
+            from mcp_server.claude_integration_heal import (
+                format_heal_banner,
+                heal_claude_integration,
+            )
+            from mcp_server.install_bootstrap import ensure_plugin_installed, needs_install
+
+            if needs_install(root):
+                _iok, _imsg = ensure_plugin_installed(
+                    root, python_only=True, register_claude=True
+                )
+                if _iok:
+                    logger.info("SessionStart auto-install: %s", _imsg)
+            _heal_reload, _heal_actions = heal_claude_integration(root)
+            _integration_heal_banner = format_heal_banner(_heal_reload, _heal_actions)
+        except Exception as _int_e:
+            logger.debug("SessionStart integration heal (non-fatal): %s", _int_e)
 
         status = get_compression_status()
-        ainl = check_ainl_tools()
+        sys.path.insert(0, str(root))
+        sys.path.insert(0, str(root / "mcp_server"))
+        from mcp_server.deps_compat import (
+            ainativelang_importable,
+            ainativelang_pip_version,
+            ensure_ainativelang,
+        )
+
+        try:
+            _ainl_heal_ok, _ainl_heal_msg = ensure_ainativelang(root)
+        except Exception as _ae:
+            _ainl_heal_ok, _ainl_heal_msg = False, str(_ae)
+        ainl = ainativelang_importable()
+        if ainl and not _ainl_heal_msg:
+            _ver = ainativelang_pip_version()
+            if _ver:
+                _ainl_heal_msg = f"pip {_ver}"
         db_path = get_db_path(cwd)
         try:
             db_s = warm_database(db_path)
@@ -602,15 +644,6 @@ def main():
             )
         except Exception as _inst_e:
             logger.debug("install agent hint (non-fatal): %s", _inst_e)
-        _ainl_heal_msg = ""
-        # Self-heal ainativelang in venv (idempotent; safe on python-only backend)
-        try:
-            sys.path.insert(0, str(root))
-            from mcp_server.deps_compat import ensure_ainativelang, ainativelang_importable
-            _ainl_heal_ok, _ainl_heal_msg = ensure_ainativelang(root)
-            ainl = ainativelang_importable()
-        except Exception as _ae:
-            _ainl_heal_ok, _ainl_heal_msg = False, str(_ae)
         _session_extras = {}
         try:
             sys.path.insert(0, str(root))
@@ -817,6 +850,8 @@ def main():
         )
 
         system_blocks = [banner]
+        if _integration_heal_banner:
+            system_blocks.insert(0, _integration_heal_banner.rstrip("\n") + "\n")
         if _agent_install_banner:
             system_blocks.insert(0, _agent_install_banner.rstrip("\n") + "\n")
 
@@ -968,7 +1003,11 @@ def main():
 
         system_message = "\n".join(system_blocks)
 
+        _banner_one_line = first_banner_line(system_message)
+        write_transcript_pending(root, _session_id, _banner_one_line)
+
         additional = (
+            f"Operator: {_banner_one_line}\n"
             f"Session initialized with AINL graph memory. SQLite at {db_path}. "
             f"MCP preflight: {mcp_detail}. "
             f"A2A bridge: {'running' if bridge_status.get('running') else 'offline'}."
@@ -983,6 +1022,9 @@ def main():
                 "additionalContext": additional,
             },
         }
+        _term_seq = build_sessionstart_terminal_sequence(_banner_one_line)
+        if _term_seq:
+            out["terminalSequence"] = _term_seq
 
         try:
             from shared.hook_metrics import append_hook_metric

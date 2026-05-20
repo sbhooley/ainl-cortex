@@ -30,6 +30,7 @@ setup.sh / mcp_launch.sh / SessionStart / every call_tool
 | 5 | Hooks ↔ MCP paths | **Done** | `ensure_hooks_path()` |
 | 5b | Windows `run_hook.cmd` / `hooks.json` | **Done** | `hook_launcher_heal.ensure_hook_launchers()` on MCP start, `run_hook.py`, install, SessionStart banner |
 | 6 | Operator-only failures | **Done** | `operator_checks` |
+| 6b | Claude install path / MCP launcher / ainativelang | **Done** | `claude_integration_heal.heal_claude_integration()` on SessionStart + MCP bootstrap |
 | 7 | Relative-import codemod | **Done** | `scripts/codemod_relative_imports.py` |
 | 8 | MCP reload without full restart | **Done** | `mcp_reload.request_mcp_reload()` after pull/setup; SessionStart banner |
 | 9 | Auto native migration | **Done** | `migration_compat.scan_and_auto_migrate_all_projects()` on SessionStart when `store_backend=native` |

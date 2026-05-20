@@ -41,6 +41,74 @@ def plugin_root(explicit: Optional[Path] = None) -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def is_cache_plugin_path(path: Path) -> bool:
+    return "/plugins/cache/" in str(path.resolve()).replace("\\", "/")
+
+
+def is_valid_plugin_root(path: Path) -> bool:
+    root = path.resolve()
+    return (root / "hooks" / "startup.py").is_file()
+
+
+def _plugin_version_tuple(path: Path) -> tuple:
+    manifest = path / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file():
+        return (0, 0, 0)
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        ver = str(data.get("version") or "0.0.0").strip()
+        parts = []
+        for piece in ver.split("."):
+            try:
+                parts.append(int(piece))
+            except ValueError:
+                parts.append(0)
+        while len(parts) < 3:
+            parts.append(0)
+        return tuple(parts[:3])
+    except (json.JSONDecodeError, OSError):
+        return (0, 0, 0)
+
+
+def canonical_plugin_root(current: Optional[Path] = None) -> Path:
+    """
+    Prefer a live git/marketplace-link install over a stale Claude cache copy.
+
+    When ``installed_plugins.json`` still points at ``plugins/cache/…`` but the
+    user cloned to ``~/.claude/plugins/ainl-cortex``, self-heal must register
+    the live tree — not re-sync back to the old cache path.
+    """
+    current = (current or plugin_root()).resolve()
+    candidates: List[Path] = []
+
+    standard = Path.home() / ".claude" / "plugins" / "ainl-cortex"
+    if standard.is_dir():
+        candidates.append(standard.resolve())
+
+    mp_link = Path.home() / ".claude" / "ainl-local-marketplace" / "plugins" / "ainl-cortex"
+    if mp_link.exists():
+        candidates.append(mp_link.resolve())
+
+    candidates.append(current)
+
+    valid: List[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if is_valid_plugin_root(candidate):
+            valid.append(candidate)
+
+    if not valid:
+        return current
+
+    non_cache = [p for p in valid if not is_cache_plugin_path(p)]
+    pool = non_cache or valid
+    return max(pool, key=lambda p: (_plugin_version_tuple(p), len(str(p))))
+
+
 def venv_bin_dir(root: Optional[Path] = None) -> Path:
     root = root or plugin_root()
     if is_windows():

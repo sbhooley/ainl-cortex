@@ -54,7 +54,7 @@ def test_build_main_banner_expands_compression_lines():
     assert "compresses:" in banner
     assert "Legacy fallback:" in banner
     assert "  • Stack:" in banner
-    assert "AINL Python tools (ainativelang)=yes" in banner
+    assert "AINL compiler (pip: ainativelang; import: compiler_v2)=yes" in banner
     assert "ainl_native (Rust bindings)=" in banner
     assert "MCP stack (same venv as server)=OK" in banner
     assert "venv on PATH (child processes)=" in banner
@@ -80,7 +80,7 @@ def test_stack_lines_preserves_all_fields():
         expected_tools=31,
     )
     text = "\n".join(stack)
-    assert "ainativelang)=no (auto-heal:" in text
+    assert "compiler_v2)=no (auto-heal:" in text
     assert "ainl_native (Rust bindings)=skipped" in text
     assert "MCP stack (same venv as server)=FAIL" in text
     assert "venv on PATH (child processes)=appended to ~/" in text

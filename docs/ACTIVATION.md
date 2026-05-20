@@ -24,7 +24,9 @@ cd ~/.claude/plugins/ainl-cortex
 bash setup.sh
 ```
 
-Then **restart Claude Code**.
+Then **restart Claude Code** (or run `/reload-plugins` once after the first session).
+
+**New users:** If you only enable the plugin from the marketplace without running `setup.sh`, the plugin **auto-installs on first SessionStart or MCP launch** (venv + `ainativelang` + Claude settings wiring). You should see an **AUTO-HEAL** block if anything was repaired; run `/reload-plugins` when prompted.
 
 `setup.sh` handles everything automatically:
 - Creates `.venv` and installs Python dependencies
@@ -56,9 +58,26 @@ Then quit Claude Code, reopen, **`/clear`** or a new session, and **`/reload-plu
 
 Confirm: `logs/sessionstart_last.json` updates its timestamp after a new session.
 
+**PyPI vs import name:** macOS/Linux install runs `pip install -r requirements-ainl.txt`, which installs **`ainativelang[mcp]>=1.8.0`**. The Python import is **`compiler_v2`**, not `import ainativelang`. A false “not installed” warning usually means something checked the wrong module name, or stderr from an early import before the venv re-exec — not a missing package. Verify with:
+
+```bash
+cd ~/.claude/plugins/ainl-cortex
+.venv/bin/python3 -c "import compiler_v2; import importlib.metadata as m; print(m.version('ainativelang'))"
+```
+
+**Claude Code 2.1.139+:** SessionStart no longer shows `systemMessage` in the chat UI (MCP can still show **connected** in `/mcp`). The plugin is active when `logs/sessionstart_last.json` updates on a new session.
+
+| What you should see | Where |
+|---|---|
+| Full banner (optional) | Terminal stderr: `SessionStart:startup says:` — set `AINL_CORTEX_SESSIONSTART_STDERR=0` to disable |
+| macOS notification | Desktop ping from `terminalSequence` — set `AINL_CORTEX_SESSIONSTART_NOTIFY=0` to disable |
+| **First message in session** | Transcript block starting with `━━━ [AINL Cortex] … ━━━` on your **first prompt** after `/clear` or a new session |
+
+If MCP is connected but you see no startup line, send any prompt once — the banner is replayed on first `UserPromptSubmit`.
+
 ### 1. SessionStart banner
 
-On every session start you should see:
+On every session start you should see (terminal stderr on CC 2.1.139+, or the legacy UI line on older builds):
 
 ```
 [AINL Cortex]  Plugin root: ~/.claude/plugins/ainl-cortex

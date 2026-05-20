@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from . import build_stamp, deps_compat, import_compat, native_compat, operator_checks
+from .claude_integration_heal import heal_claude_integration
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,15 @@ def bootstrap_runtime(
             parts.append(_h_msg)
     except Exception:
         pass
+
+    try:
+        _reload, _heal_actions = heal_claude_integration(root)
+        if _heal_actions:
+            parts.append(f"claude_heal={len(_heal_actions)}")
+        if _reload:
+            parts.append("reload_recommended")
+    except Exception as exc:
+        logger.debug("heal_claude_integration: %s", exc)
 
     if heal_deps:
         ainl_ok, ainl_msg = deps_compat.ensure_ainativelang(root)

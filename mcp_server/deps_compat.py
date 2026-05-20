@@ -17,11 +17,24 @@ _ainl_install_attempted = False
 
 
 def ainativelang_importable() -> bool:
+    """True when the PyPI ``ainativelang`` package is usable (imports as ``compiler_v2``)."""
     try:
         import compiler_v2  # noqa: F401
         return True
     except ImportError:
         return False
+
+
+def ainativelang_pip_version() -> str:
+    """Installed PyPI version string, or '' when not importable."""
+    if not ainativelang_importable():
+        return ""
+    try:
+        import importlib.metadata as md
+
+        return md.version("ainativelang")
+    except Exception:
+        return ""
 
 
 def ensure_ainativelang(root: Optional[Path] = None, *, force: bool = False) -> Tuple[bool, str]:

@@ -181,17 +181,17 @@ def format_stack_lines(
 ) -> List[str]:
     """Stack diagnostics as wrapped lines (same labels/values as the one-liner)."""
     if ainl_ok:
-        ainl_bit = "yes"
+        ainl_bit = f"yes ({ainl_heal_msg})" if ainl_heal_msg else "yes"
     elif ainl_heal_msg:
         ainl_bit = f"no (auto-heal: {ainl_heal_msg[:80]})"
     else:
-        ainl_bit = "no"
+        ainl_bit = "no (pip: ainativelang[mcp]>=1.8.0 → import compiler_v2)"
     native_bit = (native_status or "unknown").replace("\n", " ")
     mcp_bit = "OK" if mcp_ok else f"FAIL ({mcp_detail[:80]})"
     venv_bit = _shorten_venv_path_status(venv_file_status or "n/a")
     bridge_bit = (bridge_line or "n/a").replace("\n", " ")
     segments = [
-        f"AINL Python tools (ainativelang)={ainl_bit}",
+        f"AINL compiler (pip: ainativelang; import: compiler_v2)={ainl_bit}",
         f"ainl_native (Rust bindings)={native_bit}",
         f"MCP stack (same venv as server)={mcp_bit}",
         f"venv on PATH (child processes)={venv_bit}",

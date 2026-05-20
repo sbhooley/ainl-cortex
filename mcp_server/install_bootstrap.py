@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+from . import deps_compat
 from .platform_paths import (
     find_system_python,
     is_windows,
@@ -78,8 +79,15 @@ def needs_install(root: Optional[Path] = None) -> bool:
     root = root or plugin_root()
     if venv_python(root) is None:
         return True
+    if not (root / "hooks" / "hooks.json").is_file():
+        return True
     manifest = read_install_manifest(root)
     if manifest is None:
+        return True
+    if not deps_compat.ainativelang_importable():
+        ok, _ = deps_compat.ensure_ainativelang(root)
+        if ok and deps_compat.ainativelang_importable():
+            return False
         return True
     return False
 
@@ -175,6 +183,7 @@ def ensure_plugin_installed(
     Returns (success, short_message).
     """
     root = root or plugin_root()
+    root = canonical_plugin_root(root)
 
     if is_windows() and not setup_ps1_is_current(root):
         return False, setup_ps1_stale_message(root)
