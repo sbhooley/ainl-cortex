@@ -21,12 +21,38 @@ from .platform_paths import (
     plugin_root,
     read_install_manifest,
     venv_python,
-)
+)  # is_windows used for setup.ps1 version gate
 
 logger = logging.getLogger(__name__)
 
 _INSTALL_ATTEMPTED: dict[str, float] = {}
 _INSTALL_COOLDOWN_SEC = 120.0
+
+
+SETUP_PS1_VERSION_MARKER = "SETUP_SCRIPT_VERSION=2"
+
+
+def setup_ps1_is_current(root: Optional[Path] = None) -> bool:
+    """True when setup.ps1 includes the PS 5.1-safe version marker."""
+    root = root or plugin_root()
+    path = root / "setup.ps1"
+    if not path.is_file():
+        return False
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:1200]
+    except OSError:
+        return False
+    return SETUP_PS1_VERSION_MARKER in head
+
+
+def setup_ps1_stale_message(root: Optional[Path] = None) -> str:
+    root = root or plugin_root()
+    return (
+        f"Plugin at {root} has an outdated setup.ps1 (pre-{SETUP_PS1_VERSION_MARKER}). "
+        "Run: git pull  then  setup.cmd -PythonOnly  "
+        "(or: powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly). "
+        "Do not use: & setup.ps1 -Yes"
+    )
 
 
 def is_safe_install_root(root: Path) -> bool:
@@ -139,6 +165,9 @@ def ensure_plugin_installed(
     Returns (success, short_message).
     """
     root = root or plugin_root()
+
+    if is_windows() and not setup_ps1_is_current(root):
+        return False, setup_ps1_stale_message(root)
 
     if not is_safe_install_root(root):
         return False, (

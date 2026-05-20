@@ -8,19 +8,29 @@ If a user asks to install or enable AINL Cortex, **you** run setup — do not ha
 
 ```bash
 cd "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/ainl-cortex}"
+git pull
 python scripts/claude_install.py
 ```
 
-Windows (when `python` is not on PATH):
+Windows (preferred — avoids PS 5.1 `& setup.ps1` parse bugs):
 
 ```powershell
 cd $env:USERPROFILE\.claude\plugins\ainl-cortex
+git pull
+.\setup.cmd -PythonOnly
+```
+
+Or (when `python` is on PATH):
+
+```powershell
 py -3 scripts\claude_install.py
 ```
 
+**Do not run:** `& setup.ps1 -PythonOnly -Yes` — stale copies fail to parse. Use **`setup.cmd`** or **`-File setup.ps1`**.
+
 Or OS-specific wrappers (same result):
 
-- **Windows:** `powershell -ExecutionPolicy Bypass -File setup.ps1`
+- **Windows:** `setup.cmd -PythonOnly` or `powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly`
 - **macOS/Linux:** `bash setup.sh --python-only`
 
 ### What happens automatically (no user steps)

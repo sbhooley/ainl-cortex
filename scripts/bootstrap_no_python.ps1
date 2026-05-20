@@ -9,7 +9,7 @@ $venvPy = Join-Path $PluginDir ".venv\Scripts\python.exe"
 
 if (Test-Path $venvPy) { exit 0 }
 
-Write-Host "ainl-cortex: no Python on PATH — bootstrapping via uv..." -ForegroundColor Cyan
+Write-Host "ainl-cortex: no Python on PATH - bootstrapping via uv..." -ForegroundColor Cyan
 
 # Prefer curl.exe (Win10+) then Invoke-WebRequest
 $uvVer = "0.6.14"

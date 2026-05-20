@@ -120,8 +120,10 @@ bash setup.sh --python-only
 # Variant C — unattended Rust install via rustup (CI machines you control)
 bash setup.sh --auto-install-rust
 
-# Windows 11 — PowerShell (no Git Bash required for setup)
-powershell -ExecutionPolicy Bypass -File setup.ps1
+# Windows 11 — after git pull (required if you cloned before May 2026)
+cd %USERPROFILE%\.claude\plugins\ainl-cortex
+git pull
+setup.cmd -PythonOnly
 # Or: powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly
 
 # Then restart Claude Code.

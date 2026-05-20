@@ -1,8 +1,9 @@
 # AINL Cortex setup for Windows (PowerShell).
-# Usage:
-#   powershell -ExecutionPolicy Bypass -File setup.ps1
+# SETUP_SCRIPT_VERSION=2  (install_bootstrap checks this; do not remove)
+# Usage (preferred):
+#   setup.cmd -PythonOnly
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly
-#   powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly -Yes
+# Avoid:  & setup.ps1 -Yes   (old copies + PS 5.1 may fail to parse)
 param(
     [switch]$PythonOnly,
     [switch]$EnableNative,
@@ -14,6 +15,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 $PluginDir = $PSScriptRoot
+
+# Fail fast if an outdated setup.ps1 is still on disk (pre-60b30d5).
+$setupHead = Get-Content -LiteralPath $PSCommandPath -TotalCount 6 -ErrorAction SilentlyContinue
+if ($setupHead -notmatch 'SETUP_SCRIPT_VERSION=2') {
+    Write-Host "ERROR: setup.ps1 is outdated (missing SETUP_SCRIPT_VERSION=2)." -ForegroundColor Red
+    Write-Host "  cd $PluginDir" -ForegroundColor Yellow
+    Write-Host "  git pull" -ForegroundColor Yellow
+    Write-Host "  Or run: setup.cmd -PythonOnly" -ForegroundColor Yellow
+    exit 2
+}
 
 # Refuse disposable temp verification clones (mirrors setup.sh).
 $pluginNorm = $PluginDir -replace '\\', '/'
