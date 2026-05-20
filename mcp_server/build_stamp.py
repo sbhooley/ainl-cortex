@@ -76,8 +76,48 @@ def write_mcp_runtime_stamp(root: Optional[Path] = None) -> Optional[str]:
     return sha
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def prune_stale_mcp_runtime(root: Optional[Path] = None) -> bool:
+    """
+    Remove ``mcp_runtime.json`` when its recorded PID is no longer running.
+
+    Prevents perpetual stale-MCP banners after restarts when the new MCP process
+  failed to refresh the stamp (or preflight left a dead PID on disk).
+    """
+    root = root or plugin_root()
+    path = _logs_dir(root) / "mcp_runtime.json"
+    if not path.is_file():
+        return False
+    try:
+        runtime = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return True
+    pid = runtime.get("pid")
+    if pid is not None and _pid_alive(int(pid)):
+        return False
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return True
+
+
 def read_mcp_runtime(root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     root = root or plugin_root()
+    prune_stale_mcp_runtime(root)
     path = _logs_dir(root) / "mcp_runtime.json"
     if not path.is_file():
         return None

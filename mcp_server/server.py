@@ -1519,6 +1519,12 @@ memory_server.memory_list_autonomous_executions = memory_list_autonomous_executi
 
 async def main():
     """Run the MCP server"""
+    try:
+        from .runtime_bootstrap import bootstrap_runtime
+
+        bootstrap_runtime(record_mcp_runtime=True)
+    except Exception as exc:
+        logger.warning("MCP runtime bootstrap (stamp) failed: %s", exc)
     logger.info("Starting AINL Graph Memory MCP Server with official SDK")
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())

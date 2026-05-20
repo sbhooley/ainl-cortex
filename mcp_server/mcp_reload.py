@@ -54,6 +54,9 @@ def clear_reload_request(root: Optional[Path] = None) -> None:
 
 
 def _runtime_sha_stale(root: Path) -> Optional[str]:
+    from .build_stamp import prune_stale_mcp_runtime
+
+    prune_stale_mcp_runtime(root)
     disk_sha = current_git_head(root)
     if not disk_sha:
         return None
