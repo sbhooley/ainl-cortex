@@ -17,8 +17,8 @@ $ErrorActionPreference = "Stop"
 $PluginDir = $PSScriptRoot
 
 # Fail fast if an outdated setup.ps1 is still on disk (pre-60b30d5).
-$setupHead = Get-Content -LiteralPath $PSCommandPath -TotalCount 6 -ErrorAction SilentlyContinue
-if ($setupHead -notmatch 'SETUP_SCRIPT_VERSION=2') {
+# Use Select-String: "-notmatch" on a string[] returns non-matching lines (always truthy).
+if (-not (Select-String -LiteralPath $PSCommandPath -Pattern 'SETUP_SCRIPT_VERSION=2' -Quiet)) {
     Write-Host "ERROR: setup.ps1 is outdated (missing SETUP_SCRIPT_VERSION=2)." -ForegroundColor Red
     Write-Host "  cd $PluginDir" -ForegroundColor Yellow
     Write-Host "  git pull" -ForegroundColor Yellow
