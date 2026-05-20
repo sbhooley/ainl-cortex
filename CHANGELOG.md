@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.4 — 2026-05-19
+
+### SessionStart banner shows plugin version
+
+- First banner line is now `[AINL Cortex vX.Y.Z]` (stderr mirror, systemMessage, first-prompt transcript).
+
 ## 0.4.3 — 2026-05-19
 
 ### Fix scripts package imports for self-heal

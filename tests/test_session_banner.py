@@ -51,6 +51,7 @@ def test_build_main_banner_expands_compression_lines():
         bridge_line="not running — ArmaraOS daemon not found — start ArmaraOS to enable A2A",
     )
     assert "Graph Memory:" in banner
+    assert "[AINL Cortex v" in banner.splitlines()[0]
     assert "compresses:" in banner
     assert "Legacy fallback:" in banner
     assert "  • Stack:" in banner

@@ -2,8 +2,25 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+def read_plugin_version(root: Path) -> str:
+    """Version from ``.claude-plugin/plugin.json`` (never raises)."""
+    try:
+        data = json.loads(
+            (root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        ver = str(data.get("version") or "").strip()
+        return ver or "unknown"
+    except (OSError, json.JSONDecodeError, TypeError):
+        return "unknown"
+
+
+def banner_title_tag(root: Path) -> str:
+    return f"[AINL Cortex v{read_plugin_version(root)}]"
+
 
 _BENCH_RECALL = {
     "OFF": "",
@@ -231,7 +248,7 @@ def build_main_banner(
 ) -> str:
     """SessionStart status block (graph memory, stack health, compression)."""
     git_bit = "git" if git_repo else "no-git"
-    lines: List[str] = [f"[AINL Cortex]  {_home_rel(root)}"]
+    lines: List[str] = [f"{banner_title_tag(root)}  {_home_rel(root)}"]
     graph_segments = [
         f"Graph Memory: {db_s}",
         f"backend: {backend}",
