@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3 — 2026-05-19
+
+### Fix scripts package imports for self-heal
+
+- **`scripts/__init__.py`** — enables `from scripts.sync_installed_plugins` (and marketplace/settings helpers) from MCP and hooks.
+
 ## 0.4.2 — 2026-05-19
 
 ### Fix scripts import path for self-heal and registration
