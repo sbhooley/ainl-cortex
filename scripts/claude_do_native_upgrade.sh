@@ -10,7 +10,7 @@
 set -euo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PY="$PLUGIN_DIR/.venv/bin/python"
+PY=$(python3 -c "import sys; from pathlib import Path; sys.path.insert(0,'$PLUGIN_DIR'); from mcp_server.platform_paths import venv_python; print(venv_python(Path('$PLUGIN_DIR')) or '')")
 DRY=false
 
 while [ $# -gt 0 ]; do
@@ -25,8 +25,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-if [[ ! -x "$PY" ]]; then
-  echo "ERROR: .venv missing — run: cd $PLUGIN_DIR && bash setup.sh" >&2
+if [[ -z "$PY" || ! -f "$PY" ]]; then
+  echo "ERROR: .venv missing — run: cd $PLUGIN_DIR && bash setup.sh (or setup.ps1 on Windows)" >&2
   exit 2
 fi
 

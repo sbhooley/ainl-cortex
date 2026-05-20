@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .import_compat import plugin_root, venv_python
+from .platform_paths import is_windows
 from .migration_compat import needs_native_migration
 from .native_compat import read_store_backend
 
@@ -82,21 +83,35 @@ def assess(root: Optional[Path] = None) -> Dict[str, Any]:
 
     py = venv_python(root)
     if py is None:
+        setup_cmd = (
+            "powershell -ExecutionPolicy Bypass -File setup.ps1"
+            if is_windows()
+            else "bash setup.sh"
+        )
         actions.append(
             {
                 "id": "setup",
                 "type": "shell",
-                "command": "bash setup.sh",
+                "command": setup_cmd,
                 "cwd": str(root),
                 "why": "Plugin venv missing — required before any upgrade.",
             }
         )
     elif backend == "native" and unmigrated:
+        migrate_cmd = (
+            f'"{py}" scripts/migrate_python_to_native.py'
+            if py
+            else (
+                "powershell -ExecutionPolicy Bypass -File scripts/migrate_python_to_native.ps1"
+                if is_windows()
+                else "bash scripts/migrate_python_to_native.sh"
+            )
+        )
         actions.append(
             {
                 "id": "migrate_only",
                 "type": "shell",
-                "command": "bash scripts/migrate_python_to_native.sh",
+                "command": migrate_cmd,
                 "cwd": str(root),
                 "why": (
                     f"store_backend is native but {len(unmigrated)} project(s) still "
@@ -105,14 +120,24 @@ def assess(root: Optional[Path] = None) -> Dict[str, Any]:
             }
         )
     elif backend == "python":
-        cmd = "bash scripts/upgrade_to_native.sh"
         flags: List[str] = []
         if not rustc:
             flags.append("--auto-install-rust")
         if has_data:
             flags.append("--yes")
-        if flags:
-            cmd += " " + " ".join(flags)
+        flag_s = (" " + " ".join(flags)) if flags else ""
+        if is_windows():
+            ps_flags = []
+            if has_data:
+                ps_flags.append("-Yes")
+            if not rustc:
+                ps_flags.append("-AutoInstallRust")
+            ps_suffix = (" " + " ".join(ps_flags)) if ps_flags else ""
+            cmd = f"powershell -ExecutionPolicy Bypass -File scripts/upgrade_to_native.ps1{ps_suffix}"
+        elif py is not None:
+            cmd = f'"{py}" scripts/upgrade_to_native.py{flag_s}'
+        else:
+            cmd = f"python scripts/upgrade_to_native.py{flag_s}"
         actions.append(
             {
                 "id": "upgrade",
@@ -120,8 +145,8 @@ def assess(root: Optional[Path] = None) -> Dict[str, Any]:
                 "command": cmd,
                 "cwd": str(root),
                 "why": (
-                    "Single orchestration script: ainl_native → migrate or greenfield "
-                    "flip → MCP reload marker."
+                    "ainl_native (PyPI wheel on Windows) → migrate or greenfield flip → "
+                    "MCP reload marker."
                 ),
             }
         )
@@ -161,11 +186,12 @@ def assess(root: Optional[Path] = None) -> Dict[str, Any]:
             }
         )
 
+    status_py = f'"{py}" scripts/native_upgrade_status.py' if py else "python scripts/native_upgrade_status.py"
     claude_steps = [
         f"cd {root}",
-        "Run: .venv/bin/python scripts/native_upgrade_status.py  (read recommended_actions)",
+        f"Run: {status_py}  (read recommended_actions)",
         "Run the shell action(s), then tell the user to run /reload-plugins.",
-        "Do NOT edit config.json by hand or call migrate_to_native.py unless debugging.",
+        "Do NOT edit config.json by hand unless debugging.",
     ]
 
     return {
@@ -202,10 +228,13 @@ def format_banner(state: Dict[str, Any]) -> str:
             lines.append(f"  • RUN: {act['command']}  ({act['id']})")
         elif act["type"] == "user":
             lines.append(f"  • USER: {act.get('command', '/reload-plugins')}")
-    lines.append(
-        "  • Agent: run `.venv/bin/python scripts/native_upgrade_status.py --execute` "
-        "when the user asks to install Rust or upgrade to native."
+    py = venv_python(Path(state["plugin_root"]))
+    status_cmd = (
+        f'"{py}" scripts/native_upgrade_status.py --execute'
+        if py
+        else "python scripts/native_upgrade_status.py --execute"
     )
+    lines.append(f"  • Agent: {status_cmd} when the user asks to upgrade to native.")
     lines.append("━━━\n")
     return "\n".join(lines)
 

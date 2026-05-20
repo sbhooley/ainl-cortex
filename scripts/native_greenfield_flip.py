@@ -37,7 +37,7 @@ def graph_memory_has_data() -> bool:
 def main() -> int:
     if graph_memory_has_data():
         print(
-            "ERROR: graph memory data exists — use scripts/migrate_python_to_native.sh",
+            "ERROR: graph memory data exists — use scripts/migrate_python_to_native.py",
             file=sys.stderr,
         )
         return 1

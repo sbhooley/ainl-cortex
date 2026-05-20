@@ -122,7 +122,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 # Then restart Claude Code.
 ```
 
-**Windows:** Setup detects `sys.platform == "win32"`, creates `.venv\Scripts\python.exe`, writes `install_manifest.json`, and regenerates hooks to use `scripts/run_hook.py`. MCP launches via `mcp_launch.py`. See [`docs/INSTALL_WINDOWS.md`](docs/INSTALL_WINDOWS.md).
+**Windows:** Setup detects `sys.platform == "win32"`, creates `.venv\Scripts\python.exe`, writes `install_manifest.json`, and regenerates hooks to use `scripts/run_hook.py`. MCP launches via `mcp_launch.py`. Native backend: PyPI `ainl_native` wheel (usually no Rust); `powershell -File scripts/upgrade_to_native.ps1 -Yes` or `setup.ps1 -EnableNative -Yes`. See [`docs/INSTALL_WINDOWS.md`](docs/INSTALL_WINDOWS.md).
 
 `setup.sh` no longer flips the storage backend or migrates data automatically. To
 switch to the Rust native backend later, run:

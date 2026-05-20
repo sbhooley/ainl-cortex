@@ -3,7 +3,10 @@
 #   powershell -ExecutionPolicy Bypass -File setup.ps1
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly
 param(
-    [switch]$PythonOnly
+    [switch]$PythonOnly,
+    [switch]$EnableNative,
+    [switch]$Yes,
+    [switch]$AutoInstallRust
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,7 +89,21 @@ $settings.enabledPlugins["ainl-cortex@ainl-local"] = $true
 New-Item -ItemType Directory -Force -Path (Split-Path $Settings) | Out-Null
 $settings | ConvertTo-Json -Depth 10 | Set-Content -Path $Settings -Encoding UTF8
 
+if ($EnableNative) {
+    Write-Host ""
+    Write-Host "=== Upgrading to native Rust backend ===" -ForegroundColor Cyan
+    $nativeArgs = @("$PluginDir\scripts\upgrade_to_native.py", "--yes")
+    if ($AutoInstallRust) { $nativeArgs += "--auto-install-rust" }
+    & $py @nativeArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [warn] Native upgrade failed — Python backend still works." -ForegroundColor Yellow
+    }
+}
+
 Write-Host ""
 Write-Host "=== Setup complete (Windows) ===" -ForegroundColor Green
 Write-Host "  Restart Claude Code, then run /reload-plugins if upgrading."
 Write-Host "  MCP entry: python mcp_launch.py (see install_manifest.json)"
+if (-not $EnableNative) {
+    Write-Host "  Native backend later: powershell -File scripts/upgrade_to_native.ps1 -Yes"
+}
