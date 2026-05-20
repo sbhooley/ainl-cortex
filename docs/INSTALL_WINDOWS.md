@@ -170,6 +170,8 @@ Usually **`git pull` + `.\setup.cmd -PythonOnly`** is enough. Re-clone only if t
 | Symptom | Fix |
 |---------|-----|
 | PostToolUse hook: `scripts\.\scripts\bootstrap_no_python.ps1` does not exist | Fixed in `run_hook.cmd` (use `git pull` or re-clone). Old batch logic set plugin root to `...\scripts\.` |
+| No `[AINL Cortex]` banner on SessionStart (macOS shows it, Windows does not) | Same bug — SessionStart never ran. After `git pull` (commit **f739b2d+**): `.\setup.cmd -PythonOnly`, quit Claude, `/reload-plugins`. Test: `.\scripts\verify_sessionstart.cmd` — stdout JSON should contain `[AINL Cortex]` |
+| `hooks/hooks.json` still says `python ... run_hook.py` | Run `.\setup.cmd -PythonOnly` — Windows should use `"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.cmd" startup` |
 | `Remove-Item`: directory in use | Quit Claude Code; stop `python`/`py` under `ainl-cortex`; retry |
 | `python` not found | Reinstall Python with PATH enabled; reopen terminal |
 | MCP stack FAIL | `powershell -File setup.ps1` then `/reload-plugins` |

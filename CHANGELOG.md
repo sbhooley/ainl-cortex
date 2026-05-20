@@ -2,6 +2,11 @@
 
 ## 0.4.0 — 2026-05-18
 
+### Windows hook fix (SessionStart banner)
+
+- **`run_hook.cmd`** — fixed plugin root resolution (`scripts\.` → real root). Restores SessionStart `[AINL Cortex]` banner and stops `scripts\.\scripts\bootstrap_no_python.ps1` PostToolUse errors.
+- **`scripts/verify_sessionstart.cmd`** — run outside Claude to confirm the hook emits JSON with `[AINL Cortex]`.
+
 ### Windows zero-touch install (self-healing)
 
 - **SessionStart AGENT INSTALL banner** — when `.venv`/MCP/setup is incomplete, Claude sees `git pull` + `setup.cmd` (and “do not `& setup.ps1`”) at the top of every session.
