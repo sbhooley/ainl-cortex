@@ -744,7 +744,7 @@ class Repartitioner:
     def _write_report(self) -> None:
         REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.report["finished_at"] = int(time.time())
-        REPORT_PATH.write_text(json.dumps(self.report, indent=2))
+        REPORT_PATH.write_text(json.dumps(self.report, indent=2), encoding="utf-8")
         print(f"Wrote report → {REPORT_PATH}")
 
 

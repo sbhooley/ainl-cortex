@@ -68,7 +68,7 @@ def main():
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
     tmp = INBOX_DIR / f"{msg_id}.tmp"
     dest = INBOX_DIR / f"{msg_id}.json"
-    tmp.write_text(json.dumps(msg, indent=2))
+    tmp.write_text(json.dumps(msg, indent=2), encoding="utf-8")
     os.replace(tmp, dest)
 
     print("ok")

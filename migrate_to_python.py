@@ -58,7 +58,7 @@ def flip_to_python(dry_run: bool = False) -> Dict[str, Any]:
         return {"changed": False, "from": current, "to": "python",
                 "reason": "dry_run"}
     cfg.setdefault("memory", {})["store_backend"] = "python"
-    cfg_path.write_text(json.dumps(cfg, indent=2))
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return {"changed": True, "from": current, "to": "python"}
 
 
@@ -142,7 +142,7 @@ def _utc_now_str() -> str:
 def _write_report(report: Dict[str, Any]) -> Path:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     path = LOGS_DIR / f"rollback_{_utc_now_str()}.json"
-    path.write_text(json.dumps(report, indent=2))
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     latest = LOGS_DIR / "rollback_latest.json"
     try:
         if latest.exists() or latest.is_symlink():
@@ -150,7 +150,7 @@ def _write_report(report: Dict[str, Any]) -> Path:
         try:
             os.symlink(path.name, latest)
         except OSError:
-            latest.write_text(json.dumps(report, indent=2))
+            latest.write_text(json.dumps(report, indent=2), encoding="utf-8")
     except OSError:
         pass
     return path

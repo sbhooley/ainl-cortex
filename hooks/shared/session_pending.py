@@ -61,7 +61,7 @@ def load_pending_session(inbox_dir: Path, project_id: str) -> Dict[str, Any]:
     if not path.exists():
         return empty_session()
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return empty_session()
         out = empty_session()
@@ -77,7 +77,7 @@ def save_pending_session(
     path = _pending_path(inbox_dir, project_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(session_data, default=str))
+    tmp.write_text(json.dumps(session_data, default=str), encoding="utf-8")
     tmp.replace(path)
 
 

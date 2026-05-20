@@ -497,7 +497,7 @@ class NativeGraphStore(GraphStore):
         # Atomic write via tmp + os.replace — never leaves a half-written file.
         self._goal_index_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._goal_index_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(index, indent=2))
+        tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
         os.replace(tmp, self._goal_index_path)
 
     def _upsert_goal_index_entry(self, node: GraphNode) -> None:

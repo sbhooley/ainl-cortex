@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -77,7 +78,7 @@ def _registry_file(plugin_root: Path, name: str) -> Path:
 def _atomic_write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -98,6 +99,32 @@ def _find_claude_pid() -> int:
     that stays alive for the session.
     """
     pid = os.getpid()
+    if sys.platform == "win32":
+        try:
+            for _ in range(5):
+                r = subprocess.run(
+                    ["wmic", "process", "where", f"ProcessId={pid}",
+                     "get", "ParentProcessId,Name", "/format:list"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                ppid: int | None = None
+                name = ""
+                for line in r.stdout.splitlines():
+                    if line.startswith("Name="):
+                        name = line.split("=", 1)[1].strip().lower()
+                    elif line.startswith("ParentProcessId="):
+                        try:
+                            ppid = int(line.split("=", 1)[1].strip())
+                        except ValueError:
+                            pass
+                if ppid is None or ppid <= 4:
+                    break
+                if name and not any(x in name for x in ("python", "cmd.exe", "conhost.exe", "powershell.exe", "pwsh.exe")):
+                    return ppid
+                pid = ppid
+        except Exception:
+            pass
+        return os.getpid()
     try:
         # Walk up: hook → python interpreter → Claude Code CLI
         for _ in range(5):
@@ -152,7 +179,7 @@ def list_live_agents(plugin_root: Path, cleanup_stale: bool = True) -> List[Dict
     agents = []
     for f in reg_dir.glob("*.json"):
         try:
-            data = json.loads(f.read_text())
+            data = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
         if _is_pid_alive(data.get("pid", 0)):
@@ -174,7 +201,7 @@ def is_local_agent(plugin_root: Path, name: str, max_age_seconds: int = 86400) -
     if not f.exists():
         return False
     try:
-        data = json.loads(f.read_text())
+        data = json.loads(f.read_text(encoding="utf-8"))
         if _is_pid_alive(data.get("pid", 0)):
             return True
         # Recency fallback: treat a recently-registered entry as live

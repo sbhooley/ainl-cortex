@@ -1166,12 +1166,13 @@ mod tests {
 
         // No episode row in ainl_graph_nodes — FK insert must fail; file must survive.
         let store = SqliteGraphStore::open(&db_path).expect("open db");
+        let step_str = step_path.to_string_lossy().into_owned();
         let count = super::flush_trajectory(
             &store,
             Uuid::new_v4(),
             "proj_test",
             "success",
-            Some(step_path.to_str().unwrap()),
+            Some(&step_str),
             1_700_000_000,
         );
         assert_eq!(count, 0);
@@ -1216,12 +1217,13 @@ mod tests {
         let episode_id = episode_node.id;
         store.write_node(&episode_node).expect("episode row for FK");
 
+        let step_str = step_path.to_string_lossy().into_owned();
         let count = super::flush_trajectory(
             &store,
             episode_id,
             "proj_ok",
             "success",
-            Some(step_path.to_str().unwrap()),
+            Some(&step_str),
             1_700_000_000,
         );
         assert_eq!(count, 1);

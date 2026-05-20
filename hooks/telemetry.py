@@ -53,7 +53,7 @@ def _plugin_version(plugin_root: Path) -> str:
     if cached is not None:
         return cached
     try:
-        manifest = json.loads((plugin_root / ".claude-plugin" / "plugin.json").read_text())
+        manifest = json.loads((plugin_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         version = str(manifest.get("version") or "unknown")
     except Exception:
         version = "unknown"

@@ -28,7 +28,7 @@ def _get_compact_project_id(plugin_root: Path) -> str:
     try:
         cid_file = plugin_root / "inbox" / "current_project_id.txt"
         if cid_file.exists():
-            pid = cid_file.read_text().strip()
+            pid = cid_file.read_text(encoding="utf-8").strip()
             if pid:
                 return pid
     except Exception:

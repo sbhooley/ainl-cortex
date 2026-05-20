@@ -58,7 +58,7 @@ class AINLValidator:
 
         try:
             # Read file
-            with open(file_path, 'r') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 source = f.read()
 
             # Validate with strict mode

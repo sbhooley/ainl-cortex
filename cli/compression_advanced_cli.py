@@ -29,7 +29,7 @@ import argparse
 def cmd_pipeline_test(args):
     """Test compression pipeline with all enhancements"""
     if args.file:
-        with open(args.file, 'r') as f:
+        with open(args.file, 'r', encoding='utf-8') as f:
             text = f.read()
     elif args.text:
         text = args.text

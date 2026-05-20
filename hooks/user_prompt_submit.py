@@ -326,11 +326,11 @@ def record_prompt_summary(project_id: str, prompt: str, cwd=None) -> None:
     }
 
     try:
-        lines = hist_file.read_text().strip().splitlines() if hist_file.exists() else []
+        lines = hist_file.read_text(encoding="utf-8").strip().splitlines() if hist_file.exists() else []
         lines.append(json.dumps(record))
         if len(lines) > 300:
             lines = lines[-300:]
-        hist_file.write_text('\n'.join(lines) + '\n')
+        hist_file.write_text('\n'.join(lines) + '\n', encoding="utf-8")
     except Exception as e:
         logger.debug(f"Prompt history write failed (non-fatal): {e}")
 

@@ -80,7 +80,6 @@ def is_safe_install_root(root: Path) -> bool:
         "/private/tmp/ainl-cortex",
         "/tmp/ainl-cortex",
         "/temp/ainl-cortex",
-        "\\temp\\ainl-cortex",
     )
     if any(m in s for m in unsafe):
         return False

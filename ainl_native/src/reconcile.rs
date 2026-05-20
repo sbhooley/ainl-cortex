@@ -46,7 +46,7 @@ fn snapshot_node_id(project_id: &str) -> Uuid {
 fn normalize_root(plugin_root: &str) -> String {
     std::fs::canonicalize(plugin_root)
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| plugin_root.trim_end_matches('/').to_string())
+        .unwrap_or_else(|_| plugin_root.trim_end_matches(|c| c == '/' || c == '\\').to_string())
 }
 
 // ── fact string (must match Python twin exactly) ──────────────────────────────

@@ -275,7 +275,7 @@ def _utc_now_str() -> str:
 def _write_report(report: Dict[str, Any]) -> Path:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     path = LOGS_DIR / f"verify_{_utc_now_str()}.json"
-    path.write_text(json.dumps(report, indent=2))
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     latest = LOGS_DIR / "verify_latest.json"
     try:
         if latest.exists() or latest.is_symlink():
@@ -283,7 +283,7 @@ def _write_report(report: Dict[str, Any]) -> Path:
         try:
             os.symlink(path.name, latest)
         except OSError:
-            latest.write_text(json.dumps(report, indent=2))
+            latest.write_text(json.dumps(report, indent=2), encoding="utf-8")
     except OSError:
         pass
     return path

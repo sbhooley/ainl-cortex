@@ -46,6 +46,11 @@ def venv_present(root: Optional[Path] = None) -> Tuple[bool, str]:
 
 
 def system_python_available() -> Tuple[bool, str]:
+    if sys.platform == "win32":
+        for name in ("python", "py"):
+            if shutil.which(name):
+                return True, f"{name} on PATH"
+        return False, "python not found on PATH — install Python 3.10+ from python.org"
     if shutil.which("python3"):
         return True, "python3 on PATH"
     return False, "python3 not found on PATH — install Python 3.10+"

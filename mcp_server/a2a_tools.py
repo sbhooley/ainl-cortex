@@ -78,13 +78,13 @@ def _send(agent_id: str, text: str, daemon_json: str, cache: str, timeout: float
 
 def _atomic_write(path: Path, data) -> None:
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp, path)
 
 
 def _read_json(path: Path, default):
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return default
 

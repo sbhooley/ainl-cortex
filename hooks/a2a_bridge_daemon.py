@@ -49,7 +49,7 @@ def _write_url_cache(plugin_root: Path, base_url: str, pid, version: str) -> Non
         "pid": pid,
         "version": version,
         "discovered_at": int(time.time()),
-    }))
+    }), encoding="utf-8")
     os.replace(tmp, cache_file)
 
 
@@ -76,7 +76,7 @@ def ensure_bridge_running(plugin_root: Path, config: dict) -> Dict[str, Any]:
     # ── Step 1: try daemon.json ───────────────────────────────────────────────
     if daemon_json_path.exists():
         try:
-            daemon = json.loads(daemon_json_path.read_text())
+            daemon = json.loads(daemon_json_path.read_text(encoding="utf-8"))
             pid = daemon.get("pid")
             version = daemon.get("version", "unknown")
             listen_addr = daemon.get("listen_addr", "")

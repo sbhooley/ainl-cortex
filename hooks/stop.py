@@ -55,7 +55,7 @@ def drain_session_inbox(project_id: str) -> dict:
         return session_data
 
     try:
-        with open(inbox_file, 'r') as f:
+        with open(inbox_file, 'r', encoding='utf-8') as f:
             for line in f:
                 if line.strip():
                     capture = json.loads(line)
@@ -475,7 +475,7 @@ def write_semantics(store, project_id: str) -> int:
     if hist_file.exists():
         try:
             prompt_records = []
-            for line in hist_file.read_text().strip().splitlines():
+            for line in hist_file.read_text(encoding="utf-8").strip().splitlines():
                 try:
                     prompt_records.append(json.loads(line))
                 except Exception:
@@ -983,7 +983,7 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
                     mem_cfg = {}
                     cfg_path = plugin_root / "config.json"
                     if cfg_path.exists():
-                        mem_cfg = json.loads(cfg_path.read_text()).get("memory", {})
+                        mem_cfg = json.loads(cfg_path.read_text(encoding="utf-8")).get("memory", {})
                     decay_days = int(mem_cfg.get("confidence_decay_days", 90))
                     decay_factor = float(mem_cfg.get("confidence_decay_factor", 0.05))
                     ttl_days = int(mem_cfg.get("node_ttl_days", 365))
@@ -1001,7 +1001,7 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
         _inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
         _evt_file = _inbox_dir / f"{project_id}_compression_events.jsonl"
         if _evt_file.exists():
-            events = [json.loads(l) for l in _evt_file.read_text().strip().splitlines() if l.strip()]
+            events = [json.loads(l) for l in _evt_file.read_text(encoding="utf-8").strip().splitlines() if l.strip()]
             if events:
                 _profile_db = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
                 _profile_db.parent.mkdir(parents=True, exist_ok=True)
@@ -1026,7 +1026,7 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
         cfg_path = plugin_root / "config.json"
         threshold = 5
         if cfg_path.exists():
-            threshold = _json.loads(cfg_path.read_text()).get("a2a", {}).get("self_note_threshold", 5)
+            threshold = _json.loads(cfg_path.read_text(encoding="utf-8")).get("a2a", {}).get("self_note_threshold", 5)
 
         capture_count = len(session_data.get("tool_captures", []))
         if capture_count >= threshold:

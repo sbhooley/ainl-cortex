@@ -227,7 +227,7 @@ class SQLiteGraphStore(GraphStore):
                 self._migrate_to_v2()
 
         schema_path = Path(__file__).parent / "schema.sql"
-        with open(schema_path, 'r') as f:
+        with open(schema_path, 'r', encoding='utf-8') as f:
             schema_sql = f.read()
 
         self.conn.executescript(schema_sql)

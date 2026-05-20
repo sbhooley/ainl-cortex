@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -49,8 +50,60 @@ def resolve_daemon_cache_file(
     return str(primary)
 
 
+def _scan_daemon_listen_port_windows() -> Tuple[Optional[str], Optional[int]]:
+    """Windows fallback: use netstat + tasklist to find the daemon listen port."""
+    try:
+        r = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True, text=True, timeout=5,
+        )
+        # Parse: Proto  Local Address  Foreign Address  State  PID
+        listening_pids: Dict[int, Tuple[str, int]] = {}
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 5 or "LISTENING" not in parts[3]:
+                continue
+            if not parts[0].upper().startswith("TCP"):
+                continue
+            try:
+                pid = int(parts[4])
+                host, _, port_str = parts[1].rpartition(":")
+                # Normalise wildcard bind addresses to loopback
+                if host in ("0.0.0.0", "::", "[::]", ""):
+                    host = "127.0.0.1"
+                if pid not in listening_pids:
+                    listening_pids[pid] = (host, int(port_str))
+            except (ValueError, IndexError):
+                pass
+
+        if not listening_pids:
+            return None, None
+
+        t = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in t.stdout.splitlines():
+            lower = line.lower()
+            if not any(marker in lower for marker in _LSOF_PROCESS_MARKERS):
+                continue
+            parts = line.split(",")
+            if len(parts) >= 2:
+                try:
+                    pid = int(parts[1].strip().strip('"'))
+                    if pid in listening_pids:
+                        return listening_pids[pid]
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    return None, None
+
+
 def scan_daemon_listen_port() -> Tuple[Optional[str], Optional[int]]:
-    """Scan lsof for a listening ArmaraOS daemon. Returns (host, port) or (None, None)."""
+    """Scan for a listening ArmaraOS daemon. Returns (host, port) or (None, None)."""
+    if sys.platform == "win32":
+        return _scan_daemon_listen_port_windows()
     try:
         r = subprocess.run(
             ["lsof", "-iTCP", "-sTCP:LISTEN", "-n", "-P"],

@@ -222,7 +222,11 @@ def verify_mcp_imports(plugin_root: Path) -> Tuple[bool, str]:
         if r.returncode != 0:
             err = (r.stderr or r.stdout or "").strip()[:200]
             tried.append(f"({err})")
-    for pyname in ("python3", "python3.14", "python3.12", "python3.11"):
+    _py_candidates = (
+        ("python", "py") if sys.platform == "win32"
+        else ("python3", "python3.14", "python3.12", "python3.11")
+    )
+    for pyname in _py_candidates:
         w = shutil.which(pyname)
         if w:
             tried.append(w)
@@ -252,7 +256,6 @@ def _plugin_root_safe_for_env(plugin_root: Path) -> bool:
         "/private/tmp/ainl-cortex",
         "/tmp/ainl-cortex",
         "/temp/ainl-cortex",
-        "\\temp\\ainl-cortex",
     )
     if any(m in s for m in unsafe_markers):
         return False
@@ -654,7 +657,7 @@ def main():
         # Only attempt native build when config explicitly requests it
         try:
             import json as _json
-            _backend = _json.loads((root / "config.json").read_text()).get("memory", {}).get("store_backend", "python")
+            _backend = _json.loads((root / "config.json").read_text(encoding="utf-8")).get("memory", {}).get("store_backend", "python")
         except Exception:
             _backend = "python"
         if _backend == "native":

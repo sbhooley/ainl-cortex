@@ -94,7 +94,7 @@ def _save_seen(plugin_root: Path, seen: set) -> None:
     path = plugin_root / SEEN_FILE_REL
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"seen_ids": sorted(seen)}, indent=2))
+    tmp.write_text(json.dumps({"seen_ids": sorted(seen)}, indent=2), encoding="utf-8")
     os.replace(tmp, path)
 
 

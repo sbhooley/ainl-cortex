@@ -539,7 +539,8 @@ mod poison_tests {
         let tmp = tempdir().expect("tempdir");
         let db_path = tmp.path().join("poison.db");
 
-        let store = AinlNativeStore::open(db_path.to_str().unwrap())
+        let db_str = db_path.to_string_lossy().into_owned();
+        let store = AinlNativeStore::open(&db_str)
             .expect("open store");
         let store = Arc::new(store);
 

@@ -283,7 +283,7 @@ def _aggregate_report(per_project: List[Dict[str, Any]],
 def _write_report(report: Dict[str, Any]) -> Path:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     path = LOGS_DIR / f"migration_{_utc_now_str()}.json"
-    path.write_text(json.dumps(report, indent=2))
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     # Also maintain a stable symlink/copy so wrappers find the latest.
     latest = LOGS_DIR / "migration_latest.json"
     try:
@@ -293,7 +293,7 @@ def _write_report(report: Dict[str, Any]) -> Path:
             os.symlink(path.name, latest)
         except OSError:
             # Fallback for filesystems without symlinks.
-            latest.write_text(json.dumps(report, indent=2))
+            latest.write_text(json.dumps(report, indent=2), encoding="utf-8")
     except OSError:
         pass
     return path
@@ -354,7 +354,7 @@ def flip_backend_config(dry_run: bool = False, force: bool = False) -> int:
         return 0
 
     cfg.setdefault("memory", {})["store_backend"] = "native"
-    cfg_path.write_text(json.dumps(cfg, indent=2))
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     print("config.json updated: memory.store_backend = native")
     return 0
 
@@ -374,10 +374,10 @@ def inject_verify_status(status: str) -> int:
             real = LOGS_DIR / os.readlink(latest)
         else:
             real = latest
-        report = json.loads(real.read_text())
+        report = json.loads(real.read_text(encoding="utf-8"))
         report["verify_status"] = status
         report["verify_injected_at_unix"] = int(time.time())
-        real.write_text(json.dumps(report, indent=2))
+        real.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(f"Injected verify_status={status} into {real.name}")
         return 0
     except (OSError, json.JSONDecodeError) as e:

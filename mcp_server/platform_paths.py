@@ -164,6 +164,10 @@ def venv_pip(root: Optional[Path] = None) -> Optional[Path]:
 
 def venv_site_packages(root: Optional[Path] = None) -> Optional[Path]:
     root = root or plugin_root()
+    if is_windows():
+        # Windows venvs place site-packages directly under .venv/Lib/ with no python3.x subdir
+        site = root / ".venv" / "Lib" / "site-packages"
+        return site.resolve() if site.is_dir() else None
     lib = venv_lib_dir(root)
     if not lib.is_dir():
         return None
