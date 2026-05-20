@@ -4,6 +4,8 @@
 
 ### Windows zero-touch install (self-healing)
 
+- **SessionStart AGENT INSTALL banner** — when `.venv`/MCP/setup is incomplete, Claude sees `git pull` + `setup.cmd` (and “do not `& setup.ps1`”) at the top of every session.
+- **plugin.json + CLAUDE.md** — Windows install commands in description and first-line agent instructions.
 - **Auto-install on first use** — missing `.venv` triggers `setup_install.py` from MCP (`mcp_launch.py`) and hooks (`run_hook.cmd` / `run_hook.py`).
 - **Python bootstrap** — downloads **uv** + Python 3.12 when no system Python (`python_bootstrap.py`, `bootstrap_no_python.ps1`).
 - **MCP on Windows** — `mcp_launch.cmd` + install-time `plugin.json` patch (`mcp_launcher_config.py`).

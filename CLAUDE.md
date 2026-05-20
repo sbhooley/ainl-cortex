@@ -1,5 +1,9 @@
 # AINL Plugin Instructions for Claude Code
 
+> **WINDOWS (read first):** `git pull` → `.\setup.cmd -PythonOnly` from the plugin folder.  
+> **Never** `& setup.ps1 -PythonOnly -Yes` (PowerShell 5.1 parse bug).  
+> If SessionStart shows **AGENT INSTALL**, run that block for the user before anything else.
+
 ## Plugin Setup (for new users)
 
 If a user asks to install or enable AINL Cortex, **you** run setup — do not hand them a checklist unless Python is missing.

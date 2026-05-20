@@ -269,7 +269,7 @@ def build_main_banner(
             expected_tools=expected_tools,
         )
     )
-    lines.append(f"{_BULLET}After git pull or setup.sh: run /reload-plugins if tools act stale")
+    lines.append(f"{_BULLET}After git pull or setup: run /reload-plugins if tools act stale")
     lines.append(f"{_CONT}(/plugin → Installed → ainl-cortex).")
     return "\n".join(lines) + "\n"
 

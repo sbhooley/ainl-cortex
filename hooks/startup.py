@@ -504,6 +504,28 @@ def main():
             db_s = f"error: {e}"
 
         mcp_ok, mcp_detail = verify_mcp_imports(root)
+        _agent_install_banner = ""
+        try:
+            sys.path.insert(0, str(root))
+            from mcp_server.install_agent_hint import (
+                build_agent_install_banner,
+                maybe_auto_install_at_session_start,
+            )
+            from mcp_server.install_bootstrap import needs_install
+
+            _auto_note = ""
+            if needs_install(root):
+                _iok, _imsg = maybe_auto_install_at_session_start(root)
+                _auto_note = _imsg
+                if _iok:
+                    mcp_ok, mcp_detail = verify_mcp_imports(root)
+            _agent_install_banner = build_agent_install_banner(
+                root,
+                mcp_ok=mcp_ok,
+                include_auto_attempt_note=_auto_note or None,
+            )
+        except Exception as _inst_e:
+            logger.debug("install agent hint (non-fatal): %s", _inst_e)
         _ainl_heal_msg = ""
         # Self-heal ainativelang in venv (idempotent; safe on python-only backend)
         try:
@@ -719,6 +741,8 @@ def main():
         )
 
         system_blocks = [banner]
+        if _agent_install_banner:
+            system_blocks.insert(0, _agent_install_banner.rstrip("\n") + "\n")
 
         _op_banner = _session_extras.get("operator_banner") or ""
         if _op_banner:
