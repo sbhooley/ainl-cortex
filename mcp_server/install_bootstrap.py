@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 
 from . import deps_compat
 from .platform_paths import (
+    canonical_plugin_root,
     find_system_python,
     is_windows,
     plugin_root,
@@ -28,6 +29,17 @@ logger = logging.getLogger(__name__)
 
 _INSTALL_ATTEMPTED: dict[str, float] = {}
 _INSTALL_COOLDOWN_SEC = 120.0
+
+
+def ensure_scripts_importable(root: Optional[Path] = None) -> Path:
+    """``scripts.*`` modules require the plugin root on ``sys.path``."""
+    import sys
+
+    root = canonical_plugin_root(root or plugin_root())
+    key = str(root)
+    if key not in sys.path:
+        sys.path.insert(0, key)
+    return root
 
 
 SETUP_PS1_VERSION_MARKER = "SETUP_SCRIPT_VERSION=2"
@@ -156,6 +168,7 @@ def register_claude_integration(root: Path) -> Tuple[bool, str]:
         return True, "skipped settings (non-persistent plugin path)"
 
     try:
+        ensure_scripts_importable(root)
         from scripts.configure_marketplace import ensure_local_marketplace
         from scripts.register_claude_settings import register
         from scripts.sync_installed_plugins import sync_installed_plugins

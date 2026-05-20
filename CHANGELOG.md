@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2 — 2026-05-19
+
+### Fix scripts import path for self-heal and registration
+
+- **`ensure_scripts_importable()`** — adds plugin root to `sys.path` before `scripts.configure_marketplace` / `sync_installed_plugins` imports from MCP and hooks (fixes fresh-install registration and AUTO-HEAL sync failures).
+
 ## 0.4.1 — 2026-05-19
 
 ### Self-healing Claude integration (new-user safe)

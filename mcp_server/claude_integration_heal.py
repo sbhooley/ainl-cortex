@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 
 from . import deps_compat
 from .import_compat import plugin_root
-from .install_bootstrap import is_safe_install_root
+from .install_bootstrap import ensure_scripts_importable, is_safe_install_root
 from .platform_paths import canonical_plugin_root, is_windows, venv_python
 
 logger = logging.getLogger(__name__)
@@ -139,6 +139,7 @@ def heal_claude_integration(root: Optional[Path] = None) -> Tuple[bool, List[str
     need_reg, reg_reason = settings_need_registration()
     if need_reg:
         try:
+            ensure_scripts_importable(root)
             from scripts.configure_marketplace import ensure_local_marketplace
             from scripts.register_claude_settings import register
 
@@ -152,6 +153,7 @@ def heal_claude_integration(root: Optional[Path] = None) -> Tuple[bool, List[str
         need_sync, sync_reason = installed_plugins_needs_sync(root)
         if need_sync:
             try:
+                ensure_scripts_importable(root)
                 from scripts.sync_installed_plugins import sync_installed_plugins
 
                 changed, msg = sync_installed_plugins(root)
