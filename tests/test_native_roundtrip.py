@@ -145,7 +145,10 @@ class TestRuntimeStateRoundTrip:
 
 # ── End-to-end write+read against the real Rust store ───────────────────────
 
-@pytest.mark.skipif(not ngs._NATIVE_OK, reason="ainl_native extension not built")
+@pytest.mark.skipif(
+    not ngs.native_bindings_available(),
+    reason="ainl_native extension not built",
+)
 class TestRealStoreEndToEnd:
     def test_query_by_type_semantic_skips_plugin_clusters(self, tmp_path):
         store = ngs.NativeGraphStore(tmp_path / "ainl_native.db")

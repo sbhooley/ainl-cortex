@@ -353,7 +353,7 @@ def test_store_error_returns_non_fatal():
 
 try:
     import ainl_native as _ainl_native  # noqa: F401
-    _NATIVE_AVAILABLE = True
+    _NATIVE_AVAILABLE = hasattr(_ainl_native, "reconcile_environment")
 except ImportError:
     _NATIVE_AVAILABLE = False
 

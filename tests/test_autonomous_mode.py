@@ -1039,7 +1039,7 @@ class TestToolCallInterceptor:
 
     def test_tool_count_includes_new_tools(self):
         src = (PLUGIN_ROOT / "hooks" / "startup.py").read_text()
-        assert 'TOOL_COUNT_MEMORY = 21' in src
+        assert 'TOOL_COUNT_MEMORY = 22' in src
 
 
 # ── O. path_scope constraint (Gap 3) ─────────────────────────────────────────

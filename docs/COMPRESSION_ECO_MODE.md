@@ -237,8 +237,10 @@ This implementation ports the core algorithms from `ainl-compression` crate:
 | Token estimation | chars/4 + 1 | chars/4 + 1 |
 | Aggressive penalties | ✅ | ✅ |
 | Telemetry | ✅ | ✅ |
-| Adaptive eco | ✅ | ❌ (future) |
-| Semantic preservation | ✅ | ❌ (future) |
+| Adaptive eco | ✅ | ✅ (`compression.adaptive_eco`) |
+| Semantic preservation | ✅ | ✅ (`compression.semantic_scoring`) |
+| Per-project profiles | ✅ | ✅ (`compression.project_profiles`, `profiles/`) |
+| Prompt cache awareness | ✅ | ✅ (`compression.cache_awareness`, `logs/cache_state.json`) |
 
 ## Best Practices
 

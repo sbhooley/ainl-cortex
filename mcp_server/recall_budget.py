@@ -185,11 +185,20 @@ def format_memory_context_markdown(
     else:
         capped, truncated = text, False
 
+    dropped = (
+        max(0, len(facts) - fact_limit)
+        + max(0, len(patterns) - pat_limit)
+        + max(0, len(failures) - fail_limit)
+        + max(0, len(episodes) - ep_limit)
+        + max(0, len(traits) - persona_limit)
+    )
+
     stats = {
         "recall_budget_chars": budget.max_chars,
         "recall_injected_chars": len(capped) if apply_char_cap else len(text),
         "recall_truncated": truncated if apply_char_cap else False,
         "recall_detail_level": detail,
+        "recall_dropped_nodes": dropped,
         "sections": {
             "episodes_used": min(len(episodes), ep_limit),
             "facts_used": min(len(facts), fact_limit),
@@ -206,6 +215,7 @@ def pack_native_brief(
     compress: bool,
     project_id: str,
     compress_fn: Callable[[str, str], Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]],
+    recall_meta: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]], Dict[str, Any]]:
     """Apply optional compression then char ceiling for native ``brief`` strings."""
     brief = prebuilt or ""
@@ -215,12 +225,37 @@ def pack_native_brief(
         brief, compression_metrics, pipeline_stats = compress_fn(brief, project_id)
     max_c = budget.effective_native_max()
     brief, truncated = apply_char_ceiling(brief, max_c)
+
+    dropped = 0
+    if recall_meta:
+        dropped = (
+            max(0, int(recall_meta.get("episode_count") or 0) - budget.max_episodes)
+            + max(0, int(recall_meta.get("fact_count") or 0) - budget.max_facts)
+            + max(0, int(recall_meta.get("pattern_count") or 0) - budget.max_patterns)
+            + max(0, int(recall_meta.get("failure_count") or 0) - budget.max_failures)
+            + max(0, int(recall_meta.get("persona_count") or 0) - budget.max_persona)
+        )
+
     stats = {
         "recall_budget_chars": max_c,
         "recall_injected_chars": len(brief),
         "recall_truncated": truncated,
+        "recall_dropped_nodes": dropped,
         "path": "native",
     }
+    if recall_meta:
+        stats["sections"] = {
+            "episodes_used": min(
+                int(recall_meta.get("episode_count") or 0), budget.max_episodes
+            ),
+            "facts_used": min(int(recall_meta.get("fact_count") or 0), budget.max_facts),
+            "patterns_used": min(
+                int(recall_meta.get("pattern_count") or 0), budget.max_patterns
+            ),
+            "failures_used": min(
+                int(recall_meta.get("failure_count") or 0), budget.max_failures
+            ),
+        }
     return brief, compression_metrics, pipeline_stats, stats
 
 

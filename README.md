@@ -36,6 +36,7 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 - ✅ **Typed Graph Memory** - Episode, Semantic, Procedural, Persona, and Failure nodes
 - ✅ **Per-Repo Project Isolation** - Each git repo has its own memory bucket (toplevel-anchored), opt-out via `memory.project_isolation_mode = "global"` for back-compat
 - ✅ **Recall budget + hook metrics** - Injected graph memory is char-capped (`memory.recall_*`); per-turn timings land in `logs/hook_metrics.jsonl`; repartition + integrity: `scripts/repartition_by_repo.py`, `scripts/verify_repartition_integrity.py` (see `scripts/MIGRATION.md`)
+- ✅ **Cost control** - Conversation-only gate, `cost_profile` presets, eco ledger (`cortex_cost_snapshot` MCP), tool digests — see [`docs/COST_CONTROL.md`](docs/COST_CONTROL.md)
 - ✅ **Context-Aware Retrieval** - Inject only relevant memories (ranked by confidence, recency, fitness)
 - ✅ **Graceful Degradation** - Hooks never break Claude Code, even on errors
 - ✅ **Inspectable** - CLI tools for debugging and exploration

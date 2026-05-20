@@ -17,7 +17,19 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
+_HOOKS_ROOT = Path(__file__).resolve().parent.parent / "hooks"
+if str(_HOOKS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_HOOKS_ROOT))
+
+
+def _daemon_url_cache_path(plugin_root: Path) -> Path:
+    try:
+        from shared.armaraos_daemon import daemon_url_cache_path
+
+        return daemon_url_cache_path(plugin_root)
+    except ImportError:
+        return Path(plugin_root) / "a2a" / "armaraos_daemon_url.json"
+
 
 try:
     from .a2a_store import (
@@ -84,9 +96,7 @@ class A2ATools:
         self.project_id = project_id
         self.cfg = config.get("a2a", {})
         self.daemon_json = self.cfg.get("daemon_json", "~/.armaraos/daemon.json")
-        from shared.armaraos_daemon import daemon_url_cache_path
-
-        self.daemon_cache = str(daemon_url_cache_path(plugin_root))
+        self.daemon_cache = str(_daemon_url_cache_path(plugin_root))
         self.registry_path = plugin_root / "a2a" / "agents" / "registry.json"
         self.tasks_dir = plugin_root / "a2a" / "tasks"
         self.monitors_path = plugin_root / "a2a" / "monitors" / "monitor_configs.json"

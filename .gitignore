@@ -28,6 +28,7 @@ ENV/
 
 # Per-machine Claude Code / plugin runtime
 profiles/
+logs/cache_state.json
 config.local.json
 
 # IDE

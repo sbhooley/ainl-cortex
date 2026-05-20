@@ -660,7 +660,7 @@ class TestScopeLockRecovery:
 
     def test_startup_clear_stale_scope_lock(self, tmp_path):
         """_clear_stale_scope_lock removes active_task.json at session start."""
-        from hooks.startup import _clear_stale_scope_lock
+        from startup import _clear_stale_scope_lock
         (tmp_path / "logs").mkdir()
         sidecar = tmp_path / "logs" / "active_task.json"
         sidecar.write_text('{"task_id": "orphaned", "started_at": 0}')
@@ -668,12 +668,12 @@ class TestScopeLockRecovery:
         assert not sidecar.exists()
 
     def test_startup_clear_is_noop_when_no_sidecar(self, tmp_path):
-        from hooks.startup import _clear_stale_scope_lock
+        from startup import _clear_stale_scope_lock
         _clear_stale_scope_lock(tmp_path)  # must not raise
 
     def test_tools_unblocked_after_startup_clear(self, ctx, tmp_path):
         """After a stale lock is cleared, tools should execute normally."""
-        from hooks.startup import _clear_stale_scope_lock
+        from startup import _clear_stale_scope_lock
         store, test_tmp, pid = ctx
         sidecar = test_tmp / "logs" / "active_task.json"
         sidecar.write_text(json.dumps({

@@ -11,14 +11,15 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
-sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PLUGIN_ROOT))
+sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
 
 
 # ── 1. Deduplication ──────────────────────────────────────────────────────────
 
-from node_types import failure_content_id, create_failure_node
-from graph_store import get_graph_store
+from mcp_server.node_types import failure_content_id, create_failure_node
+from mcp_server.graph_store import get_graph_store
 
 
 def test_failure_content_id_is_deterministic():
@@ -171,13 +172,12 @@ def _get_store_failure_schema():
     server_path = Path(__file__).parent.parent / "mcp_server" / "server.py"
     source = server_path.read_text()
     # Find the inputSchema dict for memory_store_failure via simple JSON extraction
-    marker = '"memory_store_failure"'
+    marker = 'name="memory_store_failure"'
     idx = source.find(marker)
     assert idx != -1, "memory_store_failure tool definition not found"
-    # Look for properties block after the marker
-    props_start = source.find('"properties"', idx)
-    # Return the substring for inspection
-    return source[props_start: props_start + 1500]
+    end = source.find('name="memory_promote_pattern"', idx)
+    assert end != -1
+    return source[idx:end]
 
 
 def test_schema_exposes_file_field():

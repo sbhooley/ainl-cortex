@@ -1,4 +1,9 @@
 {
+  "cost_profile": "balanced",
+  "conversation": {
+    "enabled": true,
+    "suppress_mcp_hint": true
+  },
   "notifications": {
     "enabled": true,
     "url": "https://www.ainativelang.com/notifications",
@@ -20,6 +25,7 @@
   "memory": {
     "max_context_tokens": 800,
     "project_isolation": true,
+    "project_isolation_mode": "per_repo",
     "enable_persona_evolution": true,
     "enable_pattern_extraction": true,
     "store_backend": "python",
@@ -30,8 +36,7 @@
     "semantic_lexical_fallback": false,
     "confidence_decay_days": 90,
     "confidence_decay_factor": 0.05,
-    "node_ttl_days": 365,
-    "project_isolation_mode": "per_repo"
+    "node_ttl_days": 365
   },
   "telemetry": {
     "track_compression_savings": true,
@@ -73,6 +78,20 @@
     "warn_on_files": true,
     "warn_on_commands": true
   },
+  "autonomous_mode": {
+    "enabled": true,
+    "allow_self_scheduling": true,
+    "inject_due_tasks_in_startup": true,
+    "due_tasks_lookahead_minutes": 60,
+    "approved_autonomous_actions": [
+      "memory_list_goals",
+      "memory_recall_context",
+      "memory_search",
+      "memory_store_episode",
+      "memory_store_semantic",
+      "memory_list_scheduled_tasks"
+    ]
+  },
   "goals": {
     "enabled": true,
     "auto_infer": true,
@@ -80,20 +99,6 @@
     "max_active_goals": 10,
     "inject_in_context": true,
     "link_threshold": 0.15
-  },
-  "autonomous_mode": {
-    "enabled": true,
-    "allow_self_scheduling": true,
-    "inject_due_tasks_in_startup": true,
-    "due_tasks_lookahead_minutes": 60,
-    "max_self_scheduled_tasks": 10,
-    "approved_autonomous_actions": [
-      "goal_review",
-      "memory_decay",
-      "session_summary",
-      "pattern_extraction",
-      "failure_trend_review"
-    ]
   },
   "compression": {
     "enabled": true,

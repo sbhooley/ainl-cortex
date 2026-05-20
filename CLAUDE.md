@@ -558,6 +558,19 @@ Do not set goals for things already complete. Do not set goals you cannot track.
 
 ---
 
+## Autonomous scheduled tasks
+
+Use `memory_schedule_task` for work that should run on a schedule or as a deferred one-shot. **Risk tiers** (set on schedule):
+
+- `read_only` — auto-approved; safe recall/list operations
+- `memory_ops` — writes to graph memory; **requires approval** (`memory_approve_task`)
+- `file_write` — file edits; **requires approval**
+- `external_send` — outbound messages; **requires approval**
+
+**Execution contract:** call `memory_begin_task_execution` before doing scoped work — this writes `logs/active_task.json` (**scope lock**). Only tools listed in `allowed_actions` may run until you call `memory_complete_task` (always allowed) or `memory_cancel_task`. Use `path_scope` so tasks only fire when the working directory is under allowed project paths.
+
+---
+
 ## Native Backend Upgrade
 
 If the SessionStart banner includes a **"AINL CORTEX: NATIVE BACKEND UPGRADE AVAILABLE"** block:

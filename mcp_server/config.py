@@ -18,12 +18,18 @@ from .config_loader import (
     split_merged_config,
     write_local_config,
 )
+from .cost_profiles import apply_cost_profile
 
 logger = logging.getLogger(__name__)
 
 
 # Full defaults used when config.json is missing or partial (nested keys merge).
 DEFAULT_PLUGIN_CONFIG: dict = {
+    "cost_profile": "balanced",
+    "conversation": {
+        "enabled": True,
+        "suppress_mcp_hint": True,
+    },
     "features": {
         "graph_memory": True,
         "context_injection": True,
@@ -138,7 +144,8 @@ class PluginConfig:
         try:
             loaded = load_config_files(self.plugin_root)
             if loaded:
-                return _deep_merge(DEFAULT_PLUGIN_CONFIG, loaded)
+                merged = _deep_merge(DEFAULT_PLUGIN_CONFIG, loaded)
+                return apply_cost_profile(merged)
         except Exception as e:
             logger.warning(f"Failed to load config: {e}, using defaults")
 

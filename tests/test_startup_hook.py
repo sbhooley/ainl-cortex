@@ -47,7 +47,16 @@ def _run_main(monkeypatch, plugin_root_override=None, cwd_override=None):
         monkeypatch.setattr(startup, "_hook_cwd", lambda: PLUGIN_ROOT)
 
     if plugin_root_override is not None:
-        monkeypatch.setattr(startup, "_plugin_root", lambda: Path(plugin_root_override))
+        override = Path(plugin_root_override)
+        monkeypatch.setattr(startup, "_plugin_root", lambda: override)
+        cfg_dst = override / "config.json"
+        if not cfg_dst.exists():
+            src_cfg = PLUGIN_ROOT / "config.json"
+            if src_cfg.exists():
+                import shutil
+
+                shutil.copy(src_cfg, cfg_dst)
+        (override / "inbox").mkdir(parents=True, exist_ok=True)
 
     captured = StringIO()
     monkeypatch.setattr(sys, "stdout", captured)

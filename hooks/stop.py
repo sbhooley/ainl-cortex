@@ -14,7 +14,7 @@ from typing import Optional
 
 try:
     import ainl_native as _ainl_native
-    _NATIVE_OK = True
+    _NATIVE_OK = hasattr(_ainl_native, "AinlNativeStore")
 except ImportError:
     _ainl_native = None
     _NATIVE_OK = False
@@ -22,15 +22,11 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
-from shared.project_id import get_project_id, get_project_info, get_git_branch
+from shared.project_id import get_project_id, get_project_info
 from shared.logger import log_event, log_error, get_logger
 from shared.a2a_inbox import write_self_note
 from shared.config import is_strict_native
-from shared.session_pending import (
-    accumulate_into_pending,
-    collect_session_for_finalize,
-    ensure_session_identity,
-)
+from shared.session_pending import accumulate_into_pending
 
 logger = get_logger("stop")
 
@@ -40,12 +36,6 @@ logger = get_logger("stop")
 # write_goals) which still write to the Python sidecar DB. See CLAUDE.md
 # "Database files" and shared/config.py:is_strict_native for full rationale.
 _STRICT_NATIVE = is_strict_native(_NATIVE_OK)
-
-OUTCOMES_LINK_RESOLUTIONS = frozenset({"success", "partial"})
-
-
-def _inbox_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "inbox"
 
 
 def drain_session_inbox(project_id: str) -> dict:
@@ -113,34 +103,48 @@ def write_episode(project_id: str, session_data: dict):
     from node_types import GraphNode, NodeType
 
     task_summary = create_episode_summary(session_data)
+    task_summary_full = task_summary
+    try:
+        from config import get_config
+        from compression_pipeline import get_compression_pipeline
+
+        if get_config().is_output_compression_enabled():
+            pipeline = get_compression_pipeline()
+            compressed, metrics = pipeline.compress_output(task_summary)
+            if metrics and compressed and len(compressed) < len(task_summary):
+                task_summary = compressed
+    except Exception as _oc_e:
+        logger.debug("episode output compression skipped: %s", _oc_e)
+
     outcome = "partial" if session_data["had_errors"] else "success"
     now = int(time.time())
+    plugin_root = Path(__file__).resolve().parent.parent
+    session_id = session_data.get("session_id")
+    if not session_id:
+        try:
+            from shared.session_delta import read_session_id
+
+            session_id = read_session_id(project_id, plugin_root)
+        except Exception:
+            session_id = None
 
     db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     store = get_graph_store(db_path)
 
-    # Read the session UUID stamped by startup (falls back to a fresh UUID if
-    # startup did not run, so stop always produces a valid session_id).
-    plugin_root = Path(__file__).resolve().parent.parent
-    try:
-        from shared.session_delta import read_session_id as _read_sid
-        _session_id = _read_sid(project_id, plugin_root)
-    except Exception:
-        _session_id = str(uuid.uuid4())
-
     episode_data = {
         "turn_id": str(uuid.uuid4()),
         "task_description": task_summary,
-        "tool_calls": sorted(session_data["tools_used"]) if isinstance(session_data["tools_used"], set) else session_data["tools_used"],
-        "files_touched": sorted(session_data["files_touched"]) if isinstance(session_data["files_touched"], set) else session_data["files_touched"],
+        "task_description_full": task_summary_full if task_summary_full != task_summary else None,
+        "tool_calls": list(session_data["tools_used"]),
+        "files_touched": list(session_data["files_touched"]),
         "outcome": outcome,
         "duration_ms": 0,
         "git_commit": None,
         "git_branch": session_data.get("git_branch"),
         "test_results": None,
-        "session_id": _session_id,
+        "session_id": session_id,
         "error_message": None,
     }
 
@@ -173,26 +177,20 @@ def write_episode(project_id: str, session_data: dict):
 
 def write_failures(store, project_id: str, session_data: dict) -> int:
     """Write a failure node for every errored tool capture in the session."""
-    from node_types import create_failure_node, failure_content_id
+    from node_types import create_failure_node
 
     count = 0
     for capture in session_data.get("tool_captures", []):
         if capture.get("success", True):
             continue
-        # Prefer specific AINL error kind over generic capture type
-        error_type = capture.get("ainl_error_kind") or capture.get("type", "tool_error")
-        tool = capture.get("tool", "unknown")
-        error_message = capture.get("error", "")[:500]
         node = create_failure_node(
             project_id=project_id,
-            error_type=error_type,
-            tool=tool,
-            error_message=error_message,
+            error_type=capture.get("type", "tool_error"),
+            tool=capture.get("tool", "unknown"),
+            error_message=capture.get("error", "")[:500],
             file=capture.get("file"),
             command=capture.get("command", "")[:200] if capture.get("command") else None,
         )
-        # Deterministic ID deduplicates identical errors via INSERT OR REPLACE
-        node.id = failure_content_id(project_id, error_type, tool, error_message)
         store.write_node(node)
         count += 1
 
@@ -201,12 +199,12 @@ def write_failures(store, project_id: str, session_data: dict) -> int:
     return count
 
 
-
 def _open_native_episode_store(project_id: str):
     """Open NativeGraphStore for episode lookups (strict-native episodes live in Rust DB)."""
     if not _NATIVE_OK:
         return None
     try:
+        sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
         from graph_store import get_graph_store
 
         gm_dir = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
@@ -228,7 +226,7 @@ def link_resolutions(
     """
     Retrospectively link open failure nodes to the episode that resolved them.
 
-    After a successful or partial episode, check all unresolved failures for this project.
+    After a successful episode, check all unresolved failures for this project.
     If the episode touched the same file(s) or used the same tool as the failure,
     assume the episode resolved it: write a RESOLVES edge and update the failure
     node's resolution/resolved_at fields.
@@ -239,7 +237,7 @@ def link_resolutions(
 
     Returns the number of failures linked.
     """
-    if episode_data.get("outcome") not in OUTCOMES_LINK_RESOLUTIONS:
+    if episode_data.get("outcome") not in ("success", "partial"):
         return 0
 
     from node_types import create_edge, EdgeType
@@ -249,11 +247,15 @@ def link_resolutions(
     episode_tools = set(episode_data.get("tool_calls", []))
     episode_id = episode_data.get("turn_id", "")
     episode_task = episode_data.get("task_description", "")
+    outcome = episode_data.get("outcome", "success")
+    if outcome == "partial":
+        resolution_label = f"Partially resolved by: {episode_task[:150]}"
+    else:
+        resolution_label = f"Resolved by: {episode_task[:150]}"
     now = int(_time.time())
     ep_store = episode_store if episode_store is not None else store
-    patch_store = episode_store if episode_store is not None else store
 
-    unresolved = ep_store.get_unresolved_failures(project_id)
+    unresolved = store.get_unresolved_failures(project_id)
     linked = 0
 
     for failure in unresolved:
@@ -266,16 +268,9 @@ def link_resolutions(
         if not (file_match or tool_match):
             continue
 
-        # Update the failure node with resolution info (native facade mirrors to sidecar)
-        patch_store.update_node_data(failure.id, {
-            "resolution": (
-                f"Resolved by: {episode_task[:140]}"
-                + (
-                    " (partial session)"
-                    if episode_data.get("outcome") == "partial"
-                    else ""
-                )
-            ),
+        # Update the failure node with resolution info
+        store.update_node_data(failure.id, {
+            "resolution": resolution_label,
             "resolution_turn_id": episode_id,
             "resolved_at": now,
         })
@@ -307,9 +302,8 @@ def link_resolutions(
                     project_id=project_id,
                     metadata={"matched_on": "file" if file_match else "tool"}
                 )
-                # Strict-native: episode lives in ainl_native.db; sidecar SQLite
-                # FK rejects a native from_node. Persist RESOLVES on native when
-                # episode_store is the native facade (failure mirrored there too).
+                # Strict-native: episode lives in ainl_native.db; persist RESOLVES
+                # on the store that holds the episode node (native facade).
                 edge_store = episode_store if episode_store is not None else store
                 edge_store.write_edge(edge)
         except Exception as edge_err:
@@ -547,30 +541,33 @@ def write_semantics(store, project_id: str) -> int:
                         0.8,
                     ))
 
-                # ── Decision extraction ───────────────────────────────────────
-                # Detect explicit decision/architecture language in prompt text.
-                _DECISION_PATS = [
+                _decision_pats = [
                     _re.compile(
-                        r'(?:going with|decided to|we\'ll use|switching to|'
-                        r'using \S.{2,30} instead|settled on|agreed on|'
-                        r'the plan is|architecture is|we\'re going with)\s+(.{10,120})',
+                        r"(?:going with|decided to|we'll use|switching to|"
+                        r"using \S.{2,30} instead|settled on|agreed on|"
+                        r"the plan is|architecture is|we're going with)\s+(.{10,120})",
                         _re.IGNORECASE,
                     ),
                     _re.compile(
-                        r'(?:the|our)\s+(?:api|db|database|server|endpoint|'
-                        r'key|token|port|version|url|base.?url|path)\s+'
-                        r'(?:is|will be|should be|needs to be)\s+(.{5,80})',
+                        r"(?:the|our)\s+(?:api|db|database|server|endpoint|"
+                        r"key|token|port|version|url|base.?url|path)\s+"
+                        r"(?:is|will be|should be|needs to be)\s+(.{5,80})",
                         _re.IGNORECASE,
                     ),
                 ]
+                seen_decisions: set = set()
                 for rec in prompt_records:
                     text = rec.get("text", "")
-                    for pat in _DECISION_PATS:
+                    for pat in _decision_pats:
                         for m in pat.finditer(text):
                             decision = m.group(0).strip()[:200]
-                            if len(decision) >= 20:
-                                candidates.append((f"Decision: {decision}", 0.7))
-
+                            if len(decision) < 20:
+                                continue
+                            key = decision[:50]
+                            if key in seen_decisions:
+                                continue
+                            seen_decisions.add(key)
+                            candidates.append((f"Decision: {decision}", 0.85))
         except Exception as e:
             logger.debug(f"Prompt history mining failed (non-fatal): {e}")
 
@@ -624,9 +621,11 @@ def write_patterns(store, project_id: str) -> int:
     # Fetch existing procedural patterns to avoid re-promoting
     existing_patterns = []
     try:
+        all_nodes = store.search_fts("", project_id, limit=200)
         existing_patterns = [
             {"data": n.data}
-            for n in store.query_by_type(NodeType.PROCEDURAL, project_id, limit=200)
+            for n in all_nodes
+            if n.node_type == NodeType.PROCEDURAL
         ]
     except Exception:
         pass
@@ -661,6 +660,10 @@ def write_goals(
     """
     Update active goals from the latest episode and, at session end,
     auto-infer new goals from episode clusters if none exist yet.
+
+    ``read_store`` is optional: in strict-native mode episodes live in
+    ``ainl_native.db`` while goal writes target the Python sidecar — pass the
+    native graph store for ``query_goals`` / ``query_episodes_since``.
 
     Returns number of goal nodes created or updated.
     """
@@ -709,7 +712,6 @@ def _open_python_sidecar_store(project_id: str):
     return SQLiteGraphStore(db_path)
 
 
-
 def _strict_native_link_after_finalize(
     sidecar_store,
     project_id: str,
@@ -717,11 +719,7 @@ def _strict_native_link_after_finalize(
     native_result: Optional[dict],
 ) -> None:
     """Link sidecar failures to the Rust episode after finalize_session."""
-    if not (
-        sidecar_store
-        and episode_data
-        and episode_data.get("outcome") in OUTCOMES_LINK_RESOLUTIONS
-    ):
+    if not (sidecar_store and episode_data and episode_data.get("outcome") == "success"):
         return
     enriched = dict(episode_data)
     if native_result and native_result.get("episode_id"):
@@ -738,7 +736,6 @@ def _strict_native_link_after_finalize(
         logger.warning(f"Resolution linking failed (strict-native): {e}")
 
 
-
 def _build_episode_data_only(session_data: dict) -> dict:
     """Construct an episode_data dict in-memory without writing it to any store.
 
@@ -747,7 +744,7 @@ def _build_episode_data_only(session_data: dict) -> dict:
     actual EPISODE node is created by _ainl_native.finalize_session in the
     Rust DB, so we deliberately do NOT persist this dict on the Python side."""
     return {
-        "turn_id": session_data.get("turn_id") or str(uuid.uuid4()),
+        "turn_id": str(uuid.uuid4()),
         "task_description": create_episode_summary(session_data),
         "tool_calls": session_data.get("tools_used", []),
         "files_touched": session_data.get("files_touched", []),
@@ -755,7 +752,6 @@ def _build_episode_data_only(session_data: dict) -> dict:
         "duration_ms": 0,
         "git_commit": None,
         "git_branch": session_data.get("git_branch"),
-        "session_id": session_data.get("session_id"),
     }
 
 
@@ -779,9 +775,6 @@ def _enrich_episode_data_from_native(
                 turn_id = node.data.get("turn_id")
                 if turn_id:
                     enriched["turn_id"] = turn_id
-                desc = node.data.get("task_description")
-                if desc:
-                    enriched["task_description"] = desc
         except Exception:
             pass
     return enriched
@@ -803,6 +796,7 @@ def _strict_native_sidecar_after_native(
         write_failures(failure_store, project_id, session_data)
     except Exception as e:
         logger.warning(f"Failure nodes write failed (strict-native sidecar): {e}")
+
     enriched = _enrich_episode_data_from_native(
         episode_data, native_result, read_store=ep_read,
     )
@@ -833,109 +827,79 @@ def _native_finalize_session(project_id: str, session_data: dict, capture_count:
         step_file = str(inbox_dir / f"{project_id}_traj_steps.jsonl")
         task_summary = create_episode_summary(session_data)
         outcome = "partial" if session_data.get("had_errors") else "success"
-        payload = {
+        session_json = json.dumps({
             "tool_calls": session_data.get("tools_used", []),
             "files_touched": session_data.get("files_touched", []),
             "had_errors": session_data.get("had_errors", False),
             "task_summary": task_summary,
             "outcome": outcome,
             "capture_count": capture_count,
-        }
-        if session_data.get("turn_id"):
-            payload["turn_id"] = session_data["turn_id"]
-        if session_data.get("session_id"):
-            payload["claude_session_id"] = session_data["session_id"]
-        session_json = json.dumps(payload)
+        })
         return _ainl_native.finalize_session(native_db_path, project_id, session_json, step_file)
     except Exception as e:
         logger.debug(f"Native finalize_session failed (non-fatal): {e}")
         return None
 
 
-
-
-def _sync_native_episode_plugin_data(
-    project_id: str,
-    native_result: Optional[dict],
-    session_data: dict,
-) -> None:
-    """Backfill episode plugin_data for older ainl_native builds (non-fatal)."""
-    if not (_NATIVE_OK and native_result and native_result.get("episode_id")):
-        return
-    episode_id = native_result["episode_id"]
-    task_summary = create_episode_summary(session_data)
-    outcome = "partial" if session_data.get("had_errors") else "success"
-    patch = {
-        "task_description": task_summary,
-        "files_touched": session_data.get("files_touched", []),
-        "outcome": outcome,
-        "had_errors": session_data.get("had_errors", False),
-        "capture_count": len(session_data.get("tool_captures", [])),
-        "py_node_type": "episode",
-    }
-    if session_data.get("session_id"):
-        patch["session_id"] = session_data["session_id"]
+def _per_prompt_persist_failures(project_id: str, session_data: dict) -> int:
+    """Strict-native per-prompt flush: failures stay on the Python sidecar."""
     try:
-        native_db_path = str(
-            Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_native.db"
-        )
-        store = _ainl_native.AinlNativeStore.open(native_db_path)
-        store.patch_plugin_data(episode_id, patch)
-    except Exception as e:
-        logger.debug(f"Native episode plugin_data patch failed (non-fatal): {e}")
+        sidecar = _open_python_sidecar_store(project_id)
+    except Exception:
+        return 0
+    if sidecar:
+        return write_failures(sidecar, project_id, session_data)
+    return 0
 
 
-def _per_prompt_persist_failures(project_id: str, session_data: dict) -> None:
-    """Durability path: record failures from this capture batch only (deduped)."""
-    if not session_data.get("tool_captures"):
-        return
-    try:
-        if _STRICT_NATIVE:
-            ep_read = _open_native_episode_store(project_id)
-            sidecar = _open_python_sidecar_store(project_id)
-            failure_store = ep_read if ep_read is not None else sidecar
-            write_failures(failure_store, project_id, session_data)
-        else:
-            db_path = Path.home() / ".claude" / "projects" / project_id / "graph_memory" / "ainl_memory.db"
-            from graph_store import get_graph_store
-            write_failures(get_graph_store(db_path), project_id, session_data)
-    except Exception as e:
-        logger.warning(f"Per-prompt failure persist failed (non-fatal): {e}")
-
-
-def flush_pending_captures(project_id: str, plugin_root: Optional[Path] = None) -> int:
+def flush_pending_captures(project_id: str) -> int:
     """
-    Merge buffered captures into the pending session accumulator.
+    Flush any buffered captures to the graph DB right now.
+    Called at the start of each UserPromptSubmit so every completed turn is
+    persisted even if the session ends abruptly before Stop fires.
+    Returns number of captures flushed (0 = nothing pending).
 
-    Called at UserPromptSubmit / pre_compact so tool captures survive abrupt
-    session end. Does **not** call native finalize_session (one episode at Stop).
-
-    Persists failure nodes per batch (deduped) for FailureAdvisor durability.
+    Strict-native mode: skips the Python episode/persona/patterns/semantics
+    write pipeline; Rust owns those node types via _ainl_native.finalize_session.
+    write_failures + write_goals still run on the Python sidecar DB.
     """
-    inbox_dir = _inbox_dir()
+    inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
     inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
     if not inbox_file.exists():
         return 0
     try:
-        with open(inbox_file) as _cf:
-            count = sum(1 for _ in _cf)
+        count = sum(1 for _ in open(inbox_file))
     except Exception:
         return 0
     if count == 0:
         return 0
     try:
-        batch = drain_session_inbox(project_id)
-        if not batch["tool_captures"]:
-            return 0
-        plugin_root = plugin_root or Path(__file__).resolve().parent.parent
-        accumulate_into_pending(
-            inbox_dir, project_id, batch, plugin_root=plugin_root,
-        )
-        _per_prompt_persist_failures(project_id, batch)
-        logger.info(
-            f"Per-prompt accumulate ({'strict-native' if _STRICT_NATIVE else 'python'}): "
-            f"merged {count} capture(s) into pending session"
-        )
+        session_data = drain_session_inbox(project_id)
+        if session_data["tool_captures"]:
+            if _STRICT_NATIVE:
+                plugin_root = Path(__file__).resolve().parent.parent
+                accumulate_into_pending(
+                    inbox_dir,
+                    project_id,
+                    session_data,
+                    plugin_root=plugin_root,
+                )
+                _per_prompt_persist_failures(project_id, session_data)
+            else:
+                store, episode_data = write_episode(project_id, session_data)
+                write_failures(store, project_id, session_data)
+                if episode_data:
+                    if not _NATIVE_OK:
+                        write_persona(store, project_id, episode_data)
+                    link_resolutions(store, project_id, episode_data)
+                write_patterns(store, project_id)
+                write_semantics(store, project_id)
+                write_goals(store, project_id, episode_data)
+
+            logger.info(
+                f"Per-prompt flush ({'strict-native' if _STRICT_NATIVE else 'python'}): "
+                f"wrote {count} captures"
+            )
         return count
     except Exception as e:
         logger.warning(f"Per-prompt flush failed (non-fatal): {e}")
@@ -961,34 +925,16 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
     outcome = "partial" if session_data["had_errors"] else "success"
     capture_count = len(session_data.get("tool_captures", []))
 
-    # Audit delta: collect every node written this session for the delta log
-    delta_entries: list = []
-    try:
-        from shared.session_delta import (
-            read_session_id as _read_sid,
-            session_started_at as _sess_started,
-            wrap_store_for_delta as _wrap_delta,
-            append_session_delta as _append_delta,
-        )
-        _delta_session_id = _read_sid(project_id, plugin_root)
-        _delta_started_at = _sess_started(project_id, plugin_root)
-    except Exception:
-        _read_sid = _sess_started = _wrap_delta = _append_delta = None
-        _delta_session_id = str(uuid.uuid4())
-        _delta_started_at = time.time()
-
     episode_data = None
     sidecar_store = None
     if _STRICT_NATIVE:
-        # Strict-native: Rust owns episode/persona/patterns/semantics; sidecar
-        # failures/goals run after native finalize (_strict_native_sidecar_after_native).
+        # Strict-native: Rust handles episode/persona/patterns/semantics; sidecar
+        # failures/goals run after native finalize (see _strict_native_sidecar_after_native).
         episode_data = _build_episode_data_only(session_data)
         try:
             sidecar_store = _open_python_sidecar_store(project_id)
         except Exception as e:
             logger.warning(f"Python sidecar open failed: {e}")
-        if sidecar_store and _wrap_delta:
-            _wrap_delta(sidecar_store, delta_entries)
     else:
         # Python or hybrid: full Python pipeline as before.
         store = None
@@ -999,8 +945,6 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             logger.warning(f"Episode write failed: {e}")
 
         if store:
-            if _wrap_delta:
-                _wrap_delta(store, delta_entries)
             try:
                 write_failures(store, project_id, session_data)
             except Exception as e:
@@ -1034,28 +978,23 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             except Exception as e:
                 logger.warning(f"Goal write failed: {e}")
 
-    # Confidence decay + node TTL maintenance (Python backend only)
-    if not _STRICT_NATIVE and 'store' in dir() and store is not None:
-        try:
-            import json as _dc_json
-            _dc_cfg = {}
-            try:
-                _dc_cfg = _dc_json.loads((plugin_root / "config.json").read_text()).get("memory", {})
-            except Exception:
-                pass
-            _decay_days = int(_dc_cfg.get("confidence_decay_days", 90))
-            _decay_factor = float(_dc_cfg.get("confidence_decay_factor", 0.05))
-            _ttl_days = int(_dc_cfg.get("node_ttl_days", 365))
-            if _decay_days > 0:
-                _decayed = store.decay_node_confidence(project_id, _decay_days, _decay_factor)
-                if _decayed:
-                    logger.debug(f"Confidence decay: updated {_decayed} node(s)")
-            if _ttl_days > 0:
-                _deleted = store.delete_expired_nodes(project_id, _ttl_days)
-                if _deleted:
-                    logger.info(f"TTL: deleted {_deleted} expired node(s)")
-        except Exception as _dc_e:
-            logger.debug(f"Confidence decay/TTL failed (non-fatal): {_dc_e}")
+            if not _STRICT_NATIVE:
+                try:
+                    mem_cfg = {}
+                    cfg_path = plugin_root / "config.json"
+                    if cfg_path.exists():
+                        mem_cfg = json.loads(cfg_path.read_text()).get("memory", {})
+                    decay_days = int(mem_cfg.get("confidence_decay_days", 90))
+                    decay_factor = float(mem_cfg.get("confidence_decay_factor", 0.05))
+                    ttl_days = int(mem_cfg.get("node_ttl_days", 365))
+                    store.decay_node_confidence(
+                        project_id,
+                        older_than_days=decay_days,
+                        factor=decay_factor,
+                    )
+                    store.delete_expired_nodes(project_id, ttl_days=ttl_days)
+                except Exception as e:
+                    logger.debug(f"Decay/TTL maintenance failed (non-fatal): {e}")
 
     # Drain compression events and update auto-tune profile
     try:
@@ -1117,8 +1056,6 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
     if _NATIVE_OK:
         native_result = _native_finalize_session(project_id, session_data, capture_count)
         if native_result:
-            _sync_native_episode_plugin_data(project_id, native_result, session_data)
-        if native_result:
             mode_label = "strict" if _STRICT_NATIVE else "hybrid"
             logger.info(
                 f"Native finalize_session ({mode_label}): episode={native_result.get('episode_id', '?')[:8]}, "
@@ -1132,14 +1069,6 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
             sidecar_store, project_id, session_data, episode_data, native_result,
         )
 
-    # Append session delta record (non-fatal — must never break session close)
-    try:
-        if _append_delta and delta_entries:
-            _append_delta(plugin_root, _delta_session_id, project_id, _delta_started_at, delta_entries)
-            logger.debug(f"Session delta written: {len(delta_entries)} node(s) for session {_delta_session_id[:8]}")
-    except Exception as _de:
-        logger.debug(f"Session delta write failed (non-fatal): {_de}")
-
     log_event("session_finalized", {
         "project_id": project_id,
         "task_summary": task_summary,
@@ -1148,7 +1077,6 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
         "outcome": outcome,
         "capture_count": len(session_data["tool_captures"]),
         "strict_native": _STRICT_NATIVE,
-        "session_id": _delta_session_id,
     })
 
 
@@ -1168,10 +1096,6 @@ def main():
         _t0 = time.perf_counter()
 
         session_data = drain_session_inbox(project_id)
-        try:
-            session_data["git_branch"] = get_git_branch(cwd)
-        except Exception:
-            session_data["git_branch"] = None
 
         if session_data["tool_captures"]:
             finalize_session(project_id, session_data, plugin_root)

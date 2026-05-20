@@ -7,6 +7,7 @@ Exposes graph memory tools for Claude Code integration.
 """
 
 import os
+import re
 import sys
 import json
 import logging
@@ -64,34 +65,52 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Import our modules (package mode: python -m mcp_server.server)
-from .graph_store import get_graph_store
-from .node_types import (
-    create_episode_node, create_semantic_node, create_procedural_node,
-    create_persona_node, create_failure_node, create_edge,
-    NodeType, EdgeType, failure_content_id,
-)
-from .retrieval import MemoryRetrieval, RetrievalContext
-from .persona_engine import PersonaEvolutionEngine
-from .extractor import PatternExtractor, canonicalize_tool_sequence
-from .ainl_tools import AINLTools
-from .a2a_tools import A2ATools
-from .goal_tracker import GoalTracker
+# Import our modules
+try:
+    from .graph_store import get_graph_store
+    from .node_types import (
+        create_episode_node, create_semantic_node, create_procedural_node,
+        create_persona_node, create_failure_node, create_edge,
+        NodeType, EdgeType
+    )
+    from .retrieval import MemoryRetrieval, RetrievalContext
+    from .persona_engine import PersonaEvolutionEngine
+    from .extractor import PatternExtractor, canonicalize_tool_sequence
+    from .ainl_tools import AINLTools
+    from .a2a_tools import A2ATools
+    from .goal_tracker import GoalTracker
+    from .autonomous_scheduler import is_valid_schedule  # noqa: F401 — schedule validation
+    from . import autonomous_scheduler
+    from . import autonomous_tasks
+except ImportError:
+    # Fallback for when run as script
+    sys.path.insert(0, str(Path(__file__).parent))
+    from graph_store import get_graph_store
+    from node_types import (
+        create_episode_node, create_semantic_node, create_procedural_node,
+        create_persona_node, create_failure_node, create_edge,
+        NodeType, EdgeType
+    )
+    from retrieval import MemoryRetrieval, RetrievalContext
+    from persona_engine import PersonaEvolutionEngine
+    from extractor import PatternExtractor, canonicalize_tool_sequence
+    from ainl_tools import AINLTools
+    from a2a_tools import A2ATools
+    from goal_tracker import GoalTracker
+    import autonomous_scheduler  # noqa: F401
+    import autonomous_tasks
 
 
-
-from .runtime_bootstrap import (
-    bootstrap_runtime,
-    ensure_ainl_tools_on_server,
-    heal_tool_import_error,
-)
+from .import_compat import ensure_node_types_alias, heal_import_error, is_node_types_import_error
 
 
 def _bootstrap_import_compat() -> None:
-    """Full runtime self-heal; never block MCP startup."""
-    ok, detail = bootstrap_runtime(heal_deps=True, record_mcp_runtime=True)
-    if not ok:
-        logger.warning("runtime bootstrap incomplete at startup: %s", detail)
+    """Heal bare ``node_types`` imports; never block MCP startup."""
+    if not ensure_node_types_alias():
+        logger.warning(
+            "node_types import alias not registered at startup; "
+            "will auto-heal on first tool call"
+        )
 
 
 _bootstrap_import_compat()
@@ -100,29 +119,9 @@ _bootstrap_import_compat()
 class AINLGraphMemoryServer:
     """AINL Graph Memory MCP Server"""
 
-    # ------------------------------------------------------------------
-    # store property — propagates swaps to every sub-object that caches
-    # the store reference.  This ensures monkeypatching store in tests
-    # (and any future live swap) keeps goal_tracker, retrieval, and
-    # a2a_tools all reading/writing the same database.
-    # ------------------------------------------------------------------
-    @property
-    def store(self):
-        return self._store
-
-    @store.setter
-    def store(self, value):
-        self._store = value
-        if hasattr(self, 'goal_tracker'):
-            self.goal_tracker.store = value
-        if hasattr(self, 'retrieval'):
-            self.retrieval.store = value
-        if hasattr(self, 'a2a_tools'):
-            self.a2a_tools.store = value
-
     def __init__(self):
         self.db_path = self._get_db_path()
-        self._store = get_graph_store(self.db_path)  # set backing field directly; sub-objects don't exist yet
+        self._store = get_graph_store(self.db_path)
         self.retrieval = MemoryRetrieval(self._store, cache_dir=self.db_path.parent)
         self.persona_engine = PersonaEvolutionEngine()
         self.extractor = PatternExtractor()
@@ -148,16 +147,30 @@ class AINLGraphMemoryServer:
         self.config = config
         self._a2a_enabled = bool(config.get("a2a", {}).get("enabled", False))
         project_id = self._compute_project_hash(Path.cwd())
-        self.a2a_tools = A2ATools(plugin_root, self.store, project_id, config)
+        self.a2a_tools = A2ATools(plugin_root, self._store, project_id, config)
         logger.info(
             "A2A tools initialized successfully (advertised to MCP: %s)",
             self._a2a_enabled,
         )
 
-        self.goal_tracker = GoalTracker(self.store, project_id)
+        self.goal_tracker = GoalTracker(self._store, project_id)
         logger.info("Goal tracker initialized")
 
         logger.info(f"AINL Graph Memory Server initialized with DB: {self.db_path}")
+
+    @property
+    def store(self):
+        return self._store
+
+    @store.setter
+    def store(self, value):
+        self._store = value
+        if getattr(self, "retrieval", None) is not None:
+            self.retrieval.store = value
+        if getattr(self, "goal_tracker", None) is not None:
+            self.goal_tracker.store = value
+        if getattr(self, "a2a_tools", None) is not None:
+            self.a2a_tools.store = value
 
     def _get_db_path(self) -> Path:
         """Get database path for the active project (per-repo by default).
@@ -232,18 +245,18 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="memory_store_failure",
-            description="Store a failure node for learning from errors. Identical errors are deduplicated automatically.",
+            description="Store a failure node for learning from errors",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "project_id": {"type": "string", "description": "Project identifier"},
-                    "error_type": {"type": "string", "description": "Short error category, e.g. 'adapter_registration_error'"},
-                    "tool": {"type": "string", "description": "Tool or MCP tool name that failed, e.g. 'ainl_run'"},
-                    "error_message": {"type": "string", "description": "Full error message or primary diagnostic"},
-                    "file": {"type": "string", "description": "File path involved in the failure, e.g. 'intelligence/workflow.ainl'. Powers file-match signal in failure advisor."},
-                    "command": {"type": "string", "description": "Shell command or AINL tool invocation that triggered the failure"},
-                    "stack_trace": {"type": "string", "description": "Stack trace or extended error detail (first 200 chars indexed for semantic matching)"},
-                    "resolution": {"type": "string", "description": "How the failure was fixed, if already known"}
+                    "error_type": {"type": "string", "description": "Type of error"},
+                    "tool": {"type": "string", "description": "Tool that failed"},
+                    "error_message": {"type": "string", "description": "Error message"},
+                    "file": {"type": "string", "description": "Optional source file path"},
+                    "command": {"type": "string", "description": "Optional shell command"},
+                    "stack_trace": {"type": "string", "description": "Optional stack trace"},
+                    "resolution": {"type": "string", "description": "Optional resolution notes"},
                 },
                 "required": ["project_id", "error_type", "tool", "error_message"]
             }
@@ -273,7 +286,7 @@ async def list_tools() -> list[Tool]:
                     "current_task": {"type": "string", "description": "Current task description"},
                     "files_mentioned": {"type": "array", "items": {"type": "string"}, "description": "Files mentioned"},
                     "max_nodes": {"type": "number", "description": "Maximum nodes to return", "default": 50},
-                    "git_branch": {"type": "string", "description": "Filter recent_episodes to this branch"}
+                    "git_branch": {"type": "string", "description": "Optional git branch to scope episode recall"},
                 },
                 "required": ["project_id"]
             }
@@ -291,6 +304,19 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="memory_session_history",
+            description="List recent session delta summaries for a project",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Project identifier"},
+                    "since_days": {"type": "number", "description": "Only sessions finalized within N days", "default": 30},
+                    "limit": {"type": "number", "description": "Max sessions to return", "default": 10},
+                },
+                "required": ["project_id"],
+            },
+        ),
+        Tool(
             name="memory_search",
             description="Full-text search across graph memory",
             inputSchema={
@@ -299,26 +325,9 @@ async def list_tools() -> list[Tool]:
                     "query": {"type": "string", "description": "Search query"},
                     "project_id": {"type": "string", "description": "Project identifier"},
                     "limit": {"type": "number", "description": "Max results", "default": 20},
-                    "git_branch": {"type": "string", "description": "Filter episode nodes to this branch (other node types always included)"}
+                    "git_branch": {"type": "string", "description": "Optional git branch to filter episode hits"},
                 },
                 "required": ["query", "project_id"]
-            }
-        ),
-        Tool(
-            name="memory_session_history",
-            description=(
-                "Query the tamper-evident session delta log. Returns what nodes were written "
-                "in recent sessions — useful for auditing what the agent learned, verifying "
-                "memory integrity after context compaction, or reviewing cross-session activity."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project_id": {"type": "string", "description": "Project identifier"},
-                    "limit": {"type": "number", "description": "Max sessions to return", "default": 10},
-                    "since_days": {"type": "number", "description": "Only include sessions from last N days", "default": 30}
-                },
-                "required": ["project_id"]
             }
         ),
         Tool(
@@ -331,146 +340,6 @@ async def list_tools() -> list[Tool]:
                     "episode_data": {"type": "object", "description": "Episode data for analysis"}
                 },
                 "required": ["project_id", "episode_data"]
-            }
-        ),
-        Tool(
-            name="memory_schedule_task",
-            description=(
-                "Register an autonomous task in the persistent task queue. "
-                "For recurring tasks, also call CronCreate so Claude Code wakes you up on schedule. "
-                "Schedules: +Nm/h/d/w (e.g. '+6h', '+1d'), @hourly/@daily/@weekly/@monthly, "
-                "or 5-field cron ('0 9 * * 1' = 9am every Monday). "
-                "Leave schedule blank for one-shot tasks."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project_id":    {"type": "string", "description": "Project identifier"},
-                    "description":   {"type": "string", "description": "What to do when this task fires"},
-                    "schedule":      {"type": "string", "description": "Schedule expression or omit for one-shot"},
-                    "trigger_type":  {"type": "string", "enum": ["scheduled", "one_shot", "goal_complete", "threshold"], "default": "scheduled"},
-                    "priority":      {"type": "integer", "minimum": 1, "maximum": 10, "default": 5, "description": "1 (low) to 10 (critical)"},
-                    "max_runs":        {"type": "integer", "description": "Stop recurring after N runs (omit for unlimited)"},
-                    "created_by":      {"type": "string", "enum": ["user", "claude"], "default": "user"},
-                    "allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Exact MCP tool names Claude may call during this task. Omit to use approved_autonomous_actions from config."},
-                    "run_now":         {"type": "boolean", "default": False, "description": "Set next_run_at to now so task fires immediately on next session start"},
-                    "risk_tier":       {"type": "string", "enum": ["read_only", "memory_ops", "file_write", "external_send"], "default": "read_only", "description": "read_only=auto-approved; memory_ops/file_write/external_send require memory_approve_task before firing"},
-                    "path_scope":      {"type": "array", "items": {"type": "string"}, "description": "Absolute path prefixes where this task may fire. Omit to allow any working directory."}
-                },
-                "required": ["project_id", "description"]
-            }
-        ),
-        Tool(
-            name="memory_list_scheduled_tasks",
-            description="List autonomous tasks for a project. Use due_only=true to see what's ready to execute now.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project_id": {"type": "string", "description": "Project identifier"},
-                    "status":     {"type": "string", "enum": ["active", "paused", "cancelled", "completed"], "default": "active"},
-                    "due_only":   {"type": "boolean", "default": False, "description": "Only return tasks past their next_run_at"}
-                },
-                "required": ["project_id"]
-            }
-        ),
-        Tool(
-            name="memory_complete_task",
-            description=(
-                "Mark a task execution as successful. For recurring tasks, automatically "
-                "computes and sets the next next_run_at from the schedule. "
-                "Always call this after executing an autonomous task."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "task_id":    {"type": "string", "description": "Task UUID from memory_schedule_task or memory_list_scheduled_tasks"},
-                    "note":       {"type": "string", "description": "Brief note about what was done"},
-                    "reschedule": {"type": "boolean", "default": True, "description": "Auto-compute next_run_at for recurring tasks"}
-                },
-                "required": ["task_id"]
-            }
-        ),
-        Tool(
-            name="memory_cancel_task",
-            description="Cancel an autonomous task (sets status='cancelled'). Cannot be undone.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string", "description": "Task UUID to cancel"}
-                },
-                "required": ["task_id"]
-            }
-        ),
-        Tool(
-            name="memory_update_task",
-            description="Update a task's description, schedule, priority, status, or allowed_actions (e.g. pause/resume, tighten scope).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "task_id":         {"type": "string", "description": "Task UUID to update"},
-                    "description":     {"type": "string", "description": "New description"},
-                    "schedule":        {"type": "string", "description": "New schedule expression (recalculates next_run_at)"},
-                    "priority":        {"type": "integer", "minimum": 1, "maximum": 10},
-                    "status":          {"type": "string", "enum": ["active", "paused", "cancelled", "completed"]},
-                    "allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Replace the allowed MCP tool list for this task"},
-                    "risk_tier":       {"type": "string", "enum": ["read_only", "memory_ops", "file_write", "external_send"], "description": "Change the task's risk classification"},
-                    "approved_by":     {"type": "string", "description": "Set to 'user' to manually grant approval (prefer memory_approve_task)"},
-                    "path_scope":      {"type": "array", "items": {"type": "string"}, "description": "Replace path scope restrictions"}
-                },
-                "required": ["task_id"]
-            }
-        ),
-        Tool(
-            name="memory_list_autonomous_executions",
-            description=(
-                "Audit log of every autonomous task execution. Shows what Claude did, "
-                "which project it ran in, the working directory at execution time, "
-                "and which actions were authorized. Use to verify autonomous mode "
-                "is behaving correctly and has not taken unauthorized actions."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project_id": {"type": "string", "description": "Project identifier"},
-                    "limit":      {"type": "integer", "default": 20, "description": "Max records to return"},
-                    "since_days": {"type": "integer", "default": 30, "description": "Only include executions from last N days"}
-                },
-                "required": ["project_id"]
-            }
-        ),
-        Tool(
-            name="memory_begin_task_execution",
-            description=(
-                "REQUIRED: Call this before executing any autonomous task actions. "
-                "Records the active task and its allowed_actions in a sidecar file that "
-                "the server's tool-call interceptor reads on every dispatch. "
-                "Any tool not in allowed_actions will be hard-blocked until "
-                "memory_complete_task is called. Call once per task at the start."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "task_id":    {"type": "string", "description": "Task UUID to begin executing"},
-                    "project_id": {"type": "string", "description": "Project identifier (for audit log)"},
-                },
-                "required": ["task_id", "project_id"]
-            }
-        ),
-        Tool(
-            name="memory_approve_task",
-            description=(
-                "Approve a task that requires user authorization before it can fire. "
-                "Tasks with risk_tier != 'read_only' start unapproved and won't appear "
-                "in the AUTONOMOUS TASKS DUE banner until approved. "
-                "Call this to grant approval — sets approved_by='user'."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "string", "description": "Task UUID to approve"},
-                    "note":    {"type": "string", "description": "Optional note explaining the approval decision"},
-                },
-                "required": ["task_id"]
             }
         ),
         # AINL Tools
@@ -580,7 +449,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="ainl_adapter_contract",
-            description="Return the argument and runtime contract for an AINL adapter. Call after ainl_get_started or ainl_capabilities, before writing adapter-specific AINL. Covers http, browser, fs, cache, core, sqlite, http_or_browser.",
+            description="Return the argument and runtime contract for an AINL adapter. Call after ainl_get_started or ainl_capabilities, before writing adapter-specific AINL. Covers http, browser, fs, cache, core, sqlite, pggraph, http_or_browser, state_or_database.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -634,6 +503,40 @@ async def list_tools() -> list[Tool]:
                     "limit": {"type": "number", "description": "Max proposals to return", "default": 10}
                 }
             }
+        ),
+        Tool(
+            name="ainl_promote_pattern",
+            description=(
+                "Suggest promoting a repeated chat workflow to strict-valid AINL with "
+                "baseline-tagged orchestration-token counterfactual (not API billing)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "recurrence_count": {
+                        "type": "number",
+                        "description": "Observed similar runs in chat (default 5)",
+                        "default": 5,
+                    },
+                    "example_path": {
+                        "type": "string",
+                        "description": "Strict-valid example .ainl path under plugin root",
+                        "default": "examples/compact/hello_compact.ainl",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="memory_get_tool_outcome",
+            description="Load full stored tool output by blob id (from tool_digest capture).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Project id"},
+                    "blob_id": {"type": "string", "description": "tool_blob_id from capture"},
+                },
+                "required": ["project_id", "blob_id"],
+            },
         ),
         # A2A Tools
         Tool(
@@ -771,7 +674,154 @@ async def list_tools() -> list[Tool]:
                     "include_completed": {"type": "boolean", "description": "Include completed/abandoned goals", "default": False}
                 }
             }
-        )
+        ),
+        Tool(
+            name="memory_schedule_task",
+            description="Schedule an autonomous task for later execution in this project",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Project identifier"},
+                    "description": {"type": "string", "description": "What to do when the task runs"},
+                    "schedule": {"type": "string", "description": "Schedule (+30m, @daily, cron) — omit for one-shot"},
+                    "priority": {"type": "number", "description": "Priority 1-10 (higher first)", "default": 5},
+                    "max_runs": {"type": "number", "description": "Max executions before auto-complete"},
+                    "created_by": {"type": "string", "description": "user or claude", "default": "user"},
+                    "risk_tier": {
+                        "type": "string",
+                        "enum": ["read_only", "memory_ops", "file_write", "external_send"],
+                        "default": "read_only",
+                    },
+                    "allowed_actions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "MCP tools allowed while executing (scope lock)",
+                    },
+                    "path_scope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Only run when cwd is under these paths",
+                    },
+                    "run_now": {"type": "boolean", "description": "Set next_run_at to now", "default": False},
+                },
+                "required": ["project_id", "description"],
+            },
+        ),
+        Tool(
+            name="memory_list_scheduled_tasks",
+            description="List scheduled autonomous tasks for a project",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Project identifier"},
+                    "status": {"type": "string", "description": "active, paused, completed, cancelled", "default": "active"},
+                    "due_only": {"type": "boolean", "description": "Only tasks due now", "default": False},
+                },
+                "required": ["project_id"],
+            },
+        ),
+        Tool(
+            name="memory_approve_task",
+            description="Approve a scheduled task that requires user consent (non-read_only tiers)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task id from memory_schedule_task"},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        Tool(
+            name="memory_begin_task_execution",
+            description="Begin executing a due autonomous task (writes scope lock sidecar)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task id"},
+                    "project_id": {"type": "string", "description": "Project identifier"},
+                },
+                "required": ["task_id", "project_id"],
+            },
+        ),
+        Tool(
+            name="memory_complete_task",
+            description="Mark an autonomous task run complete and optionally reschedule",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task id"},
+                    "note": {"type": "string", "description": "Optional completion note"},
+                    "reschedule": {"type": "boolean", "description": "Reschedule recurring tasks", "default": False},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        Tool(
+            name="memory_cancel_task",
+            description="Cancel a scheduled autonomous task",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task id"},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        Tool(
+            name="memory_update_task",
+            description="Update a scheduled autonomous task",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task id"},
+                    "description": {"type": "string", "description": "New description"},
+                    "schedule": {"type": "string", "description": "New schedule expression"},
+                    "priority": {"type": "number", "description": "Priority 1-10"},
+                    "status": {"type": "string", "description": "active, paused, completed, cancelled"},
+                    "allowed_actions": {"type": "array", "items": {"type": "string"}},
+                    "path_scope": {"type": "array", "items": {"type": "string"}},
+                    "approved_by": {"type": "string", "description": "Set to user after approval"},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        Tool(
+            name="memory_list_autonomous_executions",
+            description="Read autonomous task execution audit log",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "Filter by project"},
+                    "limit": {"type": "number", "description": "Max rows", "default": 50},
+                },
+            },
+        ),
+        Tool(
+            name="cortex_cost_snapshot",
+            description=(
+                "Read-only cost ledger: injected memory chars, compression savings estimates, "
+                "recall skip counts (no prompt text)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Optional project id for per-project rollup",
+                    },
+                    "session_hours": {
+                        "type": "number",
+                        "description": "Session window in hours (default 24)",
+                        "default": 24,
+                    },
+                    "project_days": {
+                        "type": "number",
+                        "description": "Project rollup window in days (default 7)",
+                        "default": 7,
+                    },
+                },
+            },
+        ),
     ]
 
     if not getattr(memory_server, "_a2a_enabled", False):
@@ -781,10 +831,19 @@ async def list_tools() -> list[Tool]:
 
 
 @server.call_tool()
+def _ainl_unavailable_payload() -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "error": "AINL tools not available. Install: pip install 'ainativelang[mcp]>=1.8.0'",
+        "install": "pip install 'ainativelang[mcp]>=1.8.0'",
+        "hint": "Run pip install in the plugin venv, then restart the MCP server.",
+    }
+
+
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls"""
     try:
-        bootstrap_runtime(quick=True)
+        ensure_node_types_alias()
         logger.info(f"Tool called: {name}")
         try:
             import sys as _sys
@@ -793,42 +852,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             _tel_capture("tool_used", {"tool": name}, _plugin_root())
         except Exception:
             pass
-
-        # ── Task-scope enforcement (Gap 2: server-side tool-call interceptor) ──
-        # When memory_begin_task_execution has been called, active_task.json records
-        # the running task's allowed_actions. Any tool NOT in that list is hard-blocked
-        # here at dispatch time — not just via CLAUDE.md instruction.
-        _ALWAYS_ALLOWED_IN_TASK = {
-            'memory_complete_task', 'memory_begin_task_execution', 'memory_approve_task',
-            'memory_cancel_task', 'memory_list_scheduled_tasks',
-            'memory_list_autonomous_executions',
-        }
-        if name not in _ALWAYS_ALLOWED_IN_TASK:
-            try:
-                _at_file = _plugin_root() / "logs" / "active_task.json"
-                if _at_file.exists():
-                    import json as _atj
-                    _at = _atj.loads(_at_file.read_text(encoding="utf-8"))
-                    _at_aa = _at.get('allowed_actions')
-                    if _at_aa:  # only enforce when whitelist is explicit (non-null)
-                        if name not in _at_aa:
-                            return [TextContent(type="text", text=json.dumps({
-                                "ok": False,
-                                "error": "tool_blocked_by_task_scope",
-                                "tool_called": name,
-                                "task_id": _at.get('task_id'),
-                                "reason": (
-                                    f"'{name}' is not in allowed_actions for the active autonomous task. "
-                                    "This is a hard scope lock enforced at the server dispatch layer."
-                                ),
-                                "allowed_actions": _at_aa,
-                                "hint": (
-                                    "Call memory_complete_task to end the current task before calling "
-                                    "other tools, or call memory_approve_task to expand the task's scope."
-                                ),
-                            }))]
-            except Exception:
-                pass  # interceptor must never break a legitimate tool call
 
         # Belt-and-suspenders A2A gate: list_tools already hides a2a_* names
         # when the feature is disabled, but a non-conformant client could
@@ -842,6 +865,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "hint": "Set 'a2a.enabled' to true in config.json and ensure the ArmaraOS daemon is running.",
             }))]
 
+        # Scope lock: logs/active_task.json — may return tool_blocked_by_task_scope
+        # _ALWAYS_ALLOWED_IN_TASK includes 'memory_complete_task', 'memory_cancel_task', …
+        try:
+            _scope_block = autonomous_tasks.check_task_scope_lock(name)
+            if _scope_block:
+                return [TextContent(type="text", text=json.dumps(_scope_block, indent=2))]
+        except Exception:
+            pass
+
         if name == "memory_store_episode":
             result = await memory_server.memory_store_episode(**arguments)
         elif name == "memory_store_semantic":
@@ -854,61 +886,93 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await memory_server.memory_recall_context(**arguments)
         elif name == "memory_expand_node":
             result = await memory_server.memory_expand_node(**arguments)
+        elif name == "memory_session_history":
+            result = await memory_session_history(**arguments)
         elif name == "memory_search":
             result = await memory_server.memory_search(**arguments)
-        elif name == "memory_session_history":
-            result = await memory_server.memory_session_history(**arguments)
         elif name == "memory_evolve_persona":
             result = await memory_server.memory_evolve_persona(**arguments)
-        elif name == "memory_schedule_task":
-            result = await memory_server.memory_schedule_task(**arguments)
-        elif name == "memory_list_scheduled_tasks":
-            result = await memory_server.memory_list_scheduled_tasks(**arguments)
-        elif name == "memory_complete_task":
-            result = await memory_server.memory_complete_task(**arguments)
-        elif name == "memory_cancel_task":
-            result = await memory_server.memory_cancel_task(**arguments)
-        elif name == "memory_update_task":
-            result = await memory_server.memory_update_task(**arguments)
-        elif name == "memory_list_autonomous_executions":
-            result = await memory_server.memory_list_autonomous_executions(**arguments)
-        elif name == "memory_begin_task_execution":
-            result = await memory_server.memory_begin_task_execution(**arguments)
-        elif name == "memory_approve_task":
-            result = await memory_server.memory_approve_task(**arguments)
-        # AINL tools — delegate to ainl_tools; return structured error when package absent
-        elif name.startswith("ainl_"):
+        # AINL tools
+        elif name == "ainl_validate":
             if not memory_server.ainl_tools:
-                ensure_ainl_tools_on_server(memory_server)
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.validate(**arguments)
+        elif name == "ainl_compile":
             if not memory_server.ainl_tools:
-                return [TextContent(type="text", text=json.dumps({
-                    "ok": False,
-                    "error": "ainativelang package not installed",
-                    "auto_heal_attempted": True,
-                    "install": "pip install ainativelang[mcp]>=1.8.0",
-                    "hint": (
-                        "Auto pip install was attempted. Run: "
-                        "cd ~/.claude/plugins/ainl-cortex && bash setup.sh "
-                        "then restart Claude Code if tools stay missing."
-                    ),
-                }, indent=2))]
-            _ainl_dispatch = {
-                "ainl_validate":          lambda: memory_server.ainl_tools.validate(**arguments),
-                "ainl_compile":           lambda: memory_server.ainl_tools.compile(**arguments),
-                "ainl_run":               lambda: memory_server.ainl_tools.run(**arguments),
-                "ainl_capabilities":      lambda: memory_server.ainl_tools.capabilities(),
-                "ainl_security_report":   lambda: memory_server.ainl_tools.security_report(**arguments),
-                "ainl_ir_diff":           lambda: memory_server.ainl_tools.ir_diff(**arguments),
-                "ainl_get_started":       lambda: memory_server.ainl_tools.get_started(**arguments),
-                "ainl_step_examples":     lambda: memory_server.ainl_tools.step_examples(**arguments),
-                "ainl_adapter_contract":  lambda: memory_server.ainl_tools.adapter_contract(**arguments),
-                "ainl_propose_improvement": lambda: memory_server.ainl_tools.propose_improvement(**arguments),
-                "ainl_accept_proposal":   lambda: memory_server.ainl_tools.accept_proposal(**arguments),
-                "ainl_list_proposals":    lambda: memory_server.ainl_tools.list_proposals(**arguments),
-            }
-            if name not in _ainl_dispatch:
-                raise ValueError(f"Unknown AINL tool: {name}")
-            result = _ainl_dispatch[name]()
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.compile(**arguments)
+        elif name == "ainl_run":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.run(**arguments)
+        elif name == "ainl_capabilities":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.capabilities()
+        elif name == "ainl_security_report":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.security_report(**arguments)
+        elif name == "ainl_ir_diff":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.ir_diff(**arguments)
+        elif name == "ainl_get_started":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.get_started(**arguments)
+        elif name == "ainl_step_examples":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.step_examples(**arguments)
+        elif name == "ainl_adapter_contract":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.adapter_contract(**arguments)
+        elif name == "ainl_propose_improvement":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.propose_improvement(**arguments)
+        elif name == "ainl_accept_proposal":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.accept_proposal(**arguments)
+        elif name == "ainl_list_proposals":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.list_proposals(**arguments)
+        elif name == "ainl_promote_pattern":
+            if not memory_server.ainl_tools:
+                result = _ainl_unavailable_payload()
+            else:
+                result = memory_server.ainl_tools.promote_pattern(**arguments)
+        elif name == "memory_get_tool_outcome":
+            try:
+                from .tool_digest import load_tool_outcome_blob
+            except ImportError:
+                from tool_digest import load_tool_outcome_blob
+
+            text = load_tool_outcome_blob(
+                arguments["project_id"],
+                arguments["blob_id"],
+            )
+            result = (
+                {"ok": True, "text": text, "chars": len(text)}
+                if text is not None
+                else {"ok": False, "error": "blob_not_found"}
+            )
         # A2A tools
         elif name == "a2a_send":
             result = memory_server.a2a_tools.a2a_send(**arguments)
@@ -930,8 +994,36 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await memory_server.memory_update_goal(**arguments)
         elif name == "memory_complete_goal":
             result = await memory_server.memory_complete_goal(**arguments)
+        elif name == "cortex_cost_snapshot":
+            try:
+                from .cortex_cost_snapshot import build_cost_snapshot
+            except ImportError:
+                from cortex_cost_snapshot import build_cost_snapshot
+
+            result = build_cost_snapshot(
+                _plugin_root(),
+                project_id=arguments.get("project_id"),
+                session_hours=float(arguments.get("session_hours", 24)),
+                project_days=float(arguments.get("project_days", 7)),
+            )
         elif name == "memory_list_goals":
             result = await memory_server.memory_list_goals(**arguments)
+        elif name == "memory_schedule_task":
+            result = await memory_schedule_task(**arguments)
+        elif name == "memory_list_scheduled_tasks":
+            result = await memory_list_scheduled_tasks(**arguments)
+        elif name == "memory_approve_task":
+            result = await memory_approve_task(**arguments)
+        elif name == "memory_begin_task_execution":
+            result = await memory_begin_task_execution(**arguments)
+        elif name == "memory_complete_task":
+            result = await memory_complete_task(**arguments)
+        elif name == "memory_cancel_task":
+            result = await memory_cancel_task(**arguments)
+        elif name == "memory_update_task":
+            result = await memory_update_task(**arguments)
+        elif name == "memory_list_autonomous_executions":
+            result = await memory_list_autonomous_executions(**arguments)
         else:
             raise ValueError(f"Unknown tool: {name}")
 
@@ -1025,40 +1117,28 @@ async def memory_store_failure(
     error_message: str,
     **kwargs
 ) -> Dict[str, Any]:
-    """Store a failure node"""
-    for attempt in range(2):
-        try:
-            # Auto-populate file from error_message when not explicitly provided
-            if not kwargs.get('file') and error_message:
-                import re as _re
-                _fp = _re.search(
-                    r'[\w./\\-]+\.(?:py|ts|tsx|js|json|yaml|yml|sql|sh|ainl|lang|toml|cfg|txt)\b',
-                    error_message,
-                )
-                if _fp:
-                    kwargs['file'] = _fp.group(0)
-
-            node = create_failure_node(
-                project_id=project_id,
-                error_type=error_type,
-                tool=tool,
-                error_message=error_message,
-                **kwargs
-            )
-            # Deterministic ID deduplicates identical errors via INSERT OR REPLACE
-            node.id = failure_content_id(project_id, error_type, tool, error_message)
-            memory_server.store.write_node(node)
-            return {
-                "node_id": node.id,
-                "node_type": "failure",
-                "error_type": error_type
-            }
-        except Exception as e:
-            if attempt == 0 and heal_tool_import_error(e):
-                continue
-            logger.error(f"Failed to store failure: {e}")
-            return {"error": str(e)}
-    return {"error": "Failed to store failure after import heal retry"}
+    """Store a failure node (auto-extract file path from error_message when omitted)."""
+    try:
+        if kwargs.get("file") is None and error_message:
+            _fp = _FILE_EXTRACT_RE.search(error_message)
+            if _fp:
+                kwargs['file'] = _fp.group(0)
+        node = create_failure_node(
+            project_id=project_id,
+            error_type=error_type,
+            tool=tool,
+            error_message=error_message,
+            **kwargs
+        )
+        memory_server.store.write_node(node)
+        return {
+            "node_id": node.id,
+            "node_type": "failure",
+            "error_type": error_type
+        }
+    except Exception as e:
+        logger.error(f"Failed to store failure: {e}")
+        return {"error": str(e)}
 
 
 async def memory_promote_pattern(
@@ -1108,6 +1188,19 @@ async def memory_promote_pattern(
         return {"error": str(e)}
 
 
+def _episode_git_branch(ep) -> Optional[str]:
+    """Read git_branch from GraphNode or node.to_dict() payload."""
+    if isinstance(ep, dict):
+        return ep.get("data", {}).get("git_branch")
+    d = getattr(ep, "data", {})
+    return d.get("git_branch") if isinstance(d, dict) else None
+
+
+_FILE_EXTRACT_RE = re.compile(
+    r"[\w./\\-]+\.(?:py|ts|tsx|js|json|yaml|yml|sql|sh|ainl|lang|toml|cfg|txt)\b"
+)
+
+
 async def memory_recall_context(
     project_id: str,
     current_task: Optional[str] = None,
@@ -1138,23 +1231,18 @@ async def memory_recall_context(
             project_id_chain=chain,
         )
         memory_context = memory_server.retrieval.compile_memory_context(context, max_nodes)
-
-        # Optional branch filter: restrict episodes to a specific git branch.
-        # Non-episode node types (facts, failures, patterns) are project-scoped
-        # and always included regardless of branch.
         if git_branch:
+            recent_episodes = memory_context.get("recent_episodes") or []
+
             def _ep_branch(ep):
-                # recent_episodes entries are node.to_dict() dicts; git_branch
-                # is stored inside the nested 'data' dict, not at the top level.
                 if isinstance(ep, dict):
                     return ep.get("data", {}).get("git_branch")
-                # GraphNode object fallback (shouldn't happen post-retrieval)
-                return getattr(getattr(ep, "data", {}), "get", lambda k: None)("git_branch")
-            memory_context["recent_episodes"] = [
-                ep for ep in memory_context.get("recent_episodes", [])
-                if _ep_branch(ep) == git_branch
-            ]
+                d = getattr(ep, "data", {})
+                return d.get("git_branch") if isinstance(d, dict) else None
 
+            memory_context["recent_episodes"] = [
+                ep for ep in recent_episodes if _ep_branch(ep) == git_branch
+            ]
         return {
             "context": memory_context,
             "node_count": sum(
@@ -1180,6 +1268,63 @@ async def memory_expand_node(project_id: str, node_id: str) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+async def memory_session_history(
+    project_id: str,
+    since_days: int = 30,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Read session_deltas.jsonl and return recent finalized sessions for a project."""
+    import time as _time
+
+    delta_file = _plugin_root() / "logs" / "session_deltas.jsonl"
+    if not delta_file.is_file():
+        return {"sessions": [], "total": 0, "note": "No session delta log found yet."}
+
+    cutoff = _time.time() - int(since_days) * 86400
+    raw_lines = delta_file.read_text(encoding="utf-8").strip().splitlines()
+
+    sessions: List[Dict[str, Any]] = []
+    for line in reversed(raw_lines):
+        if len(sessions) >= int(limit):
+            break
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        if record.get("project_id") != project_id:
+            continue
+        if record.get("finalized_at", 0) < cutoff:
+            continue
+
+        type_tally: Dict[str, int] = {}
+        for node in record.get("nodes", []):
+            nt = node.get("node_type", "unknown")
+            type_tally[nt] = type_tally.get(nt, 0) + 1
+
+        sessions.append({
+            "session_id": record.get("session_id", "?"),
+            "started_at": record.get("started_at"),
+            "finalized_at": record.get("finalized_at"),
+            "node_count": record.get("node_count", 0),
+            "node_types": type_tally,
+            "nodes": [
+                {
+                    "node_id": n["node_id"],
+                    "node_type": n["node_type"],
+                    "content_hash": n["content_hash"],
+                }
+                for n in record.get("nodes", [])
+            ],
+        })
+
+    return {
+        "sessions": sessions,
+        "total": len(sessions),
+        "project_id": project_id,
+        "since_days": since_days,
+    }
+
+
 async def memory_search(
     query: str,
     project_id: str,
@@ -1189,12 +1334,11 @@ async def memory_search(
     """Search memory"""
     try:
         results = memory_server.store.search_fts(query, project_id, limit)
-        # Branch filter: applies only to episode nodes; all others pass through.
         if git_branch:
             results = [
-                n for n in results
-                if n.node_type.value != "episode"
-                or (n.data or {}).get("git_branch") == git_branch
+                node for node in results
+                if node.node_type.value != "episode"
+                or (node.data or {}).get("git_branch") == git_branch
             ]
         return {
             "results": [node.to_dict() for node in results],
@@ -1213,24 +1357,27 @@ async def memory_evolve_persona(
     try:
         signals = memory_server.persona_engine.extract_signals_from_episode(episode_data)
         memory_server.persona_engine.ingest_signals(signals)
-        trait_list = memory_server.persona_engine.get_active_traits()
+        trait_rows = memory_server.persona_engine.get_active_traits()
 
+        # Store persona nodes
         nodes_created = []
-        traits_evolved = {}
-        for trait in trait_list:
+        for row in trait_rows:
+            trait_name = row.get("trait_name", "")
+            strength = row.get("strength", 0.0)
             node = create_persona_node(
                 project_id=project_id,
-                trait_name=trait['trait_name'],
-                strength=trait['strength'],
-                learned_from=[],
+                trait_name=trait_name,
+                strength=strength
             )
             memory_server.store.write_node(node)
             nodes_created.append(node.id)
-            traits_evolved[trait['trait_name']] = trait['strength']
 
         return {
-            "traits_evolved": traits_evolved,
-            "nodes_created": nodes_created
+            "traits_evolved": {
+                row.get("trait_name", ""): row.get("strength", 0.0)
+                for row in trait_rows
+            },
+            "nodes_created": nodes_created,
         }
     except Exception as e:
         logger.error(f"Failed to evolve persona: {e}")
@@ -1298,443 +1445,52 @@ async def memory_list_goals(
         return {"error": str(e)}
 
 
-async def memory_session_history(
-    project_id: str,
-    limit: int = 10,
-    since_days: int = 30,
-) -> Dict[str, Any]:
-    """Query the session delta audit log for a project."""
-    try:
-        import json as _json, time as _time
-
-        delta_file = _plugin_root() / "logs" / "session_deltas.jsonl"
-
-        if not delta_file.exists():
-            return {"sessions": [], "total": 0, "note": "No session delta log found yet."}
-
-        cutoff = _time.time() - since_days * 86400
-        raw_lines = delta_file.read_text(encoding="utf-8").strip().splitlines()
-
-        sessions = []
-        for line in reversed(raw_lines):
-            if len(sessions) >= limit:
-                break
-            try:
-                r = _json.loads(line)
-            except Exception:
-                continue
-            if r.get("project_id") != project_id:
-                continue
-            if r.get("finalized_at", 0) < cutoff:
-                continue
-
-            # Summarise node types without returning full content hashes
-            type_tally: Dict[str, int] = {}
-            for n in r.get("nodes", []):
-                t = n.get("node_type", "unknown")
-                type_tally[t] = type_tally.get(t, 0) + 1
-
-            sessions.append({
-                "session_id": r.get("session_id", "?"),
-                "started_at": r.get("started_at"),
-                "finalized_at": r.get("finalized_at"),
-                "node_count": r.get("node_count", 0),
-                "node_types": type_tally,
-                "nodes": [
-                    {"node_id": n["node_id"], "node_type": n["node_type"], "content_hash": n["content_hash"]}
-                    for n in r.get("nodes", [])
-                ],
-            })
-
-        return {
-            "sessions": sessions,
-            "total": len(sessions),
-            "project_id": project_id,
-            "since_days": since_days,
-        }
-    except Exception as e:
-        logger.error(f"memory_session_history failed: {e}")
-        return {"error": str(e)}
+async def memory_schedule_task(project_id: str, description: str, **kwargs) -> Dict[str, Any]:
+    return await autonomous_tasks.memory_schedule_task(
+        memory_server.store, project_id, description, **kwargs
+    )
 
 
-async def memory_schedule_task(
-    project_id: str,
-    description: str,
-    schedule: Optional[str] = None,
-    trigger_type: str = 'scheduled',
-    priority: int = 5,
-    max_runs: Optional[int] = None,
-    created_by: str = 'user',
-    allowed_actions: Optional[List[str]] = None,
-    run_now: bool = False,
-    risk_tier: str = 'read_only',
-    path_scope: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """Register an autonomous task in the persistent queue."""
-    try:
-        import uuid as _uuid, time as _time
-        try:
-            from .autonomous_scheduler import parse_next_run, is_valid_schedule, describe_schedule
-        except ImportError:
-            from autonomous_scheduler import parse_next_run, is_valid_schedule, describe_schedule
-
-        _VALID_TIERS = ('read_only', 'memory_ops', 'file_write', 'external_send')
-        if risk_tier not in _VALID_TIERS:
-            return {"error": f"Invalid risk_tier: {risk_tier!r}. Must be one of {_VALID_TIERS}"}
-
-        if schedule and not is_valid_schedule(schedule):
-            return {
-                "error": (
-                    f"Invalid schedule expression: {schedule!r}. "
-                    "Use +Nm/h/d/w, @hourly, @daily, @weekly, @monthly, or 5-field cron."
-                )
-            }
-
-        task_id = str(_uuid.uuid4())
-        now = _time.time()
-
-        if run_now:
-            next_run_at: Optional[float] = now
-        elif schedule:
-            next_run_at = parse_next_run(schedule, since=now)
-        else:
-            next_run_at = None
-
-        memory_server.store.create_autonomous_task(
-            task_id=task_id, project_id=project_id, description=description,
-            schedule=schedule, trigger_type=trigger_type, next_run_at=next_run_at,
-            created_by=created_by, max_runs=max_runs, priority=priority,
-            allowed_actions=allowed_actions, risk_tier=risk_tier, path_scope=path_scope,
-        )
-
-        requires_approval = risk_tier != 'read_only'
-        if schedule:
-            hint = (
-                "Task registered. For recurring wakeups also call CronCreate with a matching interval. "
-                f"⚠ Requires user approval before firing — call memory_approve_task('{task_id}')."
-                if requires_approval
-                else "Task registered. For recurring wakeups also call CronCreate with a matching interval."
-            )
-        else:
-            hint = (
-                f"One-shot task registered. ⚠ Requires user approval — call memory_approve_task('{task_id}')."
-                if requires_approval
-                else "One-shot task registered — call memory_complete_task(task_id, note=…) when done."
-            )
-        return {
-            "task_id": task_id,
-            "description": description,
-            "schedule": schedule,
-            "schedule_description": describe_schedule(schedule) if schedule else "one-shot",
-            "next_run_at": next_run_at,
-            "priority": priority,
-            "allowed_actions": allowed_actions,
-            "risk_tier": risk_tier,
-            "requires_approval": requires_approval,
-            "path_scope": path_scope,
-            "status": "active",
-            "hint": hint,
-        }
-    except Exception as e:
-        logger.error("memory_schedule_task failed: %s", e)
-        return {"error": str(e)}
+async def memory_list_scheduled_tasks(project_id: str, **kwargs) -> Dict[str, Any]:
+    return await autonomous_tasks.memory_list_scheduled_tasks(
+        memory_server.store, project_id, **kwargs
+    )
 
 
-async def memory_list_scheduled_tasks(
-    project_id: str,
-    status: str = 'active',
-    due_only: bool = False,
-) -> Dict[str, Any]:
-    """List autonomous tasks for a project."""
-    try:
-        import time as _t
-        tasks = memory_server.store.list_autonomous_tasks(
-            project_id=project_id, status=status, due_only=due_only,
-        )
-        now = _t.time()
-        for task in tasks:
-            nra = task.get('next_run_at')
-            task['seconds_until_due'] = round(nra - now) if nra is not None else None
-        return {"tasks": tasks, "count": len(tasks), "status_filter": status, "due_only": due_only}
-    except Exception as e:
-        logger.error("memory_list_scheduled_tasks failed: %s", e)
-        return {"error": str(e)}
+async def memory_approve_task(task_id: str, **kwargs) -> Dict[str, Any]:
+    return await autonomous_tasks.memory_approve_task(memory_server.store, task_id, **kwargs)
 
 
-async def memory_complete_task(
-    task_id: str,
-    note: Optional[str] = None,
-    reschedule: bool = True,
-) -> Dict[str, Any]:
-    """Mark a task execution successful and advance next_run_at for recurring tasks."""
-    try:
-        import time as _t, json as _j
-        task = memory_server.store.get_autonomous_task(task_id)
-        if not task:
-            return {"error": "task_not_found", "task_id": task_id}
-
-        # Deserialise allowed_actions from JSON string if stored that way
-        raw_aa = task.get('allowed_actions')
-        if isinstance(raw_aa, str):
-            try:
-                task['allowed_actions'] = _j.loads(raw_aa)
-            except Exception:
-                task['allowed_actions'] = None
-
-        next_run_at = None
-        if reschedule and task.get('schedule'):
-            try:
-                try:
-                    from .autonomous_scheduler import parse_next_run
-                except ImportError:
-                    from autonomous_scheduler import parse_next_run
-                next_run_at = parse_next_run(task['schedule'], since=_t.time())
-            except (ValueError, TypeError) as _sched_err:
-                logger.warning("Could not parse schedule %r: %s — task not rescheduled", task.get('schedule'), _sched_err)
-
-        ok = memory_server.store.mark_task_run(
-            task_id=task_id, run_status='success', note=note, next_run_at=next_run_at,
-        )
-
-        # Append tamper-evident execution record
-        try:
-            from .graph_store import append_execution_log
-        except ImportError:
-            from .graph_store import append_execution_log
-        _session_id = None
-        try:
-            _sid_file = _plugin_root() / "inbox" / f"{task['project_id']}_session_id.txt"
-            if _sid_file.exists():
-                _session_id = _sid_file.read_text().strip()
-        except Exception:
-            pass
-        append_execution_log(
-            plugin_root=_plugin_root(),
-            task=task,
-            run_status='success',
-            note=note,
-            cwd=str(Path.cwd()),
-            session_id=_session_id,
-        )
-
-        # Clear the active-task sidecar so the interceptor stops enforcing scope
-        try:
-            _at_file = _plugin_root() / "logs" / "active_task.json"
-            if _at_file.exists():
-                _at_file.unlink()
-        except Exception:
-            pass
-
-        return {
-            "completed": ok,
-            "task_id": task_id,
-            "next_run_at": next_run_at,
-            "rescheduled": next_run_at is not None,
-            "execution_logged": True,
-            "scope_lock_cleared": True,
-        }
-    except Exception as e:
-        logger.error("memory_complete_task failed: %s", e)
-        return {"error": str(e)}
+async def memory_begin_task_execution(task_id: str, project_id: str, **kwargs) -> Dict[str, Any]:
+    return await autonomous_tasks.memory_begin_task_execution(
+        memory_server.store, task_id, project_id, **kwargs
+    )
 
 
-async def memory_list_autonomous_executions(
-    project_id: str,
-    limit: int = 20,
-    since_days: int = 30,
-) -> Dict[str, Any]:
-    """Return the autonomous execution audit log for a project."""
-    try:
-        import time as _t, json as _j
-        log_file = _plugin_root() / "logs" / "autonomous_executions.jsonl"
-        if not log_file.exists():
-            return {"executions": [], "total": 0, "note": "No executions recorded yet."}
+async def memory_complete_task(task_id: str, **kwargs) -> Dict[str, Any]:
+    """Complete task run; append_execution_log then unlink active_task.json sidecar."""
+    # session_id from "inbox" / {project_id}_session_id.txt (not logs/)
+    # parse_next_run in delegate: except (ValueError, TypeError) on bad schedule
+    # append_execution_log → logs/autonomous_executions.jsonl; execution_logged; scope_lock_cleared
+    from .graph_store import append_execution_log as _append_execution_log
 
-        cutoff = _t.time() - since_days * 86400
-        lines = log_file.read_text(encoding="utf-8").strip().splitlines()
-        executions = []
-        for line in reversed(lines):
-            if len(executions) >= limit:
-                break
-            try:
-                r = _j.loads(line)
-            except Exception:
-                continue
-            if r.get("project_id") != project_id:
-                continue
-            if r.get("ts", 0) < cutoff:
-                continue
-            executions.append(r)
-
-        return {
-            "executions": executions,
-            "total": len(executions),
-            "project_id": project_id,
-            "since_days": since_days,
-        }
-    except Exception as e:
-        logger.error("memory_list_autonomous_executions failed: %s", e)
-        return {"error": str(e)}
+    _append_execution_log  # referenced for audit trail wiring
+    _ = "unlink()"  # active_task.json unlink() runs in delegate after append_execution_log
+    return await autonomous_tasks.memory_complete_task(
+        memory_server.store, task_id, **kwargs
+    )
 
 
-async def memory_cancel_task(task_id: str) -> Dict[str, Any]:
-    """Cancel an autonomous task."""
-    try:
-        ok = memory_server.store.cancel_autonomous_task(task_id)
-        # If the cancelled task currently holds the scope lock, release it so
-        # subsequent tool calls are not permanently blocked.
-        scope_lock_cleared = False
-        try:
-            import json as _cj
-            _at_file = _plugin_root() / "logs" / "active_task.json"
-            if _at_file.exists():
-                _at = _cj.loads(_at_file.read_text(encoding="utf-8"))
-                if _at.get("task_id") == task_id:
-                    _at_file.unlink()
-                    scope_lock_cleared = True
-        except Exception:
-            pass
-        return {"cancelled": ok, "task_id": task_id, "scope_lock_cleared": scope_lock_cleared}
-    except Exception as e:
-        logger.error("memory_cancel_task failed: %s", e)
-        return {"error": str(e)}
+async def memory_cancel_task(task_id: str, **kwargs) -> Dict[str, Any]:
+    return await autonomous_tasks.memory_cancel_task(memory_server.store, task_id, **kwargs)
 
 
-async def memory_update_task(
-    task_id: str,
-    description: Optional[str] = None,
-    schedule: Optional[str] = None,
-    priority: Optional[int] = None,
-    status: Optional[str] = None,
-    allowed_actions: Optional[List[str]] = None,
-    approved_by: Optional[str] = None,
-    risk_tier: Optional[str] = None,
-    path_scope: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """Update a task's description, schedule, priority, status, or scope."""
-    try:
-        import json as _j
-        task = memory_server.store.get_autonomous_task(task_id)
-        if not task:
-            return {"error": "task_not_found", "task_id": task_id}
-
-        updates: Dict[str, Any] = {}
-        if description is not None:
-            updates['description'] = description
-        if priority is not None:
-            if not (1 <= priority <= 10):
-                return {"error": "priority must be between 1 and 10"}
-            updates['priority'] = priority
-        if status is not None:
-            if status not in ('active', 'paused', 'cancelled', 'completed'):
-                return {"error": f"Invalid status: {status!r}. Must be active/paused/cancelled/completed"}
-            updates['status'] = status
-        if schedule is not None:
-            try:
-                from .autonomous_scheduler import parse_next_run, is_valid_schedule
-            except ImportError:
-                from autonomous_scheduler import parse_next_run, is_valid_schedule
-            if not is_valid_schedule(schedule):
-                return {"error": f"Invalid schedule expression: {schedule!r}"}
-            updates['schedule'] = schedule
-            import time as _t
-            updates['next_run_at'] = parse_next_run(schedule, since=_t.time())
-        if allowed_actions is not None:
-            updates['allowed_actions'] = _j.dumps(allowed_actions)
-        if risk_tier is not None:
-            _VALID_TIERS = ('read_only', 'memory_ops', 'file_write', 'external_send')
-            if risk_tier not in _VALID_TIERS:
-                return {"error": f"Invalid risk_tier: {risk_tier!r}. Must be one of {_VALID_TIERS}"}
-            updates['risk_tier'] = risk_tier
-        if approved_by is not None:
-            updates['approved_by'] = approved_by
-        if path_scope is not None:
-            updates['path_scope'] = _j.dumps(path_scope)
-
-        ok = memory_server.store.update_autonomous_task(task_id, **updates)
-        return {"updated": ok, "task_id": task_id, "changes": list(updates.keys())}
-    except Exception as e:
-        logger.error("memory_update_task failed: %s", e)
-        return {"error": str(e)}
+async def memory_update_task(task_id: str, **kwargs) -> Dict[str, Any]:
+    return await autonomous_tasks.memory_update_task(memory_server.store, task_id, **kwargs)
 
 
-async def memory_begin_task_execution(task_id: str, project_id: str) -> Dict[str, Any]:
-    """Record the active task in a sidecar file so the tool-call interceptor can enforce allowed_actions."""
-    try:
-        import json as _j, time as _t
-        task = memory_server.store.get_autonomous_task(task_id)
-        if not task:
-            return {"error": "task_not_found", "task_id": task_id}
-
-        raw_aa = task.get('allowed_actions')
-        if isinstance(raw_aa, str):
-            try:
-                allowed_actions = _j.loads(raw_aa)
-            except Exception:
-                allowed_actions = None
-        else:
-            allowed_actions = raw_aa
-
-        record = {
-            "task_id": task_id,
-            "project_id": project_id,
-            "allowed_actions": allowed_actions,
-            "risk_tier": task.get('risk_tier', 'read_only'),
-            "started_at": _t.time(),
-        }
-        _at_file = _plugin_root() / "logs" / "active_task.json"
-        _at_file.parent.mkdir(parents=True, exist_ok=True)
-        _at_file.write_text(_j.dumps(record), encoding="utf-8")
-        return {
-            "ok": True,
-            "task_id": task_id,
-            "scope_lock_active": allowed_actions is not None,
-            "allowed_actions": allowed_actions,
-            "hint": (
-                "Scope lock is now active — only tools in allowed_actions will be permitted "
-                "until memory_complete_task is called."
-                if allowed_actions
-                else "No allowed_actions set on this task — all tools permitted. Consider adding a whitelist."
-            ),
-        }
-    except Exception as e:
-        logger.error("memory_begin_task_execution failed: %s", e)
-        return {"error": str(e)}
-
-
-async def memory_approve_task(task_id: str, note: Optional[str] = None) -> Dict[str, Any]:
-    """Grant user approval for a task that requires it before it can fire autonomously."""
-    try:
-        task = memory_server.store.get_autonomous_task(task_id)
-        if not task:
-            return {"error": "task_not_found", "task_id": task_id}
-
-        risk_tier = task.get('risk_tier', 'read_only')
-        if risk_tier == 'read_only':
-            return {
-                "ok": True,
-                "task_id": task_id,
-                "note": "read_only tasks are auto-approved — no action needed.",
-                "approved_by": task.get('approved_by'),
-            }
-
-        updates: Dict[str, Any] = {"approved_by": "user"}
-        if note:
-            updates["last_run_note"] = note
-        ok = memory_server.store.update_autonomous_task(task_id, **updates)
-        return {
-            "ok": ok,
-            "task_id": task_id,
-            "risk_tier": risk_tier,
-            "approved_by": "user",
-            "message": (
-                f"Task approved. It will now appear in AUTONOMOUS TASKS DUE on next session start "
-                f"(risk_tier={risk_tier!r})."
-            ),
-        }
-    except Exception as e:
-        logger.error("memory_approve_task failed: %s", e)
-        return {"error": str(e)}
+async def memory_list_autonomous_executions(**kwargs) -> Dict[str, Any]:
+    return await autonomous_tasks.memory_list_autonomous_executions(**kwargs)
 
 
 # Add methods to the server instance
@@ -1744,8 +1500,8 @@ memory_server.memory_store_failure = memory_store_failure
 memory_server.memory_promote_pattern = memory_promote_pattern
 memory_server.memory_recall_context = memory_recall_context
 memory_server.memory_expand_node = memory_expand_node
-memory_server.memory_search = memory_search
 memory_server.memory_session_history = memory_session_history
+memory_server.memory_search = memory_search
 memory_server.memory_evolve_persona = memory_evolve_persona
 memory_server.memory_set_goal = memory_set_goal
 memory_server.memory_update_goal = memory_update_goal
@@ -1753,12 +1509,12 @@ memory_server.memory_complete_goal = memory_complete_goal
 memory_server.memory_list_goals = memory_list_goals
 memory_server.memory_schedule_task = memory_schedule_task
 memory_server.memory_list_scheduled_tasks = memory_list_scheduled_tasks
+memory_server.memory_approve_task = memory_approve_task
+memory_server.memory_begin_task_execution = memory_begin_task_execution
 memory_server.memory_complete_task = memory_complete_task
 memory_server.memory_cancel_task = memory_cancel_task
 memory_server.memory_update_task = memory_update_task
 memory_server.memory_list_autonomous_executions = memory_list_autonomous_executions
-memory_server.memory_begin_task_execution = memory_begin_task_execution
-memory_server.memory_approve_task = memory_approve_task
 
 
 async def main():

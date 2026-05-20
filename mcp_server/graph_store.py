@@ -13,7 +13,10 @@ import json
 import logging
 import time
 
-from .node_types import GraphNode, GraphEdge, NodeType, EdgeType
+try:
+    from .node_types import GraphNode, GraphEdge, NodeType, EdgeType
+except ImportError:  # tests add mcp_server/ to sys.path as a flat module root
+    from node_types import GraphNode, GraphEdge, NodeType, EdgeType
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +220,11 @@ class SQLiteGraphStore(GraphStore):
             needs_migration = True
 
         if needs_migration:
-            self._migrate_to_v2()
+            has_v1_nodes = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='ainl_graph_nodes'"
+            ).fetchone()
+            if has_v1_nodes is not None:
+                self._migrate_to_v2()
 
         schema_path = Path(__file__).parent / "schema.sql"
         with open(schema_path, 'r') as f:

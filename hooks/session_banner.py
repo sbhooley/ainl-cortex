@@ -227,6 +227,7 @@ def build_main_banner(
     expected_tools: int,
     bridge_line: str = "",
     recall_line: str = "",
+    cost_line: str = "",
 ) -> str:
     """SessionStart status block (graph memory, stack health, compression)."""
     git_bit = "git" if git_repo else "no-git"
@@ -245,6 +246,8 @@ def build_main_banner(
         lines.append(f"{_CONT}(read-only until backfill via scripts/repartition_by_repo.py)")
     if recall_line:
         lines.append(recall_line.rstrip("\n"))
+    if cost_line:
+        lines.append(cost_line.rstrip("\n"))
 
     if compression_lines:
         for cl in compression_lines:

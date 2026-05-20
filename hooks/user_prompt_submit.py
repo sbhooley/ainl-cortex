@@ -15,11 +15,12 @@ from pathlib import Path
 # Add shared module to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared.project_id import get_project_id, get_git_branch, LEGACY_GLOBAL_PROJECT_ID
+from shared.project_id import get_project_id, LEGACY_GLOBAL_PROJECT_ID
 from shared.logger import log_event, log_error, get_logger
 from shared.a2a_inbox import read_inbox, clear_inbox
 from shared.a2a_log import append_log
 from shared.a2a_graph import store_message_node, query_thread_history
+from shared.conversation_detection import is_conversation_only_turn
 
 logger = get_logger("user_prompt_submit")
 
@@ -37,6 +38,7 @@ def format_memory_brief(
     compress: bool = False,
     prebuilt_brief: str = None,
     budget=None,
+    recall_meta: dict = None,
 ):
     """
     Format memory context into a bounded markdown brief (tiered summary/details).
@@ -94,6 +96,7 @@ def format_memory_brief(
             compress=compress,
             project_id=project_id,
             compress_fn=_compress_block,
+            recall_meta=recall_meta,
         )
         return brief, compression_metrics, pipeline_stats, pack_stats
 
@@ -141,9 +144,9 @@ def recall_context(project_id: str, prompt: str, max_nodes: int = 20) -> dict:
         memory_dir = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
         db_path = memory_dir / "ainl_memory.db"
 
-        native_db = memory_dir / "ainl_native.db"
-        if not db_path.exists() and not native_db.exists():
-            logger.debug(f"No memory database found under {memory_dir}")
+        # Check if database exists
+        if not db_path.exists():
+            logger.debug(f"No memory database found at {db_path}")
             return {
                 'recent_episodes': [],
                 'relevant_facts': [],
@@ -152,7 +155,6 @@ def recall_context(project_id: str, prompt: str, max_nodes: int = 20) -> dict:
                 'persona_traits': []
             }
 
-        memory_dir.mkdir(parents=True, exist_ok=True)
         # Initialize store and retrieval
         store = get_graph_store(db_path)
         retrieval = MemoryRetrieval(store)
@@ -282,7 +284,7 @@ def compress_user_prompt(prompt: str, project_id: str, config) -> tuple:
         return prompt, None
 
 
-def record_prompt_summary(project_id: str, prompt: str, cwd: Path = None) -> None:
+def record_prompt_summary(project_id: str, prompt: str, cwd=None) -> None:
     """
     Append a condensed prompt record to the project's prompt history file.
 
@@ -306,9 +308,10 @@ def record_prompt_summary(project_id: str, prompt: str, cwd: Path = None) -> Non
         prompt.lower()
     )
 
-    _branch = None
+    branch = None
     try:
-        _branch = get_git_branch(cwd if isinstance(cwd, Path) else None)
+        from shared.project_id import get_git_branch
+        branch = get_git_branch(Path(cwd) if cwd is not None else Path.cwd())
     except Exception:
         pass
 
@@ -319,7 +322,7 @@ def record_prompt_summary(project_id: str, prompt: str, cwd: Path = None) -> Non
         "tech_ids": tech_ids,
         "action": action.group(1) if action else None,
         "length": len(prompt),
-        "git_branch": _branch,
+        "git_branch": branch,
     }
 
     try:
@@ -370,7 +373,7 @@ def main():
         if _mcp not in sys.path:
             sys.path.insert(0, _mcp)
         from recall_budget import recall_budget_from_memory_config, memory_brief_has_content
-        from shared.hook_metrics import append_hook_metric
+        from shared.hook_metrics import append_hook_metric, log_compression_applied
 
         mem_cfg = config.get_memory_block()
         budget = recall_budget_from_memory_config(mem_cfg)
@@ -378,7 +381,11 @@ def main():
 
         _skip_reason = None
         _skip_memory = False
-        if len(prompt_for_recall) < budget.min_prompt_chars_for_recall:
+        _conversation_only = is_conversation_only_turn(prompt)
+        if _conversation_only:
+            _skip_memory = True
+            _skip_reason = "conversation_only"
+        if len(prompt_for_recall) < budget.min_prompt_chars_for_recall and not _skip_memory:
             _skip_memory = True
             _skip_reason = "prompt_too_short"
         if not _skip_memory:
@@ -408,6 +415,7 @@ def main():
         memory_compression_metrics = None
         pipeline_stats = None
         _used_native_recall = False
+        _recall_context: dict = {}
 
         if not _skip_memory:
             if _NATIVE_OK:
@@ -430,14 +438,29 @@ def main():
                         compress=use_memory_compression,
                         prebuilt_brief=brief,
                         budget=budget,
+                        recall_meta=_recall,
                     )
+                    if int(_recall.get("pattern_count") or 0) > 0:
+                        try:
+                            sys.path.insert(0, str(plugin_root / "mcp_server"))
+                            from procedure_cards import fetch_patterns_for_project
+
+                            _recall_context = {
+                                "applicable_patterns": fetch_patterns_for_project(
+                                    project_id, compile_max
+                                ),
+                            }
+                        except Exception as _np:
+                            logger.debug(
+                                "native procedure pattern load failed (non-fatal): %s", _np
+                            )
                 except Exception as _re:
                     logger.debug(f"Native recall failed, falling back to Python: {_re}")
 
             if not _used_native_recall:
-                context = recall_context(project_id, prompt_for_recall, max_nodes=compile_max)
+                _recall_context = recall_context(project_id, prompt_for_recall, max_nodes=compile_max)
                 brief, memory_compression_metrics, pipeline_stats, recall_pack_stats = format_memory_brief(
-                    context,
+                    _recall_context,
                     project_id,
                     compress=use_memory_compression,
                     budget=budget,
@@ -483,8 +506,16 @@ def main():
                     "used_native": _used_native_recall,
                     "recall_injected_chars": recall_pack_stats.get("recall_injected_chars", len(brief)),
                     "recall_budget_chars": recall_pack_stats.get("recall_budget_chars", budget.max_chars),
+                    "recall_dropped_nodes": recall_pack_stats.get("recall_dropped_nodes", 0),
                 },
             )
+            _dropped = int(recall_pack_stats.get("recall_dropped_nodes") or 0)
+            if _dropped > 0:
+                append_hook_metric(
+                    plugin_root,
+                    "recall_dropped_nodes",
+                    {"project_id": project_id, "count": _dropped},
+                )
         except Exception:
             pass
 
@@ -572,40 +603,49 @@ def main():
                     f"normal:{len(a2a_blocks['normal'])} low:{len(a2a_blocks['low'])})"
                 )
 
-        # ── Goal context + failure warnings (loaded once, used in assembly) ─────
+        # ── Goal context + failure warnings (skip on conversation-only turns) ─────
         goal_context_text = ""
         failure_warning_text = ""
-        try:
-            mcp_path = str(Path(__file__).parent.parent / "mcp_server")
-            if mcp_path not in sys.path:
-                sys.path.insert(0, mcp_path)
-            from graph_store import get_graph_store
-            from goal_tracker import GoalTracker
-            from failure_advisor import FailureAdvisor
+        if not _conversation_only:
+            try:
+                mcp_path = str(Path(__file__).parent.parent / "mcp_server")
+                if mcp_path not in sys.path:
+                    sys.path.insert(0, mcp_path)
+                from graph_store import get_graph_store
+                from goal_tracker import GoalTracker
+                from failure_advisor import FailureAdvisor
 
-            gm_dir = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
-            db_path = gm_dir / "ainl_memory.db"
-            # Native-only installs may have ainl_native.db before the Python sidecar exists.
-            if db_path.exists() or (gm_dir / "ainl_native.db").exists():
-                gm_dir.mkdir(parents=True, exist_ok=True)
-                _store = get_graph_store(db_path)
+                gm_dir = Path.home() / ".claude" / "projects" / project_id / "graph_memory"
+                db_path = gm_dir / "ainl_memory.db"
+                # Native-only installs may have ainl_native.db before the Python sidecar exists.
+                if db_path.exists() or (gm_dir / "ainl_native.db").exists():
+                    gm_dir.mkdir(parents=True, exist_ok=True)
+                    _store = get_graph_store(db_path)
 
-                # Active goals
-                _tracker = GoalTracker(_store, project_id)
-                _goals = _tracker.get_active_goals()
-                if _goals:
-                    goal_context_text = _tracker.format_goal_context(_goals)
+                    # Active goals
+                    _tracker = GoalTracker(_store, project_id)
+                    _goals = _tracker.get_active_goals()
+                    if _goals:
+                        goal_context_text = _tracker.format_goal_context(_goals)
 
-                # Failure pre-warnings + trend clustering
-                _advisor = FailureAdvisor(_store, project_id, cache_dir=db_path.parent)
-                _warnings = _advisor.analyse_prompt(prompt)
-                _trends = _advisor.get_trends()
-                if _warnings or _trends:
+                    # Failure pre-warnings
+                    _advisor = FailureAdvisor(_store, project_id)
+                    _warnings = _advisor.analyse_prompt(prompt)
+                    _trends = _advisor.get_trends()
                     failure_warning_text = _advisor.format_warnings(_warnings, _trends)
-                    if _warnings:
-                        logger.info(f"Injecting {len(_warnings)} failure warning(s)")
-        except Exception as _ge:
-            logger.debug(f"Goal/failure context failed (non-fatal): {_ge}")
+                    if failure_warning_text:
+                        if _warnings:
+                            logger.info(f"Injecting {len(_warnings)} failure warning(s)")
+                        try:
+                            append_hook_metric(
+                                plugin_root,
+                                "failure_warnings_injected",
+                                {"project_id": project_id, "count": len(_warnings)},
+                            )
+                        except Exception:
+                            pass
+            except Exception as _ge:
+                logger.debug(f"Goal/failure context failed (non-fatal): {_ge}")
 
         # ── Assemble system message ───────────────────────────────────────────
         system_parts = []
@@ -620,6 +660,39 @@ def main():
 
         if brief.strip() and memory_brief_has_content(brief):
             system_parts.append(brief)
+
+        if not _skip_memory and not _conversation_only:
+            try:
+                sys.path.insert(0, str(plugin_root / "mcp_server"))
+                from procedure_cards import format_procedure_cards_section, match_procedure_cards
+
+                _patterns = list((_recall_context or {}).get("applicable_patterns") or [])
+                _card_matches = match_procedure_cards(prompt_for_recall, _patterns)
+                _cards = format_procedure_cards_section(_card_matches)
+                if _cards.strip():
+                    system_parts.append(_cards)
+            except Exception as _pc_e:
+                logger.debug("procedure cards failed (non-fatal): %s", _pc_e)
+
+        try:
+            _cap_inbox = plugin_root / "inbox" / f"{project_id}_captures.jsonl"
+            if _cap_inbox.exists():
+                _dig_lines = []
+                for _line in _cap_inbox.read_text(encoding="utf-8").splitlines()[-8:]:
+                    if not _line.strip():
+                        continue
+                    _cap = json.loads(_line)
+                    _td = _cap.get("tool_digest")
+                    if _td:
+                        _tool = _cap.get("tool", "tool")
+                        _bid = _cap.get("tool_blob_id", "")
+                        _dig_lines.append(f"- {_tool}: {_td[:400]}")
+                        if _bid:
+                            _dig_lines[-1] += f" (blob: {_bid})"
+                if _dig_lines:
+                    system_parts.append("## Recent tool digests\n" + "\n".join(_dig_lines))
+        except Exception as _td_e:
+            logger.debug("tool digest recall failed (non-fatal): %s", _td_e)
 
         # Failure warnings after memory brief — salient but not overriding goals
         if failure_warning_text:
@@ -637,6 +710,20 @@ def main():
         if prompt_compression_metrics and prompt_compression_metrics['tokens_saved'] > 0:
             result["prompt"] = compressed_prompt
             logger.info(f"✅ User prompt compressed: {prompt_compression_metrics['tokens_saved']} tokens saved ({prompt_compression_metrics['savings_pct']:.0f}%)")
+            try:
+                log_compression_applied(
+                    plugin_root,
+                    project_id=project_id,
+                    surface="user_prompt",
+                    mode=str(prompt_compression_metrics.get("mode", "balanced")),
+                    mode_source=str(prompt_compression_metrics.get("mode_source", "manual")),
+                    tokens_saved=int(prompt_compression_metrics["tokens_saved"]),
+                    savings_pct=float(prompt_compression_metrics["savings_pct"]),
+                    original_tokens=int(prompt_compression_metrics.get("original_tokens", 0)),
+                    compressed_tokens=int(prompt_compression_metrics.get("compressed_tokens", 0)),
+                )
+            except Exception:
+                pass
             # Buffer compression event so stop.py can update the auto-tune profile
             try:
                 _inbox_dir = Path(__file__).resolve().parent.parent / "inbox"
@@ -654,6 +741,25 @@ def main():
             except Exception as _buf_e:
                 logger.debug("Compression event buffer failed (non-fatal): %s", _buf_e)
 
+        if _conversation_only:
+            try:
+                conv_cfg = config.config.get("conversation", {}) if hasattr(config, "config") else {}
+                if conv_cfg.get("suppress_mcp_hint", True):
+                    import os as _os
+                    if _os.environ.get("AINL_CORTEX_SUPPRESS_MCP_HINT", "").strip().lower() not in (
+                        "0",
+                        "false",
+                        "no",
+                        "off",
+                    ):
+                        system_parts.insert(
+                            0,
+                            "Conversation turn: do not call memory or AINL MCP tools unless "
+                            "the user asked for memory, graph recall, AINL workflows, or automation.",
+                        )
+            except Exception:
+                pass
+
         # Inject system message if we have anything
         assembled = "\n\n".join(system_parts)
         if assembled.strip():
@@ -662,6 +768,24 @@ def main():
 
         if memory_compression_metrics and memory_compression_metrics.get('tokens_saved', 0) > 0:
             logger.info(f"⚡ eco: {memory_compression_metrics['savings_pct']:.0f}% savings on memory context")
+            try:
+                log_compression_applied(
+                    plugin_root,
+                    project_id=project_id,
+                    surface="memory",
+                    mode=str(memory_compression_metrics.get("mode", "balanced")),
+                    mode_source=str(
+                        (pipeline_stats or {}).get("mode_source")
+                        or memory_compression_metrics.get("mode_source", "manual")
+                    ),
+                    tokens_saved=int(memory_compression_metrics["tokens_saved"]),
+                    savings_pct=float(memory_compression_metrics["savings_pct"]),
+                    original_tokens=int(memory_compression_metrics.get("original_tokens", 0)),
+                    compressed_tokens=int(memory_compression_metrics.get("compressed_tokens", 0)),
+                    preservation_score=memory_compression_metrics.get("quality_score"),
+                )
+            except Exception:
+                pass
 
         # Log event with both compression metrics
         log_event("user_prompt_submit", {
@@ -689,7 +813,7 @@ def main():
 
         # Record prompt summary for cross-session semantic mining
         try:
-            record_prompt_summary(project_id, prompt, cwd=cwd)
+            record_prompt_summary(project_id, prompt)
         except Exception:
             pass
 

@@ -17,6 +17,15 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _import_node_types():
+    try:
+        from .node_types import GraphNode, NodeType
+    except ImportError:
+        from node_types import GraphNode, NodeType
+    return GraphNode, NodeType
+
+
 # Stable namespace so the node UUID is deterministic per project
 _NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 _TOPIC = "_plugin:anchored_summary"
@@ -35,15 +44,8 @@ def update_anchored_summary(store, project_id: str) -> bool:
     """
     try:
         import time as _time
-        try:
-            from .node_types import GraphNode, NodeType
-        except ImportError:
-            import sys
-            from pathlib import Path
-            sys.path.insert(0, str(Path(__file__).parent))
-            from .node_types import GraphNode, NodeType
-
-        from .node_types import NodeType as _NT
+        GraphNode, NodeType = _import_node_types()
+        _NT = NodeType
         episodes = store.query_episodes_since(since=0, limit=30, project_id=project_id)
         facts = store.query_by_type(_NT.SEMANTIC, project_id=project_id, limit=20)
         patterns = store.query_by_type(_NT.PROCEDURAL, project_id=project_id, limit=10)
@@ -92,7 +94,10 @@ def update_anchored_summary(store, project_id: str) -> bool:
         compressed = raw
         original_len = len(raw)
         try:
-            from .compression_pipeline import get_compression_pipeline
+            try:
+                from .compression_pipeline import get_compression_pipeline
+            except ImportError:
+                from compression_pipeline import get_compression_pipeline
             result = get_compression_pipeline().compress_memory_context(raw, project_id)
             if result and result.compressed_text:
                 compressed = result.compressed_text

@@ -12,9 +12,6 @@ from typing import Dict, List, Optional, Any
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent))
-
-from shared.project_id import get_project_id
 
 try:
     from mcp_server.persona_evolution import (
@@ -303,27 +300,65 @@ def main():
         event = read_stdin_json(hook_name="ainl_detection")
 
         prompt = event.get("prompt", "")
-        # projectId is not in the hook payload — compute from cwd like other hooks
-        cwd = Path(event.get("cwd", str(Path.cwd())))
-        project_id = get_project_id(cwd)
+        project_id = event.get("projectId")
         context = {
-            "workingDir": event.get("workingDir") or str(cwd),
+            "workingDir": event.get("workingDir"),
             "projectId": project_id
         }
+
+        sys.path.insert(0, str(Path(__file__).parent))
+        from shared.conversation_detection import is_conversation_only_turn
+
+        if is_conversation_only_turn(prompt):
+            return
 
         # Analyze
         detector = AINLDetector(project_id=project_id)
         result = detector.analyze_prompt(prompt, context)
 
-        # Only output if we should suggest
+        content_parts = []
         if result["suggest_ainl"]:
-            # Combine suggestion with persona traits
-            content = result["suggestion_text"]
+            content_parts.append(result["suggestion_text"])
             if result.get("persona_traits"):
-                content = f"{result['persona_traits']}\n\n{content}"
+                content_parts.insert(0, result["persona_traits"])
 
-            # UserPromptSubmit hooks inject context via systemMessage key
-            output = {"systemMessage": content}
+        try:
+            plugin_root = Path(__file__).parent.parent
+            sys.path.insert(0, str(plugin_root / "mcp_server"))
+            from orchestration_ledger import (
+                format_promotion_nudge,
+                promotion_suggestion,
+                trajectory_fingerprint,
+            )
+
+            _tools: list = []
+            if project_id:
+                _buf = plugin_root / "inbox" / f"{project_id}_captures.jsonl"
+                if _buf.exists():
+                    for _line in _buf.read_text(encoding="utf-8").splitlines()[-40:]:
+                        if not _line.strip():
+                            continue
+                        _rec = json.loads(_line)
+                        _tools.append(str(_rec.get("tool", "")))
+            _fp = trajectory_fingerprint([t for t in _tools if t])
+            _fp_file = plugin_root / "inbox" / "trajectory_fingerprints.jsonl"
+            _count = 0
+            if _fp_file.exists() and _fp:
+                for _line in _fp_file.read_text(encoding="utf-8").splitlines():
+                    if not _line.strip():
+                        continue
+                    _rec = json.loads(_line)
+                    if _rec.get("fingerprint") == _fp and _rec.get("project_id") == project_id:
+                        _count += 1
+            _promo = promotion_suggestion(max(_count, 1))
+            _nudge = format_promotion_nudge(_promo)
+            if _nudge:
+                content_parts.append(_nudge)
+        except Exception:
+            pass
+
+        if content_parts:
+            output = {"systemMessage": "\n\n".join(content_parts)}
             print(json.dumps(output))
 
     except Exception as e:

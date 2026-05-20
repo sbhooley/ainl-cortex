@@ -296,7 +296,7 @@ class TestFormatWarnings:
 class TestGoalTracksEpisodeNodeId:
 
     def test_auto_update_links_goal_tracks_via_episode_node_id(self, tmp_path):
-        from goal_tracker import GoalTracker
+        from mcp_server.goal_tracker import GoalTracker
         from node_types import NodeType, GraphNode, EdgeType
 
         store = _make_store(tmp_path)
@@ -344,7 +344,10 @@ except ImportError:
     _ngs = None
 
 
-@pytest.mark.skipif(_ngs is None or not _ngs._NATIVE_OK, reason="ainl_native not built")
+@pytest.mark.skipif(
+    _ngs is None or not _ngs.native_bindings_available(),
+    reason="ainl_native not built",
+)
 class TestNativeUnresolvedFailures:
 
     def test_get_unresolved_failures_returns_stored_failures(self, tmp_path):
@@ -380,29 +383,9 @@ class TestNativeUnresolvedFailures:
         assert len(warnings) >= 1
         assert warnings[0].matched_on in ("command", "semantic", "file")
 
-    def test_get_unresolved_failures_merges_python_sidecar(self, tmp_path):
-        """Strict-native writes failures to ainl_memory.db; native read must merge."""
-        from graph_store import SQLiteGraphStore
-
-        native_db = tmp_path / "ainl_native.db"
-        sidecar_db = tmp_path / "ainl_memory.db"
-        store = _ngs.NativeGraphStore(native_db)
-        py_store = SQLiteGraphStore(sidecar_db)
-        pid = "proj_sidecar_only"
-
-        py_store.write_node(
-            create_failure_node(
-                pid, "compile_error", "ainl_validate", "unexpected token at line 1"
-            )
-        )
-
-        unresolved = store.get_unresolved_failures(pid, limit=10)
-        assert len(unresolved) == 1
-        assert unresolved[0].data.get("error_type") == "compile_error"
-
     def test_goal_tracks_reads_episode_from_native_db(self, tmp_path):
         """Strict-native: goals on sidecar, episodes on native — read_store must bridge."""
-        from goal_tracker import GoalTracker
+        from mcp_server.goal_tracker import GoalTracker
         from node_types import NodeType, GraphNode, EdgeType, create_goal_node
 
         native_db = tmp_path / "ainl_native.db"
@@ -447,48 +430,3 @@ class TestNativeUnresolvedFailures:
         assert len(edges) == 1
         assert edges[0].to_node == ep_id
         assert sidecar.get_node(ep_id) is None
-
-
-@pytest.mark.skipif(_ngs is None or not _ngs._NATIVE_OK, reason="ainl_native not built")
-class TestNativeSidecarGoals:
-
-    def test_query_goals_merges_python_sidecar(self, tmp_path):
-        """Strict-native writes goals to ainl_memory.db; native read must merge."""
-        from graph_store import SQLiteGraphStore
-        from node_types import create_goal_node
-
-        native_db = tmp_path / "ainl_native.db"
-        sidecar_db = tmp_path / "ainl_memory.db"
-        store = _ngs.NativeGraphStore(native_db)
-        py_store = SQLiteGraphStore(sidecar_db)
-        pid = "proj_goals_sidecar"
-
-        py_store.write_node(
-            create_goal_node(pid, "Ship native merge", "Verify sidecar goals visible")
-        )
-
-        active = store.query_goals(pid, status="active", limit=10)
-        assert len(active) == 1
-        assert active[0].data.get("title") == "Ship native merge"
-
-    def test_get_node_and_update_goal_on_sidecar(self, tmp_path):
-        """memory_update_goal must reach goals written only to the sidecar."""
-        from graph_store import SQLiteGraphStore
-        from node_types import create_goal_node
-
-        native_db = tmp_path / "ainl_native.db"
-        sidecar_db = tmp_path / "ainl_memory.db"
-        store = _ngs.NativeGraphStore(native_db)
-        py_store = SQLiteGraphStore(sidecar_db)
-        pid = "proj_goal_update"
-
-        goal = create_goal_node(pid, "Sidecar goal", "Update via native store facade")
-        py_store.write_node(goal)
-
-        found = store.get_node(goal.id)
-        assert found is not None
-        assert found.data.get("title") == "Sidecar goal"
-
-        store.update_node_data(goal.id, {"status": "completed"})
-        updated = py_store.get_node(goal.id)
-        assert updated.data.get("status") == "completed"

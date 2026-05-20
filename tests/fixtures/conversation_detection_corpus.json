@@ -1,0 +1,30 @@
+[
+  {"prompt": "What is the price of Apple stock today?", "expect_action": true},
+  {"prompt": "What's AAPL trading at?", "expect_action": true},
+  {"prompt": "Hello", "expect_action": false},
+  {"prompt": "How are you?", "expect_action": false},
+  {"prompt": "I need a stock photo of a tree", "expect_action": false},
+  {
+    "prompt": "You are the worlds greatest branding expert — You go into a house, and you video what the house looks like now, and on a split screen of the same video you show what it could look like if the house was upgraded… what should this technology be called",
+    "expect_action": false
+  },
+  {
+    "prompt": "On the left you show the before and on the right the after.",
+    "expect_action": false
+  },
+  {"prompt": "Please show the logs from the last deploy.", "expect_action": true},
+  {"prompt": "Can you show me the file at ./src/main.rs?", "expect_action": true},
+  {
+    "prompt": "can you use the browser to navigate to zerabook.ai",
+    "expect_action": true
+  },
+  {"prompt": "navigate to example.com for me", "expect_action": true},
+  {"prompt": "we talked about the browser wars in the 90s", "expect_action": false},
+  {
+    "prompt": "Can you browse the web and get me all the latest social media trends online and save them to a file?",
+    "expect_action": true
+  },
+  {"prompt": "thanks", "expect_action": false},
+  {"prompt": "ok", "expect_action": false},
+  {"prompt": "fix the bug in auth.py", "expect_action": true}
+]

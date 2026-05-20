@@ -20,14 +20,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
-
-
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _make_store(tmp_path: Path):
     """Return a minimal SQLiteGraphStore backed by a temp DB."""
-    from graph_store import SQLiteGraphStore
+    from mcp_server.graph_store import SQLiteGraphStore
     db = tmp_path / "test.db"
     return SQLiteGraphStore(db)
 
@@ -36,7 +33,7 @@ def _make_node(store, project_id, node_type, data, node_id=None):
     """Write a raw GraphNode into the store and return it.
     node_type is the enum *value* string e.g. 'episode', 'semantic'.
     """
-    from node_types import GraphNode, NodeType
+    from mcp_server.node_types import GraphNode, NodeType
     now = int(time.time())
     node = GraphNode(
         id=node_id or str(uuid.uuid4()),
@@ -106,7 +103,7 @@ class TestGoalRelevanceGate:
     """Goals are skipped when unchanged AND prompt has no keyword overlap."""
 
     def _overlap(self, a: str, b: str) -> float:
-        from goal_tracker import _keyword_overlap
+        from mcp_server.goal_tracker import _keyword_overlap
         return _keyword_overlap(a, b)
 
     def test_unchanged_goals_no_overlap_skipped(self, tmp_path):
@@ -164,7 +161,7 @@ class TestAnchoredSummary:
     """Anchored summary write/read roundtrip, staleness, and content filters."""
 
     def test_write_read_roundtrip(self, tmp_path):
-        from anchored_summary import update_anchored_summary, get_anchored_summary
+        from mcp_server.anchored_summary import update_anchored_summary, get_anchored_summary
         store = _make_store(tmp_path)
         project_id = "test_proj"
 
@@ -191,15 +188,15 @@ class TestAnchoredSummary:
         assert any(kw in text.lower() for kw in ("delta", "injection", "episode", "implemented"))
 
     def test_empty_store_returns_false(self, tmp_path):
-        from anchored_summary import update_anchored_summary, get_anchored_summary
+        from mcp_server.anchored_summary import update_anchored_summary, get_anchored_summary
         store = _make_store(tmp_path)
         wrote = update_anchored_summary(store, "empty_proj")
         assert wrote is False
         assert get_anchored_summary(store, "empty_proj") is None
 
     def test_staleness_gate(self, tmp_path):
-        from anchored_summary import update_anchored_summary, get_anchored_summary, _node_id
-        from node_types import GraphNode, NodeType
+        from mcp_server.anchored_summary import update_anchored_summary, get_anchored_summary, _node_id
+        from mcp_server.node_types import GraphNode, NodeType
         store = _make_store(tmp_path)
         project_id = "stale_proj"
 
@@ -219,7 +216,7 @@ class TestAnchoredSummary:
         assert result is None  # stale → not returned
 
     def test_plugin_nodes_excluded(self, tmp_path):
-        from anchored_summary import update_anchored_summary, get_anchored_summary
+        from mcp_server.anchored_summary import update_anchored_summary, get_anchored_summary
         store = _make_store(tmp_path)
         project_id = "filter_proj"
 
@@ -240,7 +237,7 @@ class TestAnchoredSummary:
         assert "THIS SHOULD NOT APPEAR" not in (text or "")
 
     def test_summary_stats_populated(self, tmp_path):
-        from anchored_summary import update_anchored_summary, summary_stats
+        from mcp_server.anchored_summary import update_anchored_summary, summary_stats
         store = _make_store(tmp_path)
         project_id = "stats_proj"
 

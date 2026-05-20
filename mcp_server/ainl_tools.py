@@ -221,6 +221,7 @@ class AINLTools:
             )
         else:
             self.proposal_store = None
+        self.memory_db_path = memory_db_path
 
     def validate(
         self,
@@ -451,6 +452,25 @@ class AINLTools:
                     # Non-fatal: trajectory recording failed
                     response["trajectory_error"] = str(e)
 
+            if project_id and self.memory_db_path:
+                try:
+                    try:
+                        from .graph_store import SQLiteGraphStore
+                        from .pattern_fitness import record_success
+                    except ImportError:
+                        from graph_store import SQLiteGraphStore
+                        from pattern_fitness import record_success
+
+                    _store = SQLiteGraphStore(self.memory_db_path)
+                    response["pattern_fitness"] = record_success(
+                        _store,
+                        project_id,
+                        label=label,
+                        adapters=adapters,
+                    )
+                except Exception as e:
+                    response["pattern_fitness_error"] = str(e)
+
             return response
 
         except AinlRuntimeError as e:
@@ -484,7 +504,7 @@ class AINLTools:
                         project_id=project_id
                     )
                     self.trajectory_store.record_trajectory(trajectory)
-                except Exception:
+                except:
                     pass  # Silent failure
 
             return response
@@ -818,6 +838,39 @@ class AINLTools:
             "proposal_id": proposal_id,
             "accepted": accepted,
             "message": "Outcome recorded. Historical acceptance rate will influence future proposal confidence.",
+        }
+
+    def promote_pattern(
+        self,
+        recurrence_count: int = 5,
+        example_path: str = "examples/compact/hello_compact.ainl",
+    ) -> Dict[str, Any]:
+        """Return strict-valid AINL stub + baseline-tagged counterfactual savings estimate."""
+        from orchestration_ledger import promotion_suggestion
+
+        suggestion = promotion_suggestion(recurrence_count, example_path)
+        if not suggestion.get("suggest"):
+            return {"ok": True, "suggest": False, **suggestion}
+
+        from ainl_example_paths import resolve_example_path
+
+        stub_path = resolve_example_path(example_path)
+        if stub_path is None:
+            return {"ok": False, "error": "example_not_found", "path": example_path}
+
+        source = stub_path.read_text(encoding="utf-8")
+        validation = self.validate(source, strict=True)
+        compile_result = self.compile(source, strict=True) if validation.get("valid") else {}
+
+        return {
+            "ok": True,
+            "suggest": True,
+            **suggestion,
+            "source_path": str(stub_path),
+            "validation": validation,
+            "compile_ok": compile_result.get("ok", False),
+            "frame_hints": compile_result.get("frame_hints", []),
+            "recommended_next_tools": ["ainl_validate", "ainl_compile", "ainl_run"],
         }
 
     def list_proposals(self, limit: int = 10) -> Dict[str, Any]:

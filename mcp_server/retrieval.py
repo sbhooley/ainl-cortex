@@ -111,7 +111,7 @@ class MemoryRetrieval:
                 self._sim_scores[node_id] = score
             mode = "tfidf"
             try:
-                from .config import get_config
+                from config import get_config
                 mode = str(
                     (get_config().config.get("retrieval") or {}).get("retrieval_mode", "tfidf")
                 ).lower()
@@ -119,7 +119,7 @@ class MemoryRetrieval:
                 pass
             if mode == "hybrid":
                 try:
-                    from .similarity import lexical_jaccard_overlap
+                    from similarity import lexical_jaccard_overlap
                     for n in nodes:
                         et = n.embedding_text or ""
                         lex = lexical_jaccard_overlap(query_text, et)
@@ -200,6 +200,22 @@ class MemoryRetrieval:
 
             # Confidence multiplier
             score *= node.confidence
+
+            # Configurable decay / TTL (subscription_safe profiles)
+            try:
+                from config import get_config
+
+                mem = get_config().get_memory_block()
+                decay_days = float(mem.get("confidence_decay_days", 0) or 0)
+                ttl_days = float(mem.get("node_ttl_days", 0) or 0)
+                if decay_days > 0 and age_days > decay_days:
+                    score *= max(0.1, 1.0 - mem.get("confidence_decay_factor", 0.05))
+                if ttl_days > 0 and age_days > ttl_days:
+                    score *= 0.05
+                util = float(node.data.get("reference_count", 0) or 0)
+                score += min(2.0, util * 0.2)
+            except Exception:
+                pass
 
             scored.append((node, score))
 
@@ -324,7 +340,7 @@ class MemoryRetrieval:
             from dataclasses import replace
 
             from recall_budget import format_memory_context_markdown, recall_budget_from_memory_config
-            from .config import get_config
+            from config import get_config
 
             b = recall_budget_from_memory_config(get_config().get_memory_block())
             b = replace(b, max_chars=max(256, int(max_tokens) * 4))

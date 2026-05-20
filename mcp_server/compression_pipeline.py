@@ -11,7 +11,10 @@ Integrates all 5 compression enhancements:
 
 from typing import Tuple, Optional
 from dataclasses import dataclass
+from pathlib import Path
+import json
 import logging
+import time
 
 try:
     from .compression import EfficientMode, CompressionMetrics, compress_text
@@ -210,6 +213,7 @@ class CompressionPipeline:
 
         # Track last used mode for cache awareness
         self.last_mode_by_project[project_id] = current_mode
+        self._persist_cache_state(project_id, current_mode.value, mode_source)
 
         return PipelineResult(
             compressed_text=compressed,
@@ -268,6 +272,27 @@ class CompressionPipeline:
 
         show_badge = output_config_dict.get('show_badge', False)
         return compressor.compress_with_badge(text, show_badge=show_badge)
+
+    def _persist_cache_state(self, project_id: str, mode: str, mode_source: str) -> None:
+        """Persist per-project compression mode for cache-awareness TTL (gitignored)."""
+        try:
+            root = Path(__file__).resolve().parent.parent
+            path = root / "logs" / "cache_state.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            state: dict = {}
+            if path.exists():
+                try:
+                    state = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    state = {}
+            state[project_id] = {
+                "mode": mode,
+                "mode_source": mode_source,
+                "updated_at": int(time.time()),
+            }
+            path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("cache_state persist failed (non-fatal): %s", exc)
 
     def get_pipeline_stats(self, project_id: Optional[str] = None) -> dict:
         """Get comprehensive statistics from all pipeline components"""

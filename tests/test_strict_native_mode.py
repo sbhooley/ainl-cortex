@@ -353,7 +353,7 @@ class TestStrictNativeMode:
             import native_graph_store as ngs
         except ImportError:
             pytest.skip("ainl_native not built")
-        if not ngs._NATIVE_OK:
+        if not ngs.native_bindings_available():
             pytest.skip("ainl_native not built")
 
         from node_types import NodeType, GraphNode, EdgeType, create_failure_node

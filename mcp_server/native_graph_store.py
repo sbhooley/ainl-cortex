@@ -51,19 +51,29 @@ GOAL_INDEX_FILENAME = "goal_index.json"
 def _is_plugin_namespaced(topic_cluster: Optional[str]) -> bool:
     return bool(topic_cluster) and topic_cluster.startswith(PLUGIN_TOPIC_CLUSTER_PREFIX)
 
+def native_bindings_available() -> bool:
+    """True only when the Rust extension exposes a working AinlNativeStore.open."""
+    try:
+        import ainl_native as mod
+    except ImportError:
+        return False
+    cls = getattr(mod, "AinlNativeStore", None)
+    return cls is not None and callable(getattr(cls, "open", None))
+
+
 try:
     import ainl_native as _native
-    _NATIVE_OK = True
 except ImportError:
     _native = None  # type: ignore[assignment]
-    _NATIVE_OK = False
+
+_NATIVE_OK = native_bindings_available()
 
 try:
     from .graph_store import GraphStore
     from .node_types import GraphNode, GraphEdge, NodeType, EdgeType
 except ImportError:
-    from .graph_store import GraphStore  # type: ignore[no-redef]
-from .node_types import GraphNode, GraphEdge, NodeType, EdgeType  # type: ignore[assignment]
+    from graph_store import GraphStore  # type: ignore[no-redef]
+    from node_types import GraphNode, GraphEdge, NodeType, EdgeType  # type: ignore[assignment]
 
 
 # ── Conversion helpers ────────────────────────────────────────────────────────
@@ -446,7 +456,7 @@ class NativeGraphStore(GraphStore):
     """GraphStore backed by ainl_native.AinlNativeStore (Rust SqliteGraphStore)."""
 
     def __init__(self, db_path: Path, agent_id: str = "claude-code"):
-        if not _NATIVE_OK:
+        if not native_bindings_available():
             raise RuntimeError("ainl_native not available — build with maturin first")
         self._store = _native.AinlNativeStore.open(str(db_path))
         self._agent_id = agent_id

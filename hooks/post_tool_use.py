@@ -34,18 +34,6 @@ except ImportError:
 _STRICT_NATIVE = is_strict_native(_NATIVE_OK)
 
 
-# AINL MCP tools whose structured error JSON should be auto-captured as failures.
-# Matched as a substring so mcp__ainl-cortex__ainl_run and ainl_run both hit.
-_AINL_ERROR_TOOLS = frozenset({'ainl_run', 'ainl_validate', 'ainl_compile', 'ainl_security_report'})
-# error_kind values that are user input issues, not runtime failures worth storing
-_AINL_USER_ERRORS = frozenset({'empty_source', 'path_not_found', 'path_not_a_file'})
-
-
-def _is_ainl_tool(tool: str) -> bool:
-    t = tool.lower()
-    return any(name in t for name in _AINL_ERROR_TOOLS)
-
-
 # Tool canonicalization (matches extractor.py)
 TOOL_CANON = {
     'Bash': 'bash', 'Shell': 'bash', 'sh': 'bash',
@@ -148,6 +136,67 @@ def _detect_bash_failure(result: dict) -> tuple:
     return False, ''
 
 
+_AINL_TOOL_MARKERS = (
+    "ainl_run",
+    "ainl_validate",
+    "ainl_compile",
+    "ainl_security_report",
+    "ainl_get_started",
+    "ainl_promote_pattern",
+)
+_AINL_SKIP_ERROR_KINDS = frozenset({"empty_source", "path_not_found"})
+
+
+def _is_ainl_tool(tool: str) -> bool:
+    t = (tool or "").lower().replace("-", "_")
+    return any(marker in t for marker in _AINL_TOOL_MARKERS)
+
+
+def _ainl_capture_overrides(tool: str, tool_input: dict, result: dict) -> dict | None:
+    """Return capture field overrides for AINL MCP tools, or None to use generic path."""
+    if not _is_ainl_tool(tool):
+        return None
+
+    if result.get("type") == "tool_error":
+        return {
+            "type": "ainl_tool",
+            "success": False,
+            "error": str(result.get("error", "tool error"))[:500],
+            "ainl_error_kind": "tool_error",
+        }
+
+    error_kind = result.get("error_kind")
+    if error_kind in _AINL_SKIP_ERROR_KINDS:
+        return {"type": "ainl_tool", "success": True}
+
+    if error_kind:
+        msg = (
+            result.get("primary_diagnostic")
+            or result.get("error")
+            or str(error_kind)
+        )
+        overrides = {
+            "type": "ainl_tool",
+            "success": False,
+            "error": str(msg)[:500],
+            "ainl_error_kind": error_kind,
+        }
+        src = result.get("source_path") or tool_input.get("path")
+        if src:
+            overrides["file"] = src
+        return overrides
+
+    if result.get("ok") is False and result.get("error"):
+        return {
+            "type": "ainl_tool",
+            "success": False,
+            "error": str(result.get("error"))[:500],
+            "ainl_error_kind": result.get("error_kind") or "runtime_error",
+        }
+
+    return {"type": "ainl_tool", "success": True}
+
+
 def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
     """
     Extract relevant data from tool execution.
@@ -188,31 +237,14 @@ def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
         capture['pattern'] = tool_input.get('pattern', '')
         capture['success'] = True
 
-    elif _is_ainl_tool(tool):
-        capture['type'] = 'ainl_tool'
-        r = result if isinstance(result, dict) else {}
-        error_kind = r.get('error_kind')
-        if error_kind and error_kind not in _AINL_USER_ERRORS:
-            # Structured AINL runtime / compile / adapter failure
-            capture['success'] = False
-            capture['ainl_error_kind'] = error_kind
-            capture['error'] = (
-                r.get('primary_diagnostic') or r.get('message') or error_kind
-            )[:400]
-            capture['file'] = (
-                r.get('source_path') or tool_input.get('path') or tool_input.get('file')
-            )
-        elif r.get('type') == 'tool_error':
-            # MCP-level tool error (network, schema, etc.)
-            capture['success'] = False
-            capture['error'] = _bash_output(r)[:400] or 'tool_error'
-        else:
-            capture['success'] = True
-
     else:
         # Generic capture
         capture['type'] = 'generic'
         capture['success'] = result.get('type') != 'tool_error'
+
+    ainl = _ainl_capture_overrides(tool, tool_input, result)
+    if ainl:
+        capture.update(ainl)
 
     return capture
 
@@ -228,9 +260,8 @@ def buffer_capture(project_id: str, capture: dict) -> int:
     try:
         with open(inbox_file, 'a') as f:
             f.write(json.dumps(capture) + '\n')
-        # Count lines efficiently — use context manager so the handle is closed
-        with open(inbox_file) as _cf:
-            count = sum(1 for _ in _cf)
+        # Count lines efficiently
+        count = sum(1 for _ in open(inbox_file))
         logger.debug(f"Buffered capture: {capture['type']} - {capture['tool']} ({count} total)")
         return count
     except Exception as e:
@@ -327,14 +358,68 @@ def main():
 
         logger.debug(f"Processing tool: {tool_name} → {canonical_tool}")
 
+        plugin_root = Path(__file__).parent.parent
+
         # Extract capture
         capture = extract_tool_capture(canonical_tool, tool_input, tool_result)
+
+        # Large tool results → digest + blob (full text in graph_memory/tool_blobs)
+        try:
+            sys.path.insert(0, str(plugin_root / "mcp_server"))
+            from tool_digest import build_digest, should_digest, store_tool_outcome_blob
+            import uuid as _uuid
+
+            _out = _bash_output(tool_result) if canonical_tool == "bash" else json.dumps(
+                tool_result, default=str
+            )[:500000]
+            if should_digest(canonical_tool, _out):
+                _bid = _uuid.uuid4().hex[:12]
+                store_tool_outcome_blob(plugin_root, project_id, _bid, _out)
+                capture["tool_blob_id"] = _bid
+                capture["tool_digest"] = build_digest(canonical_tool, _out)
+                from shared.hook_metrics import append_hook_metric
+
+                append_hook_metric(
+                    plugin_root,
+                    "tool_digest_created",
+                    {
+                        "project_id": project_id,
+                        "tool": canonical_tool,
+                        "original_chars": len(_out),
+                        "digest_chars": len(capture["tool_digest"]),
+                    },
+                )
+        except Exception as _dig_e:
+            logger.debug("tool digest failed (non-fatal): %s", _dig_e)
+
+        try:
+            sys.path.insert(0, str(plugin_root / "mcp_server"))
+            from orchestration_ledger import trajectory_fingerprint
+            import time as _time
+
+            _fp = trajectory_fingerprint([canonical_tool])
+            _fp_dir = plugin_root / "inbox"
+            _fp_dir.mkdir(parents=True, exist_ok=True)
+            _fp_path = _fp_dir / "trajectory_fingerprints.jsonl"
+            with open(_fp_path, "a", encoding="utf-8") as _fpf:
+                _fpf.write(
+                    json.dumps(
+                        {
+                            "fingerprint": _fp,
+                            "project_id": project_id,
+                            "tool": canonical_tool,
+                            "ts": _time.time(),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
 
         # Add project context
         capture['project_id'] = project_id
 
         # Buffer for consolidation, then flush if threshold reached
-        plugin_root = Path(__file__).parent.parent
         count = buffer_capture(project_id, capture)
         flush_episode_if_due(project_id, count, plugin_root)
 

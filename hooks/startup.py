@@ -30,6 +30,7 @@ from session_banner import (
     compression_status_from_config,
     format_prior_session_context,
 )
+from shared.session_delta import build_compaction_brief
 
 try:
     import ainl_native as _ainl_native
@@ -40,8 +41,8 @@ except ImportError:
 
 logger = get_logger("startup")
 
-TOOL_COUNT_MEMORY = 12  # 7 core + 4 goal management + memory_expand_node
-TOOL_COUNT_AINL = 12
+TOOL_COUNT_MEMORY = 22  # core + goals + tool outcome + session_history + 8 autonomous
+TOOL_COUNT_AINL = 13
 TOOL_COUNT_A2A = 7
 EXPECTED_MCP_TOOLS = TOOL_COUNT_MEMORY + TOOL_COUNT_AINL + TOOL_COUNT_A2A
 
@@ -172,10 +173,24 @@ def verify_mcp_imports(plugin_root: Path) -> Tuple[bool, str]:
     return False, f"tried: {'; '.join(tried)} (install/venv issue)"
 
 
+def _plugin_root_safe_for_env(plugin_root: Path) -> bool:
+    """Refuse to persist ephemeral verify/tmp checkouts into session env."""
+    try:
+        resolved = plugin_root.resolve()
+    except OSError:
+        return False
+    s = str(resolved)
+    if "ainl-cortex-fresh" in s or s.startswith("/private/tmp/ainl-cortex"):
+        return False
+    return resolved.is_dir() and (resolved / "hooks" / "startup.py").is_file()
+
+
 def append_venv_to_envfile(plugin_root: Path) -> str:
     fe = os.environ.get("CLAUDE_ENV_FILE")
     if not fe:
         return "CLAUDE_ENV_FILE not set (optional)"
+    if not _plugin_root_safe_for_env(plugin_root):
+        return f"skipped unsafe plugin_root for CLAUDE_ENV_FILE: {plugin_root}"
     try:
         line = f'\n# ainl-cortex (SessionStart)\nexport PATH="{plugin_root / ".venv" / "bin"}:$PATH"\n'
         line += f'export PYTHONPATH="{plugin_root}:$PYTHONPATH"\n'
@@ -329,10 +344,131 @@ def _ensure_ainl_native(plugin_root: Path) -> str:
     return status
 
 
+def _clear_stale_scope_lock(plugin_root: Path) -> None:
+    """Remove orphaned active_task.json from a crashed prior session."""
+    try:
+        sidecar = Path(plugin_root) / "logs" / "active_task.json"
+        if sidecar.is_file():
+            sidecar.unlink()
+    except Exception as exc:
+        logger.debug("clear stale scope lock failed (non-fatal): %s", exc)
+
+
+def _task_allowed_for_cwd(task: dict, cwd: str) -> bool:
+    """path_scope must match cwd as a path prefix (not raw string prefix)."""
+    raw = task.get("path_scope")
+    if not raw:
+        return True
+    if isinstance(raw, str):
+        try:
+            scopes = json.loads(raw)
+        except json.JSONDecodeError:
+            scopes = [raw]
+    else:
+        scopes = raw
+    if not scopes:
+        return True
+    cwd_s = str(cwd)
+    for base in scopes:
+        base_s = str(base).rstrip("/")
+        if cwd_s == base_s or cwd_s.startswith(base_s + "/"):
+            return True
+    return False
+
+
+def _cwd_matches_path_scope(cwd: str, scopes: list) -> bool:
+    """Used by startup injection; path prefix match avoids false string-prefix matches."""
+    cwd_s = str(cwd)
+    for base in scopes:
+        base_s = str(base).rstrip("/")
+        if cwd_s == base_s or cwd_s.startswith(base_s + "/"):
+            return True
+    return False
+
+
+def _inject_autonomous_blocks(
+    blocks: list,
+    store,
+    project_id: str,
+    cwd: str,
+    at_cfg: dict,
+) -> None:
+    """Append due / pending-approval autonomous task sections (non-fatal)."""
+    if not at_cfg.get("enabled", True):
+        return
+    if not at_cfg.get("inject_due_tasks_in_startup", True):
+        return
+
+    lookahead_min = float(at_cfg.get("due_tasks_lookahead_minutes", 60) or 60)
+    due_before = time.time() + lookahead_min * 60
+    candidates = store.list_autonomous_tasks(
+        project_id,
+        status="active",
+        due_only=True,
+        due_before=due_before,
+        limit=50,
+    )
+
+    due_lines: list[str] = []
+    pending_approval: list[str] = []
+
+    for task in candidates:
+        raw_scope = task.get("path_scope")
+        if raw_scope:
+            if isinstance(raw_scope, str):
+                try:
+                    scopes = json.loads(raw_scope)
+                except json.JSONDecodeError:
+                    scopes = [raw_scope]
+            else:
+                scopes = raw_scope
+            scope_ok = False
+            for base in scopes:
+                base_s = str(base).rstrip("/")
+                if cwd == base_s or cwd.startswith(base_s + "/"):
+                    scope_ok = True
+                    break
+            if not scope_ok:
+                continue
+        tier = task.get("risk_tier") or "read_only"
+        approved = task.get("approved_by")
+        desc = task.get("description", "")
+        tid = task.get("task_id", "")
+        if tier != "read_only" and not approved:
+            pending_approval.append(f"  • [{tier}] {desc} (id={tid})")
+            continue
+        due_lines.append(f"  • (p{task.get('priority', 5)}) {desc} (id={tid})")
+        if task.get("allowed_actions"):
+            aa = task.get("allowed_actions")
+            if isinstance(aa, str):
+                try:
+                    aa = json.loads(aa)
+                except json.JSONDecodeError:
+                    aa = [aa]
+            due_lines.append(f"    allowed_actions: {aa}")
+
+    if due_lines:
+        blocks.append(
+            "\n━━━ AUTONOMOUS TASKS DUE ━━━\n"
+            + "\n".join(due_lines)
+            + "\n  → Run memory_begin_task_execution then memory_complete_task when done.\n"
+            + "━━━ END AUTONOMOUS TASKS DUE ━━━\n"
+        )
+
+    if pending_approval:
+        blocks.append(
+            "\n━━━ TASKS AWAITING YOUR APPROVAL ━━━\n"
+            + "\n".join(pending_approval)
+            + "\n  → Approve with memory_approve_task before execution.\n"
+            + "━━━ END APPROVAL ━━━\n"
+        )
+
+
 def main():
     try:
         _ss_t0 = time.perf_counter()
         root = _plugin_root()
+        _clear_stale_scope_lock(root)
         cwd = _hook_cwd()
         logger.info("SessionStart: plugin=%s cwd=%s", root, cwd)
 
@@ -434,6 +570,31 @@ def main():
         else:
             _bridge_line = f"not running — {bridge_status.get('reason', 'unknown')}"
 
+        if bridge_status.get("running") and bridge_status.get("base_url"):
+            try:
+                from shared.armaraos_daemon import fetch_daemon_cost_hint
+
+                _eco = fetch_daemon_cost_hint(str(bridge_status["base_url"]))
+                if _eco and _eco.get("tokens_saved"):
+                    _bridge_line += f" · ArmaraOS eco ↓~{_eco['tokens_saved']} tok"
+            except Exception:
+                pass
+
+        # ── Project doc sync (AGENTS.md / CLAUDE.md) ─────────────────────────
+        try:
+            sys.path.insert(0, str(root / "mcp_server"))
+            from graph_store import get_graph_store
+            from project_context_sync import sync_project_docs
+
+            _pcs_pid = get_project_id(cwd)
+            _gm = Path.home() / ".claude" / "projects" / _pcs_pid / "graph_memory"
+            _dbp = _gm / "ainl_memory.db"
+            if _dbp.exists() or (_gm / "ainl_native.db").exists():
+                _store = get_graph_store(_dbp)
+                sync_project_docs(_store, _pcs_pid, cwd)
+        except Exception as _pcs:
+            logger.debug("project_context_sync failed (non-fatal): %s", _pcs)
+
         # ── Notification feed ─────────────────────────────────────────────────
         new_notifs: list = []
         update_msgs: list = []
@@ -478,6 +639,23 @@ def main():
         except Exception:
             pass
 
+        try:
+            _inbox = root / "inbox"
+            _inbox.mkdir(parents=True, exist_ok=True)
+            (_inbox / "current_project_id.txt").write_text(str(_project_id), encoding="utf-8")
+        except Exception as _cp_e:
+            logger.debug("current_project_id sidecar failed (non-fatal): %s", _cp_e)
+
+        _cost_line = ""
+        try:
+            from shared.hook_metrics import format_cost_banner_line
+
+            _cost_line = format_cost_banner_line(root)
+            if _cost_line:
+                _cost_line = f"  • {_cost_line}"
+        except Exception:
+            pass
+
         _recall_line = ""
         try:
             from shared.hook_metrics import read_last_recall_summary
@@ -514,6 +692,7 @@ def main():
             expected_tools=EXPECTED_MCP_TOOLS,
             bridge_line=_bridge_line,
             recall_line=_recall_line,
+            cost_line=_cost_line,
         )
 
         system_blocks = [banner]
@@ -629,6 +808,40 @@ def main():
                 logger.info("Memory reconciliation: %s", _recon.get("changes"))
         except Exception as _re:
             logger.debug("Memory reconciliation failed (non-fatal): %s", _re)
+
+        if not _NATIVE_OK:
+            try:
+                _recovery_brief = build_compaction_brief(root)
+                if _recovery_brief.strip():
+                    system_blocks.append(
+                        "\n━━━ COMPACTION RECOVERY ━━━\n"
+                        + _recovery_brief
+                        + "\n━━━ END RECOVERY ━━━\n"
+                    )
+                    logger.info("Injected compaction recovery brief")
+            except Exception as _cr:
+                logger.debug("Compaction recovery brief failed (non-fatal): %s", _cr)
+
+        # ── Autonomous task injection (due + pending approval) ───────────────
+        try:
+            import json as _json
+            _at_cfg = _json.loads((root / "config.json").read_text()).get(
+                "autonomous_mode", {}
+            )
+            if _at_cfg.get("enabled", True):
+                sys.path.insert(0, str(root))
+                from mcp_server.graph_store import get_graph_store as _get_gs_at
+
+                _at_store = _get_gs_at(db_path)
+                _inject_autonomous_blocks(
+                    system_blocks,
+                    _at_store,
+                    _project_id,
+                    str(cwd),
+                    _at_cfg,
+                )
+        except Exception as _at_e:
+            logger.debug("Autonomous task injection failed (non-fatal): %s", _at_e)
 
         system_message = "\n".join(system_blocks)
 

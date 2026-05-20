@@ -98,11 +98,11 @@ class GoalTracker:
     ) -> str:
         """Create and persist a new GOAL node. Returns the new node ID."""
         try:
-            from .node_types import create_goal_node
+            from node_types import create_goal_node
         except ImportError:
             import sys
             sys.path.insert(0, str(Path(__file__).parent))
-            from .node_types import create_goal_node
+            from node_types import create_goal_node
 
         node = create_goal_node(
             project_id=self.project_id,
@@ -219,7 +219,7 @@ class GoalTracker:
 
             # Write GOAL_TRACKS edge (episodes may live in ainl_native.db under strict-native).
             try:
-                from .node_types import create_edge, EdgeType
+                from node_types import create_edge, EdgeType
                 ep_to = None
                 ep_nid = episode_data.get("episode_node_id")
                 if ep_nid:

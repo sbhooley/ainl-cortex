@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 DAEMON_URL_CACHE_NAME = "armaraos_daemon_url.json"
 LEGACY_DAEMON_URL_CACHE_NAME = "openfang_url.json"
@@ -78,3 +78,21 @@ def scan_daemon_listen_port_int() -> Optional[int]:
     """Return listen port only (127.0.0.1 assumed)."""
     _, port = scan_daemon_listen_port()
     return port
+
+
+def fetch_daemon_cost_hint(base_url: str, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
+    """Optional ArmaraOS usage/eco line for SessionStart (graceful None on failure)."""
+    import json
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(f"{base_url.rstrip('/')}/api/usage/summary", method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        eco = data.get("eco") or data.get("compression") or {}
+        saved = eco.get("tokens_saved") or eco.get("total_tokens_saved")
+        if saved:
+            return {"tokens_saved": int(saved), "source": "daemon"}
+        return {"reachable": True, "source": "daemon"}
+    except Exception:
+        return None
