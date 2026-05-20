@@ -1,24 +1,13 @@
-# Windows install path: parse PowerShell, smoke setup_install (no full uv download in CI).
+# Windows install path: PowerShell parse, setup_install, hooks/MCP shape, pytest subset, native wheel smoke.
 name: Windows install CI
 
 on:
   push:
     branches: [main]
-    paths:
-      - "**.ps1"
-      - "**.ps1.cmd"
-      - "mcp_launch.cmd"
-      - "scripts/**"
-      - "mcp_server/install_bootstrap.py"
-      - "mcp_server/python_bootstrap.py"
-      - ".github/workflows/windows-install-ci.yml"
   pull_request:
     paths:
-      - "**.ps1"
-      - "mcp_launch.cmd"
-      - "scripts/**"
-      - "mcp_server/**"
-      - ".github/workflows/windows-install-ci.yml"
+      - "**"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,10 +20,9 @@ jobs:
 
       - name: Parse-check PowerShell scripts
         shell: pwsh
-        run: |
-          pwsh -NoProfile -File scripts/verify_powershell_syntax.ps1
+        run: pwsh -NoProfile -File scripts/verify_powershell_syntax.ps1
 
-      - name: setup.ps1 dry parse (legacy Windows PowerShell 5.1)
+      - name: setup.ps1 dry parse (Windows PowerShell 5.1)
         shell: powershell
         run: |
           $errors = $null
@@ -56,9 +44,69 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: setup_install.py (register-claude skipped paths only)
+      - name: setup_install.py (--python-only)
         shell: pwsh
         run: |
           python scripts/setup_install.py --plugin-dir . --python-only
           if (-not (Test-Path .venv/Scripts/python.exe)) { throw "venv missing" }
-          python -m pytest tests/test_install_bootstrap.py tests/test_platform_paths.py tests/test_windows_compat.py tests/test_python_bootstrap.py -q
+
+      - name: Assert Windows hook + MCP wiring
+        shell: pwsh
+        run: |
+          $hooks = Get-Content hooks/hooks.json -Raw
+          if ($hooks -notmatch 'run_hook\.cmd') { throw "hooks.json must use run_hook.cmd on Windows" }
+          $pj = Get-Content .claude-plugin/plugin.json -Raw | ConvertFrom-Json
+          $entry = $pj.mcpServers.'ainl-cortex'
+          if ($entry.command -ne 'cmd') { throw "plugin.json MCP must use cmd on Windows" }
+          if (($entry.args -join ' ') -notmatch 'mcp_launch\.cmd') { throw "plugin.json MCP must use mcp_launch.cmd" }
+
+      - name: SessionStart verify
+        shell: pwsh
+        run: |
+          $env:CLAUDE_PLUGIN_ROOT = (Get-Location).Path
+          $json = '{"session_id":"ci-win","cwd":"C:\\"}'
+          $out = $json | .\.venv\Scripts\python.exe scripts/run_hook.py startup 2>$null
+          if ($out -notmatch 'AINL Cortex') { throw "SessionStart banner missing" }
+
+      - name: Pytest — Windows parity subset
+        shell: pwsh
+        run: |
+          python -m pytest `
+            tests/test_install_bootstrap.py `
+            tests/test_platform_paths.py `
+            tests/test_windows_compat.py `
+            tests/test_python_bootstrap.py `
+            tests/test_hook_launcher_heal.py `
+            tests/test_claude_integration_heal.py `
+            tests/test_plugin_self_update.py `
+            tests/test_session_banner.py `
+            tests/test_sessionstart_visibility.py `
+            -q
+
+      - name: Bug hunt matrix (--quick)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/bug_hunt_matrix.ps1 -Quick
+
+  native-wheel-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: setup_install.py
+        shell: pwsh
+        run: python scripts/setup_install.py --plugin-dir . --python-only
+
+      - name: Install ainl_native from PyPI and import
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m pip install -q ainl_native
+          .\.venv\Scripts\python.exe -c "import ainl_native; print('ok', ainl_native.__file__)"
+
+      - name: native roundtrip tests (skip if wheel incompatible)
+        shell: pwsh
+        continue-on-error: true
+        run: .\.venv\Scripts\python.exe -m pytest tests/test_native_roundtrip.py -q
