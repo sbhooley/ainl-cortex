@@ -141,10 +141,36 @@ python migrate_to_python.py --purge-native
 
 Then set `memory.store_backend` back to `"python"` (the rollback script documents full steps — see `scripts/MIGRATION.md`).
 
+## Fresh re-clone (when `git pull` is not enough)
+
+Usually **`git pull` + `.\setup.cmd -PythonOnly`** is enough. Re-clone only if the tree is corrupted or you need a clean `.venv`.
+
+1. **Quit Claude Code completely** (file locks on the plugin folder).
+2. Optional — release stray MCP children:
+   ```powershell
+   Get-Process python*, py* -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*ainl-cortex*" } | Stop-Process -Force
+   ```
+3. Remove the clone (both paths if you use the local marketplace junction):
+   ```powershell
+   Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\ainl-cortex" -ErrorAction SilentlyContinue
+   ```
+   Marketplace registration can keep pointing at `%USERPROFILE%\.claude\ainl-local-marketplace\plugins\ainl-cortex`; re-run setup so the junction target exists again.
+4. Re-clone and install:
+   ```powershell
+   git clone https://github.com/sbhooley/ainl-cortex.git "$env:USERPROFILE\.claude\plugins\ainl-cortex"
+   cd "$env:USERPROFILE\.claude\plugins\ainl-cortex"
+   .\setup.cmd -PythonOnly
+   ```
+5. Restart Claude Code → `/reload-plugins`.
+
+`settings.json` and marketplace entries are **not** removed by re-clone if you only delete the plugin directory.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
+| PostToolUse hook: `scripts\.\scripts\bootstrap_no_python.ps1` does not exist | Fixed in `run_hook.cmd` (use `git pull` or re-clone). Old batch logic set plugin root to `...\scripts\.` |
+| `Remove-Item`: directory in use | Quit Claude Code; stop `python`/`py` under `ainl-cortex`; retry |
 | `python` not found | Reinstall Python with PATH enabled; reopen terminal |
 | MCP stack FAIL | `powershell -File setup.ps1` then `/reload-plugins` |
 | Hooks silent | Re-run setup; confirm `hooks/hooks.json` contains `run_hook.py` |
