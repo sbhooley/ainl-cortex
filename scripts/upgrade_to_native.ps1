@@ -29,7 +29,7 @@ if (-not $py) {
 }
 
 $argsList = @("$PluginDir\scripts\upgrade_to_native.py")
-if ($Yes) { $argsList += "--yes" }
+if ($Assumeyes) { $argsList += "--yes" }
 if ($AutoInstallRust) { $argsList += "--auto-install-rust" }
 if ($SkipMigrate) { $argsList += "--skip-migrate" }
 if ($PreferSource) { $argsList += "--prefer-source" }
