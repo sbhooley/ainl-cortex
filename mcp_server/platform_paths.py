@@ -50,6 +50,23 @@ def is_valid_plugin_root(path: Path) -> bool:
     return (root / "hooks" / "startup.py").is_file()
 
 
+def standard_plugin_path() -> Path:
+    """Recommended live git install (not Claude marketplace cache)."""
+    return Path.home() / ".claude" / "plugins" / "ainl-cortex"
+
+
+def plugin_version(path: Path) -> str:
+    """Semver string from ``.claude-plugin/plugin.json`` (empty if missing)."""
+    manifest = path / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file():
+        return ""
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        return str(data.get("version") or "").strip()
+    except (json.JSONDecodeError, OSError):
+        return ""
+
+
 def _plugin_version_tuple(path: Path) -> tuple:
     manifest = path / ".claude-plugin" / "plugin.json"
     if not manifest.is_file():
@@ -81,7 +98,7 @@ def canonical_plugin_root(current: Optional[Path] = None) -> Path:
     current = (current or plugin_root()).resolve()
     candidates: List[Path] = []
 
-    standard = Path.home() / ".claude" / "plugins" / "ainl-cortex"
+    standard = standard_plugin_path()
     if standard.is_dir():
         candidates.append(standard.resolve())
 

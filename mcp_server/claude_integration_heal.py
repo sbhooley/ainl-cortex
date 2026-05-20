@@ -14,7 +14,8 @@ from typing import List, Optional, Tuple
 from . import deps_compat
 from .import_compat import plugin_root
 from .install_bootstrap import ensure_scripts_importable, is_safe_install_root
-from .platform_paths import canonical_plugin_root, is_windows, venv_python
+from .platform_paths import canonical_plugin_root, is_windows, plugin_version, venv_python
+from .plugin_self_update import maybe_refresh_plugin_code
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,11 @@ def installed_plugins_needs_sync(root: Path) -> Tuple[bool, str]:
 
     if not Path(install_path).is_dir():
         return True, f"installPath missing on disk ({install_path})"
+
+    disk_ver = plugin_version(root)
+    reg_ver = str(entries[0].get("version") or "").strip()
+    if disk_ver and reg_ver and reg_ver != disk_ver:
+        return True, f"registered v{reg_ver} != disk v{disk_ver}"
 
     return False, "ok"
 
@@ -113,15 +119,27 @@ def heal_claude_integration(root: Optional[Path] = None) -> Tuple[bool, List[str
     Returns (reload_recommended, action_messages).
     """
     running_root = (root or plugin_root()).resolve()
-    root = canonical_plugin_root(running_root)
-    actions: List[str] = []
-    reload = False
-
-    if root != running_root:
+    reload, refresh_actions, root = maybe_refresh_plugin_code(running_root)
+    actions: List[str] = list(refresh_actions)
+    if root != running_root and not any("effective plugin root" in a for a in actions):
         actions.append(f"live plugin path {root} (Claude was using cache {running_root})")
 
     if not is_safe_install_root(root):
         return False, ["skipped claude integration heal (ephemeral plugin path)"]
+
+    if reload:
+        try:
+            ensure_scripts_importable(root)
+            from scripts.configure_marketplace import ensure_local_marketplace
+            from scripts.sync_installed_plugins import sync_installed_plugins
+
+            ensure_local_marketplace(root)
+            changed, msg = sync_installed_plugins(root)
+            actions.append(f"installed_plugins: {msg}")
+            if changed:
+                reload = True
+        except Exception as exc:
+            actions.append(f"post-update sync failed: {exc}")
 
     # 1. Venv + ainativelang (pip package → compiler_v2 import)
     if venv_python(root) is None:

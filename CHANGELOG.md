@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.5 — 2026-05-19
+
+### Windows: auto-update on reload (marketplace cache → live git)
+
+- **`plugin_self_update.py`** — on SessionStart/MCP bootstrap: `git pull` on the live install, clone `%USERPROFILE%\.claude\plugins\ainl-cortex` when only a marketplace **cache** copy exists, repoint `installed_plugins.json`, then nudge `/reload-plugins`.
+- **Version mismatch detection** — `installed_plugins.json` `version` vs on-disk `plugin.json`.
+
 ## 0.4.4 — 2026-05-19
 
 ### SessionStart banner shows plugin version
