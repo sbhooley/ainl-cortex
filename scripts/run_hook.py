@@ -30,8 +30,23 @@ def main() -> int:
 
     vpy = venv_python(root)
     if vpy is None:
-        print("ainl-cortex: .venv missing — run setup.sh or setup.ps1", file=sys.stderr)
-        return 1
+        from mcp_server.install_bootstrap import ensure_plugin_installed, needs_install
+
+        if needs_install(root):
+            ok, install_msg = ensure_plugin_installed(root)
+            if not ok:
+                print(
+                    f"ainl-cortex: auto-install failed: {install_msg}",
+                    file=sys.stderr,
+                )
+                return 1
+            vpy = venv_python(root)
+        if vpy is None:
+            print(
+                "ainl-cortex: .venv missing — run: python scripts/claude_install.py",
+                file=sys.stderr,
+            )
+            return 1
 
     if Path(sys.executable).resolve() != vpy.resolve():
         os.execv(

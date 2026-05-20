@@ -2,13 +2,36 @@
 
 AINL Cortex detects the OS during install and writes `install_manifest.json` at the plugin root with `platform`, `venv_python`, and related paths.
 
-## Automatic install (recommended)
+## Pre-install checklist (Windows 11)
 
-Ask Claude Code:
+Before you install, confirm:
+
+| Check | Why |
+|-------|-----|
+| **Network** for first install | Plugin downloads **uv** + Python 3.12 (no manual python.org visit) |
+| **Python on PATH** (optional) | If already installed, setup is faster; not required |
+| Run **`setup.ps1` from a permanent folder** (not `%TEMP%`) | Avoids marketplace junction pointing at a throwaway clone |
+| **PowerShell 5.1+** (default on Win11) | `setup.ps1` uses Python for `settings.json` (not `ConvertFrom-Json -AsHashtable`) |
+| **Git for Windows** (optional) | Only if you use `bash setup.sh` instead of `setup.ps1` |
+| **Restart Claude Code** after setup | Hooks + MCP pick up `.venv\Scripts\python.exe` |
+
+If MCP fails with “python not found”, point the host at `mcp_launch.cmd` or ensure `python` / `py` is on PATH; `mcp_launch.cmd` tries venv → `python` → `py -3` → `python3`.
+
+**A2A logging** is off by default. Enabling A2A on Windows is supported (no Unix-only `fcntl` lock).
+
+## Zero-touch install (recommended)
+
+When you enable the plugin, **the first MCP start or session hook** can create `.venv`, install deps, and register marketplace settings automatically — you do not need to run `setup.ps1` manually if Python is already on PATH.
+
+For a clean install in chat, ask Claude:
 
 ```
-Install the plugin at https://github.com/sbhooley/ainl-cortex for me, then tell me when to restart.
+Install https://github.com/sbhooley/ainl-cortex on this Windows machine using
+py -3 scripts\claude_install.py (or setup.ps1), register it, then tell me to restart
+and run /reload-plugins.
 ```
+
+## Automatic install (agent or manual)
 
 Claude should run **one** of:
 
@@ -41,7 +64,7 @@ Both call `scripts/setup_install.py`, which:
 | Install | `sys.platform == "win32"` → `os_family() == "windows"` in `mcp_server/platform_paths.py` |
 | Manifest | `install_manifest.json` records platform + absolute `venv_python` after setup |
 | MCP | `plugin.json` launches `python …/mcp_launch.py` (re-execs `.venv\Scripts\python.exe`) |
-| Hooks | `hooks.json` → `python scripts/run_hook.py <hook>` (same re-exec pattern) |
+| Hooks | `hooks.json` → `py -3 …/scripts/run_hook.py <hook>` on Windows (`python3` on macOS/Linux) |
 | Fallback | `mcp_launch.cmd` if a host needs a `.cmd` entry point |
 
 ## Requirements on Windows 11

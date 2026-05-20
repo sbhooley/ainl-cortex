@@ -2,15 +2,27 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File setup.ps1
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly
+#   powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly -Yes
 param(
     [switch]$PythonOnly,
     [switch]$EnableNative,
-    [switch]$Yes,
+    [Alias("Yes")]
+    [switch]$NonInteractive,
     [switch]$AutoInstallRust
 )
+# Note: do not use a parameter named "Yes" — PS 5.1 breaks on "-Yes" inside double-quoted strings.
 
 $ErrorActionPreference = "Stop"
 $PluginDir = $PSScriptRoot
+
+# Refuse disposable temp verification clones (mirrors setup.sh).
+$pluginNorm = $PluginDir -replace '\\', '/'
+if ($pluginNorm -match '(?i)(^|/)(tmp|temp)/ainl-cortex' -or $pluginNorm -match 'ainl-cortex-fresh') {
+    Write-Host "ERROR: setup.ps1 was run from a temp directory:" -ForegroundColor Red
+    Write-Host "  $PluginDir"
+    Write-Host "  Run from: $env:USERPROFILE\.claude\plugins\ainl-cortex"
+    exit 1
+}
 
 function Find-Python {
     foreach ($name in @("python", "py", "python3")) {
@@ -26,17 +38,37 @@ function Find-Python {
     foreach ($p in $candidates) {
         if (Test-Path $p) { return $p }
     }
+    $venvPy = Join-Path $PluginDir ".venv\Scripts\python.exe"
+    if (Test-Path $venvPy) { return $venvPy }
     return $null
+}
+
+function Ensure-VenvPython {
+    $venvPy = Join-Path $PluginDir ".venv\Scripts\python.exe"
+    if (Test-Path $venvPy) { return $venvPy }
+    Write-Host "  No system Python on PATH - bootstrapping via uv..." -ForegroundColor Cyan
+    $boot = Join-Path $PluginDir "scripts\bootstrap_no_python.ps1"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $boot $PluginDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Python bootstrap failed." -ForegroundColor Red
+        Write-Host "  Install Python 3.10+ or allow network access for uv download." -ForegroundColor Red
+        exit 1
+    }
+    if (Test-Path $venvPy) { return $venvPy }
+    Write-Host "ERROR: Bootstrap finished but .venv\Scripts\python.exe missing." -ForegroundColor Red
+    exit 1
 }
 
 $py = Find-Python
 if (-not $py) {
-    Write-Host "ERROR: Python 3.10+ not found. Install from https://www.python.org/downloads/" -ForegroundColor Red
-    Write-Host "       Enable 'Add python.exe to PATH' in the installer." -ForegroundColor Red
-    exit 1
+    $py = Ensure-VenvPython
 }
 
-$setupArgs = @("$PluginDir\scripts\setup_install.py", "--plugin-dir", $PluginDir)
+$setupArgs = @(
+    "$PluginDir\scripts\setup_install.py",
+    "--plugin-dir", $PluginDir,
+    "--register-claude"
+)
 if ($PythonOnly) { $setupArgs += "--python-only" }
 
 Write-Host "=== AINL Cortex Windows setup ===" -ForegroundColor Cyan
@@ -44,51 +76,7 @@ Write-Host "  Using Python: $py"
 & $py @setupArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Marketplace + settings (same as setup.sh tail; symlinks/junction on Windows)
-$Settings = Join-Path $env:USERPROFILE ".claude\settings.json"
-$Marketplace = Join-Path $env:USERPROFILE ".claude\ainl-local-marketplace"
-$LinkPath = Join-Path $Marketplace "plugins\ainl-cortex"
-
-Write-Host "  Setting up plugin marketplace..."
-New-Item -ItemType Directory -Force -Path (Join-Path $Marketplace ".claude-plugin") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $Marketplace "plugins") | Out-Null
-if (Test-Path $LinkPath) { Remove-Item -Force -Recurse $LinkPath -ErrorAction SilentlyContinue }
-try {
-    New-Item -ItemType Junction -Path $LinkPath -Target $PluginDir | Out-Null
-} catch {
-    cmd /c mklink /J "$LinkPath" "$PluginDir" 2>$null
-    if (-not (Test-Path $LinkPath)) {
-        Write-Host "  [warn] Could not create marketplace junction; copying path reference in marketplace.json only" -ForegroundColor Yellow
-    }
-}
-
-$marketplaceJson = @{
-    name = "ainl-local"
-    version = "1.0.0"
-    description = "Local marketplace: AINL Cortex"
-    owner = @{ name = "local" }
-    plugins = @(
-        @{
-            name = "ainl-cortex"
-            description = "Graph-native memory for Claude Code"
-            source = "./plugins/ainl-cortex"
-        }
-    )
-} | ConvertTo-Json -Depth 5
-Set-Content -Path (Join-Path $Marketplace ".claude-plugin\marketplace.json") -Value $marketplaceJson -Encoding UTF8
-
-Write-Host "  Registering plugin in settings.json..."
-$settings = @{}
-if (Test-Path $Settings) {
-    try { $settings = Get-Content $Settings -Raw | ConvertFrom-Json -AsHashtable } catch { $settings = @{} }
-}
-if (-not $settings.extraKnownMarketplaces) { $settings.extraKnownMarketplaces = @{} }
-$settings.extraKnownMarketplaces["ainl-local"] = @{ source = @{ source = "directory"; path = $Marketplace } }
-if (-not $settings.enabledPlugins) { $settings.enabledPlugins = @{} }
-$settings.enabledPlugins["ainl-cortex@ainl-local"] = $true
-New-Item -ItemType Directory -Force -Path (Split-Path $Settings) | Out-Null
-$settings | ConvertTo-Json -Depth 10 | Set-Content -Path $Settings -Encoding UTF8
-
+# -Yes: non-interactive (no prompts in this script). Does not enable native when -PythonOnly.
 if ($EnableNative) {
     Write-Host ""
     Write-Host "=== Upgrading to native Rust backend ===" -ForegroundColor Cyan
@@ -96,14 +84,15 @@ if ($EnableNative) {
     if ($AutoInstallRust) { $nativeArgs += "--auto-install-rust" }
     & $py @nativeArgs
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  [warn] Native upgrade failed — Python backend still works." -ForegroundColor Yellow
+        Write-Host "  [warn] Native upgrade failed - Python backend still works." -ForegroundColor Yellow
     }
 }
 
 Write-Host ""
 Write-Host "=== Setup complete (Windows) ===" -ForegroundColor Green
 Write-Host "  Restart Claude Code, then run /reload-plugins if upgrading."
-Write-Host "  MCP entry: python mcp_launch.py (see install_manifest.json)"
+Write-Host "  MCP: mcp_launch.cmd (see install_manifest.json)"
 if (-not $EnableNative) {
-    Write-Host "  Native backend later: powershell -File scripts/upgrade_to_native.ps1 -Yes"
+    # Single-quoted: avoid PS 5.1 parsing -Yes / -File inside double quotes as parameters.
+    Write-Host '  Native backend later: powershell -ExecutionPolicy Bypass -File scripts\upgrade_to_native.ps1 -Yes'
 }

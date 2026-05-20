@@ -21,13 +21,28 @@ def main() -> int:
 
     vpy = venv_python(root)
     if vpy is None:
-        print(
-            "ainl-cortex: .venv not found. Run setup:\n"
-            "  macOS/Linux: bash setup.sh\n"
-            "  Windows:     powershell -ExecutionPolicy Bypass -File setup.ps1",
-            file=sys.stderr,
-        )
-        return 1
+        from mcp_server.install_bootstrap import ensure_plugin_installed, needs_install
+
+        if needs_install(root):
+            ok, install_msg = ensure_plugin_installed(root)
+            if not ok:
+                print(f"ainl-cortex: auto-install failed: {install_msg}", file=sys.stderr)
+                print(
+                    "  Manual setup:\n"
+                    "    python scripts/claude_install.py\n"
+                    "    Windows: powershell -ExecutionPolicy Bypass -File setup.ps1\n"
+                    "    macOS/Linux: bash setup.sh",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"ainl-cortex: {install_msg}", file=sys.stderr)
+            vpy = venv_python(root)
+        if vpy is None:
+            print(
+                "ainl-cortex: .venv still missing after install attempt.",
+                file=sys.stderr,
+            )
+            return 1
 
     if Path(sys.executable).resolve() != vpy.resolve():
         os.execv(str(vpy), [str(vpy), "-m", "mcp_server.server"])

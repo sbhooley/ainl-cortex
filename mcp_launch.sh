@@ -5,11 +5,14 @@ ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")" && pwd)}"
 cd "$ROOT"
 export CLAUDE_PLUGIN_ROOT="$ROOT"
 
-for py in python3 python py; do
+for py in python3 python; do
   if command -v "$py" >/dev/null 2>&1; then
     exec "$py" "$ROOT/mcp_launch.py"
   fi
 done
+if command -v py >/dev/null 2>&1; then
+  exec py -3 "$ROOT/mcp_launch.py"
+fi
 
 echo "ainl-cortex: python not found on PATH — run setup.sh or setup.ps1" >&2
 exit 1

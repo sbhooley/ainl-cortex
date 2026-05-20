@@ -2,24 +2,60 @@
 
 ## Plugin Setup (for new users)
 
-If a user says they just cloned or downloaded this plugin and needs help activating it:
+If a user asks to install or enable AINL Cortex, **you** run setup — do not hand them a checklist unless Python is missing.
 
-**The one-command install:**
+### One command (all platforms)
+
 ```bash
-cd ~/.claude/plugins/ainl-cortex
-bash setup.sh
-# then restart Claude Code
+cd "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/ainl-cortex}"
+python scripts/claude_install.py
 ```
 
-`setup.sh` handles: venv creation, dep install, marketplace registration, settings.json update, and config defaults.
+Windows (when `python` is not on PATH):
 
-**To verify it worked** after restarting: `/mcp` should list ~30 tools starting with `ainl-cortex__`.
+```powershell
+cd $env:USERPROFILE\.claude\plugins\ainl-cortex
+py -3 scripts\claude_install.py
+```
 
-**Common issues:**
-- `python3 not found` → install Python 3.10+ from python.org
-- `pip install fails` → run `bash setup.sh` again with internet connection
-- No banner at startup → check `~/.claude/settings.json` has `"enabledPlugins": {"ainl-cortex@ainl-local": true}`; if missing, re-run setup.sh
-- Only ~13 tools (no ainl_ tools) → run `pip install ainativelang[mcp]>=1.7.0` inside `.venv`
+Or OS-specific wrappers (same result):
+
+- **Windows:** `powershell -ExecutionPolicy Bypass -File setup.ps1`
+- **macOS/Linux:** `bash setup.sh --python-only`
+
+### What happens automatically (no user steps)
+
+1. **You or the user enables the plugin** in Claude Code.
+2. **First MCP or SessionStart hook** runs `scripts/setup_install.py` if `.venv` is missing (zero-touch bootstrap).
+3. **Marketplace + `settings.json`** are updated when install runs with `--register-claude` (default in `claude_install.py`, `setup.sh`, `setup.ps1`).
+
+Tell the user only: **restart Claude Code once**, then **`/reload-plugins`** if tools are missing.
+
+### Windows install playbook (for agents)
+
+| Step | Action |
+|------|--------|
+| 1 | Clone or use `~\.claude\plugins\ainl-cortex` (not `%TEMP%`) |
+| 2 | Run `scripts\claude_install.py` via **any** shell with PowerShell (setup.ps1 is fine) |
+| 3 | **Python not required beforehand** — install downloads `uv` and Python 3.12 into `.ainl-bootstrap/` |
+| 4 | User may need to approve **one UAC/network** prompt for uv/winget |
+| 5 | User restarts Claude Code + `/reload-plugins` |
+| 6 | Verify `/mcp` shows ~42 `ainl-cortex__*` tools |
+
+Do not tell users to install Python manually unless bootstrap failed twice (`AINL_CORTEX_SKIP_PYTHON_BOOTSTRAP=1` or offline).
+
+Do **not** use `ConvertFrom-Json -AsHashtable` in PowerShell for settings — use `scripts/register_claude_settings.py`.
+
+### Verify
+
+After restart: `/mcp` should list ~42 tools starting with `ainl-cortex__`.
+
+### Common issues
+
+- `python3 not found` / `Python not found on PATH` → install Python 3.10+ (Windows: python.org + Add to PATH, or `winget install Python.Python.3.12`)
+- `pip install fails` → re-run `python scripts/claude_install.py` with network
+- No banner → re-run install; check `enabledPlugins["ainl-cortex@ainl-local"]` in `~/.claude/settings.json`
+- Only ~13 tools → auto-heal runs on MCP start; else `/reload-plugins`
 
 **Native Rust backend (optional, higher fidelity):**
 

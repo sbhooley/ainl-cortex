@@ -4,7 +4,8 @@
 #   powershell -ExecutionPolicy Bypass -File scripts/upgrade_to_native.ps1 -Yes
 #   powershell -ExecutionPolicy Bypass -File scripts/upgrade_to_native.ps1 -Yes -AutoInstallRust
 param(
-    [switch]$Yes,
+    [Alias("Yes")]
+    [switch]$Assumeyes,
     [switch]$AutoInstallRust,
     [switch]$SkipMigrate,
     [switch]$PreferSource

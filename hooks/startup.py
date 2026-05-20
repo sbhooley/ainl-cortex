@@ -179,8 +179,15 @@ def _plugin_root_safe_for_env(plugin_root: Path) -> bool:
         resolved = plugin_root.resolve()
     except OSError:
         return False
-    s = str(resolved)
-    if "ainl-cortex-fresh" in s or s.startswith("/private/tmp/ainl-cortex"):
+    s = str(resolved).replace("\\", "/").lower()
+    unsafe_markers = (
+        "ainl-cortex-fresh",
+        "/private/tmp/ainl-cortex",
+        "/tmp/ainl-cortex",
+        "/temp/ainl-cortex",
+        "\\temp\\ainl-cortex",
+    )
+    if any(m in s for m in unsafe_markers):
         return False
     return resolved.is_dir() and (resolved / "hooks" / "startup.py").is_file()
 
@@ -192,8 +199,24 @@ def append_venv_to_envfile(plugin_root: Path) -> str:
     if not _plugin_root_safe_for_env(plugin_root):
         return f"skipped unsafe plugin_root for CLAUDE_ENV_FILE: {plugin_root}"
     try:
-        line = f'\n# ainl-cortex (SessionStart)\nexport PATH="{plugin_root / ".venv" / "bin"}:$PATH"\n'
-        line += f'export PYTHONPATH="{plugin_root}:$PYTHONPATH"\n'
+        from mcp_server.platform_paths import is_windows, pythonpath_for_plugin, venv_bin_dir
+
+        bindir = venv_bin_dir(plugin_root)
+        py_path = pythonpath_for_plugin(plugin_root)
+        sep = os.pathsep
+        if is_windows():
+            bindir_s = bindir.as_posix()
+            line = (
+                f'\n# ainl-cortex (SessionStart)\n'
+                f'export PATH="{bindir_s}{sep}$PATH"\n'
+                f'export PYTHONPATH="{py_path}{sep}$PYTHONPATH"\n'
+            )
+        else:
+            line = (
+                f'\n# ainl-cortex (SessionStart)\n'
+                f'export PATH="{bindir}{sep}$PATH"\n'
+                f'export PYTHONPATH="{py_path}{sep}$PYTHONPATH"\n'
+            )
         with open(fe, "a", encoding="utf-8") as f:
             f.write(line)
         return f"appended to {fe}"

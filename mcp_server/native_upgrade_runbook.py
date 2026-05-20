@@ -98,27 +98,49 @@ def assess(root: Optional[Path] = None) -> Dict[str, Any]:
             }
         )
     elif backend == "native" and unmigrated:
-        migrate_cmd = (
-            f'"{py}" scripts/migrate_python_to_native.py'
-            if py
-            else (
-                "powershell -ExecutionPolicy Bypass -File scripts/migrate_python_to_native.ps1"
-                if is_windows()
-                else "bash scripts/migrate_python_to_native.sh"
+        if py:
+            actions.append(
+                {
+                    "id": "migrate_only",
+                    "type": "python_script",
+                    "script": "scripts/migrate_python_to_native.py",
+                    "args": ["--yes"],
+                    "cwd": str(root),
+                    "why": (
+                        f"store_backend is native but {len(unmigrated)} project(s) still "
+                        "have Python-only graph data."
+                    ),
+                }
             )
-        )
-        actions.append(
-            {
-                "id": "migrate_only",
-                "type": "shell",
-                "command": migrate_cmd,
-                "cwd": str(root),
-                "why": (
-                    f"store_backend is native but {len(unmigrated)} project(s) still "
-                    "have Python-only graph data."
-                ),
-            }
-        )
+        elif is_windows():
+            actions.append(
+                {
+                    "id": "migrate_only",
+                    "type": "shell",
+                    "command": (
+                        "powershell -ExecutionPolicy Bypass -File "
+                        "scripts/migrate_python_to_native.ps1 --yes"
+                    ),
+                    "cwd": str(root),
+                    "why": (
+                        f"store_backend is native but {len(unmigrated)} project(s) still "
+                        "have Python-only graph data."
+                    ),
+                }
+            )
+        else:
+            actions.append(
+                {
+                    "id": "migrate_only",
+                    "type": "shell",
+                    "command": "bash scripts/migrate_python_to_native.sh",
+                    "cwd": str(root),
+                    "why": (
+                        f"store_backend is native but {len(unmigrated)} project(s) still "
+                        "have Python-only graph data."
+                    ),
+                }
+            )
     elif backend == "python":
         flags: List[str] = []
         if not rustc:
@@ -226,6 +248,9 @@ def format_banner(state: Dict[str, Any]) -> str:
     for act in state["recommended_actions"]:
         if act["type"] == "shell":
             lines.append(f"  • RUN: {act['command']}  ({act['id']})")
+        elif act["type"] == "python_script":
+            args_s = " ".join(act.get("args") or [])
+            lines.append(f"  • RUN: {act.get('script', '')} {args_s}  ({act['id']})".strip())
         elif act["type"] == "user":
             lines.append(f"  • USER: {act.get('command', '/reload-plugins')}")
     py = venv_python(Path(state["plugin_root"]))
@@ -239,6 +264,24 @@ def format_banner(state: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _run_python_script_action(
+    root: Path,
+    act: Dict[str, Any],
+) -> subprocess.CompletedProcess[str]:
+    py = venv_python(root)
+    if py is None:
+        raise RuntimeError("Plugin venv missing — run setup.sh or setup.ps1")
+    script = root / act["script"]
+    args = [str(a) for a in act.get("args") or []]
+    return subprocess.run(
+        [str(py), str(script), *args],
+        cwd=act.get("cwd", str(root)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def execute_recommended(
     root: Optional[Path] = None,
     *,
@@ -247,9 +290,35 @@ def execute_recommended(
     root = root or plugin_root()
     state = assess(root)
     results: List[Dict[str, Any]] = []
+    state.setdefault("execute_ok", True)
 
     for act in state["recommended_actions"]:
-        if act["type"] == "shell":
+        if act["type"] == "python_script":
+            cwd = act.get("cwd", str(root))
+            label = f"{act.get('script', '')} {' '.join(act.get('args') or [])}".strip()
+            if dry_run:
+                results.append({"id": act["id"], "dry_run": True, "command": label})
+                continue
+            try:
+                proc = _run_python_script_action(root, act)
+            except RuntimeError as e:
+                results.append({"id": act["id"], "exit_code": 1, "stderr_tail": str(e)})
+                state["execute_ok"] = False
+                state["execute_results"] = results
+                return state
+            results.append(
+                {
+                    "id": act["id"],
+                    "exit_code": proc.returncode,
+                    "stdout_tail": (proc.stdout or "")[-500:],
+                    "stderr_tail": (proc.stderr or "")[-500:],
+                }
+            )
+            if proc.returncode != 0:
+                state["execute_ok"] = False
+                state["execute_results"] = results
+                return state
+        elif act["type"] == "shell":
             cwd = act.get("cwd", str(root))
             cmd = act["command"]
             if dry_run:

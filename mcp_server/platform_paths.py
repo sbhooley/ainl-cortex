@@ -161,14 +161,23 @@ def find_system_python() -> Optional[Path]:
     return None
 
 
+def hook_python_invocation() -> str:
+    """Interpreter token(s) for hooks.json / plugin MCP (bootstrap only)."""
+    if is_windows():
+        return "py -3"
+    return "python3"
+
+
 def hook_command(hook_script: str, root: Optional[Path] = None) -> str:
     """
     Portable hooks.json command (macOS, Linux, Windows).
 
-    ``run_hook.py`` resolves the venv interpreter and PYTHONPATH; no ``.venv/bin``
-    vs ``Scripts`` in the manifest.
+    Windows uses ``run_hook.cmd`` so hooks work before Python is on PATH (uv bootstrap).
     """
-    _ = root  # generation is identical on all platforms
-    return (
-        f'python "${{CLAUDE_PLUGIN_ROOT}}/scripts/run_hook.py" {hook_script}'
-    )
+    _ = root
+    if is_windows():
+        return (
+            f'"${{CLAUDE_PLUGIN_ROOT}}/scripts/run_hook.cmd" {hook_script}'
+        )
+    py = hook_python_invocation()
+    return f'{py} "${{CLAUDE_PLUGIN_ROOT}}/scripts/run_hook.py" {hook_script}'

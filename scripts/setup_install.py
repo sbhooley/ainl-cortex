@@ -186,6 +186,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="AINL Cortex cross-platform install")
     parser.add_argument("--plugin-dir", type=Path, default=ROOT)
     parser.add_argument("--python-only", action="store_true", help="Skip native backend upgrade prompts")
+    parser.add_argument(
+        "--register-claude",
+        action="store_true",
+        help="Register local marketplace + enable plugin in ~/.claude/settings.json",
+    )
     args = parser.parse_args(argv)
 
     root = plugin_root(args.plugin_dir)
@@ -206,8 +211,20 @@ def main(argv: list[str] | None = None) -> int:
     configure_config(root)
     native_ok = install_ainl_native(root, python_only=args.python_only)
     write_hooks_json(root)
+    from mcp_server.mcp_launcher_config import configure_mcp_launcher
+
+    configure_mcp_launcher(root)
     manifest = write_install_manifest(root, ainl_native_ready=native_ok)
     run_preflight(root)
+
+    if args.register_claude:
+        from mcp_server.install_bootstrap import register_claude_integration
+
+        reg_ok, reg_msg = register_claude_integration(root)
+        if reg_ok:
+            print(f"  [ok] Claude Code registration: {reg_msg}")
+        else:
+            print(f"  [warn] Claude Code registration: {reg_msg}")
 
     print("")
     print("=== Python install steps complete ===")

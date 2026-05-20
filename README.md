@@ -95,10 +95,15 @@ AINL Cortex is a **Claude Code plugin** that transforms your AI coding assistant
 **If you are a human:** paste this into Claude Code chat and press Enter:
 
 ```
-Install the plugin at https://github.com/sbhooley/ainl-cortex for me, then tell me when to restart.
+Install the plugin at https://github.com/sbhooley/ainl-cortex for me on this machine.
+Detect Windows vs macOS/Linux, run the install (scripts/claude_install.py or setup.ps1 / setup.sh),
+register the plugin, then tell me when to restart and to run /reload-plugins. Only ask me to do
+something manually if Python is not installed.
 ```
 
-Claude will clone, run setup, and tell you when to restart. Done.
+Claude will clone, run install, register marketplace + settings, and tell you when to restart. The plugin also **auto-installs on first use** if `.venv` was missing when you enabled it (first MCP or session hook).
+
+**Python:** Not required beforehand on Windows 11 — the plugin downloads **uv** and installs Python 3.12 into `.ainl-bootstrap/` (network + optional UAC). macOS/Linux: usually already have `python3`; otherwise the same uv bootstrap runs.
 
 **If you prefer to run it yourself, pick the variant that matches you:**
 

@@ -219,7 +219,7 @@ else
 fi
 
 # ── 3–5. Cross-platform venv, config, hooks, ainl_native (Python) ───────────
-SETUP_PY_ARGS=(--plugin-dir "$PLUGIN_DIR")
+SETUP_PY_ARGS=(--plugin-dir "$PLUGIN_DIR" --register-claude)
 if [ "$INSTALL_MODE" = "python_only" ]; then
     SETUP_PY_ARGS+=(--python-only)
 fi
@@ -323,61 +323,8 @@ if [ "$NATIVE_READY" = "true" ] && [ "$CURRENT_BACKEND" = "python" ]; then
     fi
 fi
 
-# ── 7. Set up local marketplace ────────────────────────────────────────────
-echo "  Setting up plugin marketplace..."
-mkdir -p "$MARKETPLACE/.claude-plugin"
-mkdir -p "$MARKETPLACE/plugins"
-
-LINK_PATH="$MARKETPLACE/plugins/ainl-cortex"
-if [[ -L "$LINK_PATH" ]] || [[ -e "$LINK_PATH" ]]; then
-    rm -f "$LINK_PATH"
-fi
-ln -s "$PLUGIN_DIR" "$LINK_PATH"
-
-cat > "$MARKETPLACE/.claude-plugin/marketplace.json" <<JSONEOF
-{
-  "name": "ainl-local",
-  "version": "1.0.0",
-  "description": "Local marketplace: AINL Cortex",
-  "owner": { "name": "local" },
-  "plugins": [
-    {
-      "name": "ainl-cortex",
-      "description": "Graph-native memory, self-learning, and multi-agent coordination for Claude Code",
-      "source": "./plugins/ainl-cortex"
-    }
-  ]
-}
-JSONEOF
-echo "  [ok] Marketplace configured"
-
-# ── 8. Register plugin in ~/.claude/settings.json ──────────────────────────
-echo "  Registering plugin with Claude Code..."
-python3 - "$SETTINGS" "$MARKETPLACE" <<'PYEOF'
-import json, pathlib, sys
-
-settings_path = pathlib.Path(sys.argv[1])
-marketplace = sys.argv[2]
-
-settings = {}
-if settings_path.exists():
-    try:
-        with open(settings_path) as f:
-            settings = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        print(f"    WARNING: could not parse {settings_path}, creating fresh")
-
-settings.setdefault("extraKnownMarketplaces", {})["ainl-local"] = {
-    "source": {"source": "directory", "path": marketplace}
-}
-settings.setdefault("enabledPlugins", {})["ainl-cortex@ainl-local"] = True
-
-settings_path.parent.mkdir(parents=True, exist_ok=True)
-with open(settings_path, "w") as f:
-    json.dump(settings, f, indent=2)
-print(f"    {settings_path} updated")
-PYEOF
-echo "  [ok] Plugin registered"
+# ── 7–8. Marketplace + settings (done in setup_install.py --register-claude) ─
+echo "  [ok] Claude Code marketplace + settings (via setup_install.py)"
 
 # ── 8b. MCP import compat (preflight; setup_install.py also runs this) ─────
 if [ -n "$_VPY" ] && [ -f "$PLUGIN_DIR/scripts/ensure_runtime_preflight.py" ]; then

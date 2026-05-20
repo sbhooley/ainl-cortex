@@ -1,0 +1,64 @@
+# Windows install path: parse PowerShell, smoke setup_install (no full uv download in CI).
+name: Windows install CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.ps1"
+      - "**.ps1.cmd"
+      - "mcp_launch.cmd"
+      - "scripts/**"
+      - "mcp_server/install_bootstrap.py"
+      - "mcp_server/python_bootstrap.py"
+      - ".github/workflows/windows-install-ci.yml"
+  pull_request:
+    paths:
+      - "**.ps1"
+      - "mcp_launch.cmd"
+      - "scripts/**"
+      - "mcp_server/**"
+      - ".github/workflows/windows-install-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  powershell-syntax:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse-check PowerShell scripts
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/verify_powershell_syntax.ps1
+
+      - name: setup.ps1 dry parse (legacy Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD\setup.ps1", [ref]$null, [ref]$errors
+          )
+          if ($errors) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host "setup.ps1 parses under Windows PowerShell 5.1"
+
+  python-install-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: setup_install.py (register-claude skipped paths only)
+        shell: pwsh
+        run: |
+          python scripts/setup_install.py --plugin-dir . --python-only
+          if (-not (Test-Path .venv/Scripts/python.exe)) { throw "venv missing" }
+          python -m pytest tests/test_install_bootstrap.py tests/test_platform_paths.py tests/test_windows_compat.py tests/test_python_bootstrap.py -q

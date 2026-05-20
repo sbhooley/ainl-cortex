@@ -8,6 +8,7 @@ import pytest
 
 from mcp_server.platform_paths import (
     hook_command,
+    hook_python_invocation,
     os_family,
     read_install_manifest,
     venv_bin_dir,
@@ -33,8 +34,12 @@ def test_hook_command_uses_run_hook_not_bin_python(tmp_path, monkeypatch):
     cmd = hook_command("startup", tmp_path)
     assert "run_hook.py" in cmd
     assert "startup" in cmd
+    if sys.platform == "win32":
+        assert "run_hook.cmd" in cmd
+    else:
+        assert hook_python_invocation() in cmd
+        assert "run_hook.py" in cmd
     assert ".venv/bin/python" not in cmd
-    assert "Scripts" not in cmd or sys.platform == "win32"
 
 
 def test_write_install_manifest_roundtrip(tmp_path, monkeypatch):

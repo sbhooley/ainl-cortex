@@ -2,6 +2,15 @@
 
 ## 0.4.0 — 2026-05-18
 
+### Windows zero-touch install (self-healing)
+
+- **Auto-install on first use** — missing `.venv` triggers `setup_install.py` from MCP (`mcp_launch.py`) and hooks (`run_hook.cmd` / `run_hook.py`).
+- **Python bootstrap** — downloads **uv** + Python 3.12 when no system Python (`python_bootstrap.py`, `bootstrap_no_python.ps1`).
+- **MCP on Windows** — `mcp_launch.cmd` + install-time `plugin.json` patch (`mcp_launcher_config.py`).
+- **Marketplace/settings** — `configure_marketplace.py`, `register_claude_settings.py`, `scripts/claude_install.py` for agents.
+- **setup.ps1** — PowerShell 5.1 parse fix (no `$Yes` param); uv fallback; `-Yes` alias → `-NonInteractive`.
+- **CI** — `windows-install-ci.yml` parses all `.ps1` under PS 5.1 and pwsh.
+
 ### Cost control (production roadmap)
 
 - **Conversation / action-intent gate** — skips recall, goals, failure advisor, and AINL nudges on chat-only turns (`hooks/shared/conversation_detection.py`).

@@ -5,9 +5,13 @@ Appends one line per message to a2a/logs/a2a.log.
 Format: ISO timestamp  DIR  from/to  thread  urgency  "preview..."
 """
 
-import fcntl
 import time
 from pathlib import Path
+
+try:
+    import fcntl  # Unix only
+except ImportError:
+    fcntl = None  # type: ignore[assignment,misc]
 
 
 def append_log(
@@ -37,11 +41,14 @@ def append_log(
     )
 
     try:
-        with open(log_path, "a") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            if fcntl is not None:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    f.write(line)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+            else:
                 f.write(line)
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
     except Exception:
         pass  # log write failure is always non-fatal
