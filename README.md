@@ -115,8 +115,14 @@ bash setup.sh --python-only
 # Variant C — unattended Rust install via rustup (CI machines you control)
 bash setup.sh --auto-install-rust
 
+# Windows 11 — PowerShell (no Git Bash required for setup)
+powershell -ExecutionPolicy Bypass -File setup.ps1
+# Or: powershell -ExecutionPolicy Bypass -File setup.ps1 -PythonOnly
+
 # Then restart Claude Code.
 ```
+
+**Windows:** Setup detects `sys.platform == "win32"`, creates `.venv\Scripts\python.exe`, writes `install_manifest.json`, and regenerates hooks to use `scripts/run_hook.py`. MCP launches via `mcp_launch.py`. See [`docs/INSTALL_WINDOWS.md`](docs/INSTALL_WINDOWS.md).
 
 `setup.sh` no longer flips the storage backend or migrates data automatically. To
 switch to the Rust native backend later, run:

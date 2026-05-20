@@ -218,82 +218,23 @@ else
     esac
 fi
 
-# ── 3. Create venv + install dependencies ──────────────────────────────────
-echo "  Creating Python venv..."
-python3 -m venv "$PLUGIN_DIR/.venv"
-"$PLUGIN_DIR/.venv/bin/pip" install --quiet --upgrade pip
-"$PLUGIN_DIR/.venv/bin/pip" install --quiet -r "$PLUGIN_DIR/requirements-ainl.txt"
-echo "  [ok] Dependencies installed"
+# ── 3–5. Cross-platform venv, config, hooks, ainl_native (Python) ───────────
+SETUP_PY_ARGS=(--plugin-dir "$PLUGIN_DIR")
+if [ "$INSTALL_MODE" = "python_only" ]; then
+    SETUP_PY_ARGS+=(--python-only)
+fi
+python3 "$PLUGIN_DIR/scripts/setup_install.py" "${SETUP_PY_ARGS[@]}"
 
-# ── 4. Configure config.json (always python by default) ────────────────────
-echo "  Configuring plugin..."
-python3 - "$PLUGIN_DIR" <<'PYEOF'
-import json, pathlib, sys, uuid
-
-plugin_dir = pathlib.Path(sys.argv[1])
-sys.path.insert(0, str(plugin_dir))
-from mcp_server.config_loader import (
-    LOCAL_CONFIG_FILENAME,
-    migrate_install_id_to_local,
-    write_local_config,
-)
-
-config_path = plugin_dir / "config.json"
-local_path = plugin_dir / LOCAL_CONFIG_FILENAME
-
-migrate_install_id_to_local(plugin_dir)
-
-with open(config_path) as f:
-    cfg = json.load(f)
-
-# Always default to Python; user opts into native via the migration script.
-cfg.setdefault("memory", {})
-if cfg["memory"].get("store_backend") not in ("python", "native"):
-    cfg["memory"]["store_backend"] = "python"
-
-# Default to per-repo project isolation for fresh installs; existing keep theirs.
-cfg["memory"].setdefault("project_isolation_mode", "per_repo")
-
-cfg.setdefault("a2a", {})
-cfg["a2a"].setdefault("enabled", False)
-# Legacy field removed from older configs
-cfg["a2a"].pop("bridge_script", None)
-
-cfg.setdefault("telemetry", {}).setdefault("remote", {}).setdefault("enabled", True)
-
-with open(config_path, "w") as f:
-    json.dump(cfg, f, indent=2)
-    f.write("\n")
-
-local_cfg = {}
-if local_path.is_file():
-    with open(local_path) as f:
-        local_cfg = json.load(f)
-local_cfg.setdefault("install_id", str(uuid.uuid4()))
-write_local_config(plugin_dir, local_cfg)
-
-print(
-    f"    config.json: store_backend={cfg['memory']['store_backend']!r} "
-    f"project_isolation_mode={cfg['memory'].get('project_isolation_mode')!r} "
-    f"(install_id in {LOCAL_CONFIG_FILENAME})"
-)
-PYEOF
-echo "  [ok] Config updated"
-
-# Read current backend (untouched by setup.sh — the user set it).
+# Read current backend (untouched by setup — user may flip via migration scripts).
 CURRENT_BACKEND=$(python3 -c "import json; print(json.load(open('$PLUGIN_DIR/config.json'))['memory']['store_backend'])")
 
-# ── 5. Install ainl_native (PyPI first; maturin fallback) ─────────────────
 NATIVE_READY=false
-if [ "$INSTALL_MODE" = "python_only" ]; then
-    echo "  Installing ainl_native (PyPI; optional for native migration later)..."
-else
-    echo "  Installing ainl_native for strict-native graph memory..."
-fi
-if bash "$PLUGIN_DIR/scripts/install_ainl_native.sh"; then
+_VPY=$(python3 -c "import sys; sys.path.insert(0,'$PLUGIN_DIR'); from mcp_server.platform_paths import venv_python; from pathlib import Path; p=venv_python(Path('$PLUGIN_DIR')); print(p or '')")
+if [ -n "$_VPY" ] && "$_VPY" -c "import ainl_native" 2>/dev/null; then
     NATIVE_READY=true
-else
-    echo "  [warn] ainl_native not installed — Python backend works; native needs a wheel or Rust"
+fi
+if [ "$NATIVE_READY" = "false" ] && bash "$PLUGIN_DIR/scripts/install_ainl_native.sh"; then
+    NATIVE_READY=true
 fi
 
 # ── 6. Native upgrade policy ───────────────────────────────────────────────
@@ -438,9 +379,9 @@ print(f"    {settings_path} updated")
 PYEOF
 echo "  [ok] Plugin registered"
 
-# ── 8b. MCP import compat (node_types alias for package-mode launch) ───────
-if [[ -x "$PLUGIN_DIR/.venv/bin/python" ]]; then
-  "$PLUGIN_DIR/.venv/bin/python" "$PLUGIN_DIR/scripts/ensure_runtime_preflight.py" 2>/dev/null || true
+# ── 8b. MCP import compat (preflight; setup_install.py also runs this) ─────
+if [ -n "$_VPY" ] && [ -f "$PLUGIN_DIR/scripts/ensure_runtime_preflight.py" ]; then
+  "$_VPY" "$PLUGIN_DIR/scripts/ensure_runtime_preflight.py" 2>/dev/null || true
 fi
 
 # ── 9. Self-verification ───────────────────────────────────────────────────
@@ -450,7 +391,9 @@ bash "$PLUGIN_DIR/scripts/verify_activation.sh" || true
 bash "$PLUGIN_DIR/scripts/smoke_test.sh" || true
 
 # ── 10. Telemetry: install event ───────────────────────────────────────────
-"$PLUGIN_DIR/.venv/bin/python" - "$PLUGIN_DIR" <<'PYEOF' &
+VENV_PY_FOR_TELEM="$(python3 -c "import sys; sys.path.insert(0,'$PLUGIN_DIR'); from mcp_server.platform_paths import venv_python; p=venv_python(__import__('pathlib').Path('$PLUGIN_DIR')); print(p or '')")"
+[ -n "$VENV_PY_FOR_TELEM" ] || VENV_PY_FOR_TELEM="$PLUGIN_DIR/.venv/bin/python"
+"$VENV_PY_FOR_TELEM" - "$PLUGIN_DIR" <<'PYEOF' &
 import sys
 from pathlib import Path
 plugin_dir = Path(sys.argv[1])

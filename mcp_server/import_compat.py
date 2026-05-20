@@ -37,13 +37,9 @@ def plugin_root() -> Path:
 
 
 def venv_python(root: Optional[Path] = None) -> Optional[Path]:
-    root = root or plugin_root()
-    bindir = root / ".venv" / "bin"
-    for name in ("python", "python3", "python3.14", "python3.13", "python3.12", "python3.11"):
-        p = bindir / name
-        if p.is_file() and os.access(p, os.X_OK):
-            return p
-    return None
+    from .platform_paths import venv_python as _venv_python
+
+    return _venv_python(root or plugin_root())
 
 
 def expected_module_file(root: Path, bare_name: str) -> Path:

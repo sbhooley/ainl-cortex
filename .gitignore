@@ -30,6 +30,7 @@ ENV/
 profiles/
 logs/cache_state.json
 config.local.json
+install_manifest.json
 
 # IDE
 .vscode/

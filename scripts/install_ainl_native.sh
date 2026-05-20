@@ -25,12 +25,13 @@ while [ $# -gt 0 ]; do
 done
 
 MIN_VER="${AINL_NATIVE_MIN_VERSION:-0.1.1}"
-PY="$PLUGIN_DIR/.venv/bin/python"
-PIP="$PLUGIN_DIR/.venv/bin/pip"
 MANIFEST="$PLUGIN_DIR/ainl_native/Cargo.toml"
 
-if [[ ! -x "$PY" ]]; then
-  echo "error: missing $PLUGIN_DIR/.venv — run setup.sh first" >&2
+PY=$(python3 -c "import sys; from pathlib import Path; sys.path.insert(0,'$PLUGIN_DIR'); from mcp_server.platform_paths import venv_python; print(venv_python(Path('$PLUGIN_DIR')) or '')")
+PIP=$(python3 -c "import sys; from pathlib import Path; sys.path.insert(0,'$PLUGIN_DIR'); from mcp_server.platform_paths import venv_pip; print(venv_pip(Path('$PLUGIN_DIR')) or '')")
+
+if [[ -z "$PY" || ! -f "$PY" ]]; then
+  echo "error: missing $PLUGIN_DIR/.venv — run setup.sh or setup.ps1 first" >&2
   exit 1
 fi
 
@@ -60,7 +61,7 @@ _maturin_develop() {
   "$PIP" install --quiet 'maturin>=1.0,<2.0' 2>/dev/null || true
   export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
   if PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
-    "$PLUGIN_DIR/.venv/bin/maturin" develop --release --manifest-path "$MANIFEST" >/dev/null 2>&1; then
+    "$PY" -m maturin develop --release --manifest-path "$MANIFEST" >/dev/null 2>&1; then
     _verify_import >/dev/null
     echo "  [ok] ainl_native built from source"
     return 0

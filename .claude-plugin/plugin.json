@@ -13,8 +13,8 @@
   "readme": "README.md",
   "mcpServers": {
     "ainl-cortex": {
-      "command": "bash",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp_launch.sh"],
+      "command": "python",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp_launch.py"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}"
     }
   }

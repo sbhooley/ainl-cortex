@@ -103,12 +103,12 @@ def warm_database(db_path: Path) -> str:
 
 
 def _venv_python(plugin_root: Path) -> Optional[Path]:
-    bindir = plugin_root / ".venv" / "bin"
-    for name in ("python", "python3", "python3.14", "python3.12", "python3.11"):
-        p = bindir / name
-        if p.is_file() and os.access(p, os.X_OK):
-            return p
-    return None
+    try:
+        from mcp_server.platform_paths import venv_python
+
+        return venv_python(plugin_root)
+    except Exception:
+        return None
 
 
 def _env_for_mcp_test(plugin_root: Path) -> dict:
