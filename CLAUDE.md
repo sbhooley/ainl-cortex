@@ -41,7 +41,8 @@ Or OS-specific wrappers (same result):
 
 1. **You or the user enables the plugin** in Claude Code.
 2. **First MCP or SessionStart hook** runs `scripts/setup_install.py` if `.venv` is missing (zero-touch bootstrap).
-3. **Marketplace + `settings.json`** are updated when install runs with `--register-claude` (default in `claude_install.py`, `setup.sh`, `setup.ps1`).
+3. **Hook launcher self-heal** — MCP start and `run_hook.py` rewrite broken Windows `run_hook.cmd` / `hooks.json` (legacy `scripts\.` ROOT bug) without asking the user.
+4. **Marketplace + `settings.json`** are updated when install runs with `--register-claude` (default in `claude_install.py`, `setup.sh`, `setup.ps1`).
 
 Tell the user only: **restart Claude Code once**, then **`/reload-plugins`** if tools are missing.
 

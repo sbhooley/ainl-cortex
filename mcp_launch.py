@@ -19,6 +19,15 @@ def main() -> int:
     os.environ.setdefault("CLAUDE_PLUGIN_ROOT", str(root))
     os.environ["PYTHONPATH"] = pythonpath_for_plugin(root)
 
+    try:
+        from mcp_server.hook_launcher_heal import ensure_hook_launchers
+
+        _h_ok, _h_msg = ensure_hook_launchers(root)
+        if _h_msg.startswith("repaired:"):
+            print(f"ainl-cortex: {_h_msg}", file=sys.stderr)
+    except Exception:
+        pass
+
     vpy = venv_python(root)
     if vpy is None:
         from mcp_server.install_bootstrap import ensure_plugin_installed, needs_install

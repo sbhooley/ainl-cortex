@@ -2,9 +2,10 @@
 
 ## 0.4.0 — 2026-05-18
 
-### Windows hook fix (SessionStart banner)
+### Windows hook fix + cross-OS self-heal
 
 - **`run_hook.cmd`** — fixed plugin root resolution (`scripts\.` → real root). Restores SessionStart `[AINL Cortex]` banner and stops `scripts\.\scripts\bootstrap_no_python.ps1` PostToolUse errors.
+- **`mcp_server/hook_launcher_heal.py`** — auto-repairs broken `run_hook.cmd` and stale `hooks.json` on MCP start, `run_hook.py`, install, and runtime bootstrap (no manual `git pull` required once MCP runs).
 - **`scripts/verify_sessionstart.cmd`** — run outside Claude to confirm the hook emits JSON with `[AINL Cortex]`.
 
 ### Windows zero-touch install (self-healing)

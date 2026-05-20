@@ -132,6 +132,14 @@ def _run_setup_install(
 
     if venv_python(root) is None:
         return False, "setup finished but .venv python still missing"
+
+    try:
+        from .hook_launcher_heal import ensure_hook_launchers
+
+        ensure_hook_launchers(root)
+    except Exception:
+        pass
+
     return True, "venv and dependencies installed"
 
 
@@ -174,6 +182,15 @@ def ensure_plugin_installed(
             f"refusing auto-install from ephemeral path: {root}. "
             "Clone to ~/.claude/plugins/ainl-cortex and run setup, or ask Claude to install from GitHub."
         )
+
+    try:
+        from .hook_launcher_heal import ensure_hook_launchers
+
+        _hr_ok, _hr_msg = ensure_hook_launchers(root)
+        if _hr_msg.startswith("repaired:"):
+            logger.info("hook launcher self-heal: %s", _hr_msg)
+    except Exception as exc:
+        logger.debug("ensure_hook_launchers: %s", exc)
 
     if not force and not needs_install(root):
         return True, "already installed"

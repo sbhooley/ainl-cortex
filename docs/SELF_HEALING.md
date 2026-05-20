@@ -28,6 +28,7 @@ setup.sh / mcp_launch.sh / SessionStart / every call_tool
 | 3 | Native backend / `ainl_native` | **Done** | `native_compat` + `get_graph_store()` fallback |
 | 4 | Stale MCP after `git pull` | **Done** | `build_stamp` + `mcp_reload` → **`/reload-plugins`** first |
 | 5 | Hooks ↔ MCP paths | **Done** | `ensure_hooks_path()` |
+| 5b | Windows `run_hook.cmd` / `hooks.json` | **Done** | `hook_launcher_heal.ensure_hook_launchers()` on MCP start, `run_hook.py`, install, SessionStart banner |
 | 6 | Operator-only failures | **Done** | `operator_checks` |
 | 7 | Relative-import codemod | **Done** | `scripts/codemod_relative_imports.py` |
 | 8 | MCP reload without full restart | **Done** | `mcp_reload.request_mcp_reload()` after pull/setup; SessionStart banner |

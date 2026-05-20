@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Tuple
 
+from .hook_launcher_heal import ensure_hook_launchers, hook_launchers_healthy
 from .install_bootstrap import (
     ensure_plugin_installed,
     needs_install,
@@ -40,6 +41,16 @@ def build_agent_install_banner(
     """
     root = root or plugin_root()
     reasons: list[str] = []
+
+    if (root / "hooks" / "startup.py").is_file():
+        _hooks_ok, _hooks_issue = hook_launchers_healthy(root)
+        if not _hooks_ok:
+            _hr_ok, _hr_msg = ensure_hook_launchers(root)
+            _hooks_ok, _hooks_issue = hook_launchers_healthy(root)
+            if not _hooks_ok:
+                reasons.append(
+                    f"hook launchers broken ({_hooks_issue}); auto-repair: {_hr_msg[:120]}"
+                )
 
     if not setup_ps1_is_current(root) and is_windows():
         reasons.append(setup_ps1_stale_message(root))

@@ -41,6 +41,15 @@ def bootstrap_runtime(
     if quick:
         return shims_ok, "; ".join(parts)
 
+    try:
+        from .hook_launcher_heal import ensure_hook_launchers
+
+        _h_ok, _h_msg = ensure_hook_launchers(root)
+        if _h_msg.startswith("repaired:"):
+            parts.append(_h_msg)
+    except Exception:
+        pass
+
     if heal_deps:
         ainl_ok, ainl_msg = deps_compat.ensure_ainativelang(root)
         parts.append(f"ainativelang={'ok' if ainl_ok else ainl_msg}")
