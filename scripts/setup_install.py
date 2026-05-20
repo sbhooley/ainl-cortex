@@ -140,7 +140,8 @@ def write_hooks_json(root: Path) -> None:
         "Stop": ["stop"],
     }
     timeouts = {
-        "startup": 20,
+        # SessionStart runs MCP preflight + banner; 20s was too low on Windows ARM.
+        "startup": 60,
         "user_prompt_submit": 5,
         "ainl_detection": 3,
         "user_prompt_expansion": 3,

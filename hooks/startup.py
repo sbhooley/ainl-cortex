@@ -54,6 +54,53 @@ def _plugin_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _write_sessionstart_probe(
+    root: Path,
+    ok: bool,
+    system_message: str,
+    *,
+    error: Optional[str] = None,
+) -> None:
+    """Persist last SessionStart result so operators can verify hooks on Windows."""
+    try:
+        log_dir = root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ok": ok,
+            "ts": time.time(),
+            "platform": sys.platform,
+            "plugin_root": str(root),
+            "preview": (system_message or "")[:1200],
+            "error": error,
+        }
+        (log_dir / "sessionstart_last.json").write_text(
+            json.dumps(payload, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _mirror_sessionstart_banner(system_message: str) -> None:
+    """
+    macOS Claude Code prints hook systemMessage as ``SessionStart:startup says:``.
+    Windows native builds often omit that UI — mirror the banner to stderr.
+    """
+    if not (system_message or "").strip():
+        return
+    try:
+        from mcp_server.platform_paths import is_windows as _is_windows
+    except Exception:
+        _win = sys.platform == "win32"
+    else:
+        _win = _is_windows()
+    if not _win:
+        return
+    first = system_message.strip().split("\n", 1)[0]
+    print(f"SessionStart:startup says: {first}", file=sys.stderr, flush=True)
+    print(system_message, file=sys.stderr, flush=True)
+
+
 def _hook_cwd() -> Path:
     try:
         from shared.stdin import read_stdin_json
@@ -121,6 +168,31 @@ def _env_for_mcp_test(plugin_root: Path) -> dict:
             break
     env["PYTHONPATH"] = os.pathsep.join(parts)
     return env
+
+
+def verify_mcp_imports_inprocess(plugin_root: Path) -> Tuple[bool, str]:
+    """Fast path when SessionStart already runs inside the plugin venv."""
+    try:
+        if str(plugin_root) not in sys.path:
+            sys.path.insert(0, str(plugin_root))
+        from mcp_server.runtime_bootstrap import bootstrap_runtime
+        from mcp_server.import_compat import (
+            verify_bare_graph_store_import,
+            verify_bare_node_types_import,
+            verify_bare_retrieval_import,
+        )
+
+        bootstrap_runtime(plugin_root, heal_deps=True)
+        ok = (
+            verify_bare_node_types_import()
+            and verify_bare_graph_store_import()
+            and verify_bare_retrieval_import()
+        )
+        if ok:
+            return True, "in-process venv imports OK"
+        return False, "in-process import verify returned false"
+    except Exception as exc:
+        return False, f"in-process: {exc}"[:200]
 
 
 def verify_mcp_imports(plugin_root: Path) -> Tuple[bool, str]:
@@ -503,7 +575,9 @@ def main():
         except OSError as e:
             db_s = f"error: {e}"
 
-        mcp_ok, mcp_detail = verify_mcp_imports(root)
+        mcp_ok, mcp_detail = verify_mcp_imports_inprocess(root)
+        if not mcp_ok:
+            mcp_ok, mcp_detail = verify_mcp_imports(root)
         _agent_install_banner = ""
         try:
             sys.path.insert(0, str(root))
@@ -518,7 +592,9 @@ def main():
                 _iok, _imsg = maybe_auto_install_at_session_start(root)
                 _auto_note = _imsg
                 if _iok:
-                    mcp_ok, mcp_detail = verify_mcp_imports(root)
+                    mcp_ok, mcp_detail = verify_mcp_imports_inprocess(root)
+                    if not mcp_ok:
+                        mcp_ok, mcp_detail = verify_mcp_imports(root)
             _agent_install_banner = build_agent_install_banner(
                 root,
                 mcp_ok=mcp_ok,
@@ -919,6 +995,9 @@ def main():
         except Exception:
             pass
 
+        _write_sessionstart_probe(root, True, system_message)
+        _mirror_sessionstart_banner(system_message)
+
         # Transcript: JSON stdout is what Claude documents; also mirror to stderr in raw terminals
         j = json.dumps(out)
         print(j, file=sys.stdout, flush=True)
@@ -931,10 +1010,13 @@ def main():
 
     except Exception as e:
         logger.error("SessionStart error: %s", e)
+        _write_sessionstart_probe(root, False, "", error=str(e))
+        err_msg = f"[AINL Graph Memory] SessionStart error (non-fatal): {e}"
+        _mirror_sessionstart_banner(err_msg)
         out = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": f"[AINL Graph Memory] SessionStart error (non-fatal): {e}",
+            "systemMessage": err_msg,
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": str(e),

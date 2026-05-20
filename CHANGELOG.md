@@ -2,6 +2,13 @@
 
 ## 0.4.0 — 2026-05-18
 
+### Windows SessionStart visibility + timeout
+
+- **SessionStart timeout** raised to **60s** (was 20s; MCP subprocess preflight could exceed it on Windows ARM).
+- **In-process MCP verify** on SessionStart (avoids extra 30s subprocess when the hook already runs in `.venv`).
+- **Windows terminal mirror** — full `[AINL Cortex]` banner printed to stderr as `SessionStart:startup says:` (native Claude often hides hook UI).
+- **`logs/sessionstart_last.json`** — written every SessionStart for offline diagnosis.
+
 ### Windows hook fix + cross-OS self-heal
 
 - **`run_hook.cmd`** — fixed plugin root resolution (`scripts\.` → real root). Restores SessionStart `[AINL Cortex]` banner and stops `scripts\.\scripts\bootstrap_no_python.ps1` PostToolUse errors.
