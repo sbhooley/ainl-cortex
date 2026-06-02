@@ -181,7 +181,7 @@ def venv_site_packages(root: Optional[Path] = None) -> Optional[Path]:
 def pythonpath_for_plugin(root: Optional[Path] = None) -> str:
     """``PYTHONPATH`` value for hooks and MCP (OS-specific separator)."""
     root = root or plugin_root()
-    parts = [str(root), str(root / "mcp_server")]
+    parts = [str(root), str(root / "mcp_server"), str(root / "hooks")]
     site = venv_site_packages(root)
     if site:
         parts.append(str(site))

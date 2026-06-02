@@ -81,6 +81,14 @@ jobs:
             tests/test_plugin_self_update.py `
             tests/test_session_banner.py `
             tests/test_sessionstart_visibility.py `
+            tests/test_knowledge_capture_xplat.py `
+            tests/test_fact_extraction.py `
+            tests/test_knowledge_writer.py `
+            tests/test_artifact_ingest.py `
+            tests/test_remember_intent.py `
+            tests/test_transcript_tail.py `
+            tests/test_prompt_remember_ingest.py `
+            tests/test_topical_recall_intent.py `
             -q
 
       - name: Bug hunt matrix (--quick)

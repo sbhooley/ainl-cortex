@@ -14,6 +14,10 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from shared.mcp_bootstrap import ensure_hook_mcp_imports
+ensure_hook_mcp_imports()
 
 from shared.project_id import get_project_id
 from shared.logger import log_event, log_error, get_logger
@@ -197,6 +201,29 @@ def _ainl_capture_overrides(tool: str, tool_input: dict, result: dict) -> dict |
     return {"type": "ainl_tool", "success": True}
 
 
+def _mark_ingest_candidate(capture: dict, require_min_size: bool = False) -> None:
+    """Flag artifact paths for end-of-session content ingestion."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mcp_server"))
+        from knowledge_config import artifact_cfg, is_ingestible_artifact_path
+
+        if not artifact_cfg().get("enabled", True):
+            return
+        fpath = capture.get("file")
+        if not fpath or not is_ingestible_artifact_path(str(fpath)):
+            return
+        if require_min_size:
+            p = Path(str(fpath)).expanduser()
+            if not p.is_file():
+                return
+            min_chars = int(artifact_cfg().get("min_chars", 200))
+            if p.stat().st_size < min_chars:
+                return
+        capture["ingest_candidate"] = True
+    except Exception:
+        pass
+
+
 def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
     """
     Extract relevant data from tool execution.
@@ -213,16 +240,19 @@ def extract_tool_capture(tool: str, tool_input: dict, result: dict) -> dict:
         capture['type'] = 'file_edit'
         capture['file'] = tool_input.get('file_path')
         capture['success'] = result.get('type') != 'tool_error'
+        _mark_ingest_candidate(capture)
 
     elif tool == 'write':
         capture['type'] = 'file_write'
         capture['file'] = tool_input.get('file_path')
         capture['success'] = result.get('type') != 'tool_error'
+        _mark_ingest_candidate(capture)
 
     elif tool == 'read':
         capture['type'] = 'file_read'
         capture['file'] = tool_input.get('file_path')
         capture['success'] = True
+        _mark_ingest_candidate(capture, require_min_size=True)
 
     elif tool == 'bash':
         capture['type'] = 'command'
@@ -258,10 +288,10 @@ def buffer_capture(project_id: str, capture: dict) -> int:
     inbox_file = inbox_dir / f"{project_id}_captures.jsonl"
 
     try:
-        with open(inbox_file, 'a') as f:
-            f.write(json.dumps(capture) + '\n')
-        # Count lines efficiently
-        count = sum(1 for _ in open(inbox_file))
+        with open(inbox_file, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(capture, ensure_ascii=False) + "\n")
+        with open(inbox_file, encoding="utf-8") as f:
+            count = sum(1 for _ in f)
         logger.debug(f"Buffered capture: {capture['type']} - {capture['tool']} ({count} total)")
         return count
     except Exception as e:

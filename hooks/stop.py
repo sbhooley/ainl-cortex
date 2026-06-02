@@ -21,6 +21,10 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from shared.mcp_bootstrap import ensure_hook_mcp_imports
+ensure_hook_mcp_imports()
 
 from shared.project_id import get_project_id, get_project_info
 from shared.logger import log_event, log_error, get_logger
@@ -171,6 +175,7 @@ def write_episode(project_id: str, session_data: dict):
     )
 
     store.write_node(node)
+    episode_data["episode_node_id"] = node.id
     logger.info(f"Created episode: project={project_id}, task={task_summary}, outcome={outcome}")
     return store, episode_data
 
@@ -868,7 +873,8 @@ def flush_pending_captures(project_id: str) -> int:
     if not inbox_file.exists():
         return 0
     try:
-        count = sum(1 for _ in open(inbox_file))
+        with open(inbox_file, encoding="utf-8") as f:
+            count = sum(1 for line in f if line.strip())
     except Exception:
         return 0
     if count == 0:
@@ -907,7 +913,12 @@ def flush_pending_captures(project_id: str) -> int:
 
 
 
-def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> None:
+def finalize_session(
+    project_id: str,
+    session_data: dict,
+    plugin_root: Path,
+    cwd: Optional[Path] = None,
+) -> None:
     """Write all node types, self-note (if substantial), and log structured event.
 
     Strict-native (memory.store_backend == 'native' AND ainl_native loaded):
@@ -1020,6 +1031,31 @@ def finalize_session(project_id: str, session_data: dict, plugin_root: Path) -> 
     except Exception as _ce:
         logger.debug(f"Compression event drain failed (non-fatal): {_ce}")
 
+    # Content knowledge capture (artifact / research / synthesis / optional bridge)
+    try:
+        from knowledge_pipeline import run_knowledge_capture
+
+        _kc_episode = dict(episode_data) if episode_data else {}
+        if native_result and native_result.get("episode_id"):
+            _kc_episode["episode_node_id"] = str(native_result.get("episode_id"))
+
+        kc_result = run_knowledge_capture(
+            project_id,
+            session_data,
+            task_summary,
+            episode_data=_kc_episode or None,
+            plugin_root=plugin_root,
+            cwd=cwd,
+        )
+        logger.info(
+            "Knowledge capture: artifact_written=%s research_written=%s synthesis_written=%s",
+            (kc_result.get("artifact") or {}).get("written"),
+            (kc_result.get("research") or {}).get("written"),
+            (kc_result.get("synthesis") or {}).get("written"),
+        )
+    except Exception as _kc_e:
+        logger.warning("Knowledge capture failed (non-fatal): %s", _kc_e)
+
     # Write self-note if session was substantial (helps resume next session)
     try:
         import json as _json
@@ -1098,7 +1134,7 @@ def main():
         session_data = drain_session_inbox(project_id)
 
         if session_data["tool_captures"]:
-            finalize_session(project_id, session_data, plugin_root)
+            finalize_session(project_id, session_data, plugin_root, cwd=cwd)
         else:
             logger.debug("No session data to finalize")
 

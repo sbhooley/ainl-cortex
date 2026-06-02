@@ -11,6 +11,28 @@ from typing import List, Optional, Tuple
 from .import_compat import plugin_root, venv_python
 
 
+def hook_mcp_imports_ok(root: Optional[Path] = None) -> Tuple[bool, str]:
+    """Verify hook subprocesses can bare-import mcp_server modules (memory recall)."""
+    root = root or plugin_root()
+    try:
+        import sys
+
+        hooks = root / "hooks"
+        for p in (str(root), str(root / "mcp_server"), str(hooks)):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        from shared.mcp_bootstrap import ensure_hook_mcp_imports
+
+        if not ensure_hook_mcp_imports(force=True):
+            return False, "MCP import shims incomplete — run /reload-plugins"
+        from config import get_config
+
+        get_config().get_memory_block()
+        return True, "hook recall imports ok"
+    except Exception as exc:
+        return False, f"hook recall imports broken: {exc}"
+
+
 def _settings_path() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
@@ -70,6 +92,9 @@ def collect_operator_issues(root: Optional[Path] = None) -> List[str]:
     if not ok:
         issues.append(msg)
     ok, msg = python_version_ok()
+    if not ok:
+        issues.append(msg)
+    ok, msg = hook_mcp_imports_ok(root)
     if not ok:
         issues.append(msg)
     return issues

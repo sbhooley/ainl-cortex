@@ -36,6 +36,13 @@ def bootstrap_runtime(
     import_compat.ensure_sys_path(root)
     import_compat.ensure_hooks_path(root)
 
+    try:
+        from hooks.shared.mcp_bootstrap import ensure_hook_mcp_imports
+
+        ensure_hook_mcp_imports()
+    except Exception:
+        pass
+
     shims_ok = import_compat.ensure_mcp_module_shims()
     parts = [f"shims={'ok' if shims_ok else 'partial'}"]
 

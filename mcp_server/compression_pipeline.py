@@ -25,13 +25,13 @@ try:
     from .output_compression import OutputCompressor, OutputCompressionConfig
     from .config import get_config
 except ImportError:
-    from .compression import EfficientMode, CompressionMetrics, compress_text
-    from .adaptive_eco import AdaptivePolicy
+    from compression import EfficientMode, CompressionMetrics, compress_text
+    from adaptive_eco import AdaptivePolicy
     from semantic_scoring import SemanticScorer, PreservationScore
-    from .project_profiles import get_profile_manager, ProjectProfileManager
-    from .cache_awareness import get_cache_coordinator, CacheCoordinator, CacheDecision
-    from .output_compression import OutputCompressor, OutputCompressionConfig
-from .config import get_config
+    from project_profiles import get_profile_manager, ProjectProfileManager
+    from cache_awareness import get_cache_coordinator, CacheCoordinator, CacheDecision
+    from output_compression import OutputCompressor, OutputCompressionConfig
+    from config import get_config
 
 logger = logging.getLogger(__name__)
 

@@ -11,6 +11,28 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+def _bootstrap_hook_imports(root: Path) -> None:
+    """Register mcp_server bare-import shims before any hook module loads."""
+    hooks = root / "hooks"
+    for p in (str(root), str(root / "mcp_server"), str(hooks)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    try:
+        from shared.mcp_bootstrap import ensure_hook_mcp_imports
+
+        ensure_hook_mcp_imports()
+        return
+    except Exception:
+        pass
+    try:
+        from mcp_server.import_compat import ensure_mcp_module_shims, ensure_sys_path
+
+        ensure_sys_path(root)
+        ensure_mcp_module_shims()
+    except Exception:
+        pass
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: run_hook.py <hook_module>", file=sys.stderr)
@@ -60,10 +82,11 @@ def main() -> int:
     if Path(sys.executable).resolve() != vpy.resolve():
         os.execv(
             str(vpy),
-            [str(vpy), str(hook_file), *sys.argv[2:]],
+            [str(vpy), str(__file__), hook_name, *sys.argv[2:]],
         )
 
     # Already on venv interpreter — run hook in-process.
+    _bootstrap_hook_imports(root)
     sys.path.insert(0, str(root / "hooks"))
     import runpy
 

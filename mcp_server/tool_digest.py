@@ -24,7 +24,23 @@ _DIGEST_TOOLS = frozenset(
 )
 
 
+def _effective_threshold(tool_name: str, threshold_chars: int) -> int:
+    canon = (tool_name or "").lower().replace(" ", "_")
+    if canon in ("web_search", "web_fetch"):
+        try:
+            try:
+                from .knowledge_config import research_cfg
+            except ImportError:
+                from knowledge_config import research_cfg
+
+            return int(research_cfg().get("web_digest_threshold_chars", 800))
+        except Exception:
+            return 800
+    return threshold_chars
+
+
 def should_digest(tool_name: str, result_text: str, threshold_chars: int = DEFAULT_THRESHOLD_CHARS) -> bool:
+    threshold_chars = _effective_threshold(tool_name, threshold_chars)
     if not result_text or len(result_text) < threshold_chars:
         return False
     canon = (tool_name or "").lower().replace(" ", "_")

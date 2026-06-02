@@ -221,7 +221,7 @@ def pack_native_brief(
     brief = prebuilt or ""
     compression_metrics = None
     pipeline_stats = None
-    if compress and brief.strip():
+    if compress and memory_brief_has_content(brief):
         brief, compression_metrics, pipeline_stats = compress_fn(brief, project_id)
     max_c = budget.effective_native_max()
     brief, truncated = apply_char_ceiling(brief, max_c)
@@ -263,6 +263,15 @@ def memory_brief_has_content(brief: str) -> bool:
     """True if the packed brief is more than empty headings / whitespace."""
     if not brief or not brief.strip():
         return False
+    stripped = brief.strip()
+    # Eco compression may collapse newlines into one paragraph; still inject.
+    if len(stripped) >= 80 and (
+        "- " in stripped
+        or "→" in stripped
+        or "conf:" in stripped
+        or "fitness:" in stripped
+    ):
+        return True
     for line in brief.splitlines():
         s = line.strip()
         if not s or s.startswith("#"):

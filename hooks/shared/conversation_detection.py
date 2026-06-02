@@ -154,6 +154,123 @@ def implies_live_lookup_intent(lower: str) -> bool:
     return False
 
 
+def implies_memory_store_intent(lower: str) -> bool:
+    """User wants the current turn/session content saved into graph memory."""
+    if not lower or not lower.strip():
+        return False
+
+    if "do you remember" in lower or "don't you remember" in lower or "dont you remember" in lower:
+        return False
+    if "did you remember" in lower or "can you remember" in lower and "?" in lower:
+        return False
+
+    store_phrases = (
+        "remember this",
+        "remember that",
+        "save this to memory",
+        "save that to memory",
+        "save to graph memory",
+        "save to memory",
+        "store this in memory",
+        "store in graph memory",
+        "commit this to memory",
+        "commit to graph memory",
+        "commit to memory",
+        "ingest this into memory",
+        "ingest this to memory",
+        "ingest that",
+        "keep this in your memory",
+        "put this in memory",
+        "add this to memory",
+        "persist this to memory",
+        "write this to graph memory",
+    )
+    for phrase in store_phrases:
+        if phrase in lower:
+            return True
+
+    if re.search(r"\bremember\s+(this|that|it)\b", lower) and "?" not in lower:
+        return True
+    if re.search(r"\b(save|store|commit)\b.+\b(memory|graph)\b", lower) and "?" not in lower:
+        return True
+    return False
+
+
+def implies_memory_recall_intent(lower: str) -> bool:
+    """User is asking about prior sessions, graph memory, or continuity."""
+    if implies_memory_store_intent(lower):
+        return False
+    if "graph memory" in lower or "graph recall" in lower:
+        return True
+    if "previous session" in lower or "last session" in lower or "prior session" in lower:
+        return True
+    if "last time" in lower or "earlier session" in lower:
+        return True
+    if "do you remember" in lower or "don't you remember" in lower or "dont you remember" in lower:
+        return True
+    if "you remember" in lower and "?" in lower:
+        return True
+    if re.search(r"\bremember\b.+\b(me|this|that|when|we|you)\b", lower):
+        return True
+    if "recall context" in lower or "memory recall" in lower:
+        return True
+    if "what did we" in lower or "what did you" in lower:
+        return True
+    if "you helped me" in lower or "you clipped" in lower or "you made" in lower:
+        return True
+    if implies_topical_memory_recall_intent(lower):
+        return True
+    return False
+
+
+def implies_topical_memory_recall_intent(lower: str) -> bool:
+    """Recall prior research, plans, or project knowledge from graph memory."""
+    topical_phrases = (
+        "game plan",
+        "game-plan",
+        "our plan",
+        "the plan",
+        "last we",
+        "notes on",
+        "what did your research",
+        "what did we research",
+        "what did you research",
+        "what do you know about",
+        "what did you learn",
+        "viral video",
+        "social media",
+        "clipping plan",
+        "clipping research",
+        "algorithm mastery",
+        "editing mastery",
+        "committed into your memory",
+        "graph memory",
+        "ainl cortex",
+        "cortex memory",
+    )
+    for phrase in topical_phrases:
+        if phrase in lower:
+            return True
+    try:
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent.parent
+        mcp = str(root / "mcp_server")
+        if mcp not in sys.path:
+            sys.path.insert(0, mcp)
+        from knowledge_config import recall_cfg
+
+        for term in recall_cfg().get("extra_terms") or []:
+            if term and str(term).lower() in lower:
+                return True
+    except Exception:
+        pass
+    if re.search(r"\b(remember|recall)\b.+\b(research|clipping|video|plan|docs?)\b", lower):
+        return True
+    return False
+
+
 def has_action_intent(content: str) -> bool:
     """True when user text clearly asks for tool-backed work."""
     content = content.strip()
@@ -161,6 +278,10 @@ def has_action_intent(content: str) -> bool:
         return False
 
     lower = content.lower()
+    if implies_memory_store_intent(lower):
+        return True
+    if implies_memory_recall_intent(lower):
+        return True
     if implies_live_lookup_intent(lower):
         return True
     if implies_show_me_tool_intent(lower):

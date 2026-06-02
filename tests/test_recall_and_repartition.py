@@ -71,6 +71,14 @@ def test_format_memory_tiered_and_budget():
     assert memory_brief_has_content(text)
 
 
+def test_memory_brief_has_content_after_eco_collapse():
+    collapsed = (
+        "## Memory (summary). - alpha fact (conf: 0.90). "
+        "## Memory (details). - [2026-05-29] task → success"
+    )
+    assert memory_brief_has_content(collapsed)
+
+
 def test_compile_memory_context_empty_db(tmp_path):
     schema = (PLUGIN / "mcp_server" / "schema.sql").read_text()
     db = tmp_path / "ainl_memory.db"

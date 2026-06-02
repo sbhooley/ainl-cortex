@@ -18,6 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from shared.mcp_bootstrap import ensure_hook_mcp_imports
+ensure_hook_mcp_imports()
 
 from shared.project_id import get_project_id
 from shared.logger import log_event, get_logger
@@ -69,7 +73,7 @@ def _flush_and_snapshot(project_id: str, message_count: int, estimated_tokens: i
         capture_count = 0
         if captures_file.exists():
             try:
-                with open(captures_file) as _cf:
+                with open(captures_file, encoding="utf-8") as _cf:
                     capture_count = sum(1 for _ in _cf)
             except Exception:
                 pass

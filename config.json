@@ -22,6 +22,61 @@
     "user_prompt_compression": true,
     "memory_context_compression": true
   },
+  "knowledge_capture": {
+    "artifact_ingestion": {
+      "enabled": true,
+      "suffixes": [".md", ".txt", ".mdx"],
+      "plan_name_substrings": ["game_plan", "game-plan", "plan", "research", "mastery"],
+      "min_chars": 200,
+      "max_file_bytes": 512000,
+      "max_facts_per_artifact": 40,
+      "max_fact_chars": 400,
+      "min_confidence": 0.55
+    },
+    "research_capture": {
+      "enabled": true,
+      "web_digest_threshold_chars": 800,
+      "max_facts_per_session": 25,
+      "default_tags": ["research", "knowledge"]
+    },
+    "session_synthesis": {
+      "enabled": true,
+      "min_facts": 5,
+      "max_facts": 15,
+      "trigger_tools": ["web_search", "web_fetch", "write", "edit"]
+    },
+    "extraction": {
+      "llm": {
+        "enabled": false,
+        "provider": "openrouter",
+        "model": "anthropic/claude-3.5-haiku",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "max_input_chars": 24000,
+        "timeout_s": 25,
+        "max_facts": 20
+      }
+    },
+    "recall": {
+      "topical_intent": true,
+      "extra_terms": ["clipping", "craigcast", "virality", "linkedin", "game_plan"],
+      "topical_fts_limit": 8
+    },
+    "claude_memory_bridge": {
+      "enabled": false,
+      "memory_dir_name": "memory",
+      "file_prefix": "reference_",
+      "max_facts_per_file": 30
+    },
+    "stop_time_budget_ms": 2500,
+    "prompt_remember": {
+      "enabled": true,
+      "min_user_body_chars": 120,
+      "max_assistant_chars": 12000,
+      "max_facts": 25,
+      "time_budget_s": 2.0,
+      "include_research_capture": true
+    }
+  },
   "memory": {
     "max_context_tokens": 800,
     "project_isolation": true,

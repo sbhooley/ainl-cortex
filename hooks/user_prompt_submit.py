@@ -20,7 +20,13 @@ from shared.logger import log_event, log_error, get_logger
 from shared.a2a_inbox import read_inbox, clear_inbox
 from shared.a2a_log import append_log
 from shared.a2a_graph import store_message_node, query_thread_history
-from shared.conversation_detection import is_conversation_only_turn
+from shared.conversation_detection import (
+    is_conversation_only_turn,
+    implies_memory_recall_intent,
+    implies_memory_store_intent,
+    implies_topical_memory_recall_intent,
+)
+from shared.config import get_backend
 
 logger = get_logger("user_prompt_submit")
 
@@ -46,6 +52,12 @@ def format_memory_brief(
     Returns:
         (brief_text, compression_metrics, pipeline_stats, recall_pack_stats)
     """
+    try:
+        from shared.mcp_bootstrap import ensure_hook_mcp_imports
+
+        ensure_hook_mcp_imports()
+    except Exception:
+        pass
     _mcp = str(Path(__file__).parent.parent / "mcp_server")
     if _mcp not in sys.path:
         sys.path.insert(0, _mcp)
@@ -338,6 +350,9 @@ def record_prompt_summary(project_id: str, prompt: str, cwd=None) -> None:
 def main():
     """Main hook entry point"""
     try:
+        from shared.mcp_bootstrap import ensure_hook_mcp_imports
+        ensure_hook_mcp_imports()
+
         from shared.stdin import read_stdin_json
         input_data = read_stdin_json(hook_name="user_prompt_submit")
         prompt = input_data.get('prompt', '')
@@ -382,10 +397,27 @@ def main():
         _skip_reason = None
         _skip_memory = False
         _conversation_only = is_conversation_only_turn(prompt)
-        if _conversation_only:
+        _prompt_lower = prompt.lower()
+        _memory_store_intent = implies_memory_store_intent(_prompt_lower)
+        _memory_recall_intent = (
+            implies_memory_recall_intent(_prompt_lower)
+            or implies_topical_memory_recall_intent(_prompt_lower)
+        )
+        if _memory_store_intent and not _memory_recall_intent:
+            _conversation_only = False
+            _skip_memory = True
+            _skip_reason = "remember_ingest_only"
+        if _memory_recall_intent:
+            _skip_memory = False
+            _skip_reason = None
+        if _conversation_only and not _memory_recall_intent and not _memory_store_intent:
             _skip_memory = True
             _skip_reason = "conversation_only"
-        if len(prompt_for_recall) < budget.min_prompt_chars_for_recall and not _skip_memory:
+        if (
+            len(prompt_for_recall) < budget.min_prompt_chars_for_recall
+            and not _skip_memory
+            and not _memory_recall_intent
+        ):
             _skip_memory = True
             _skip_reason = "prompt_too_short"
         if not _skip_memory:
@@ -418,7 +450,7 @@ def main():
         _recall_context: dict = {}
 
         if not _skip_memory:
-            if _NATIVE_OK:
+            if _NATIVE_OK and get_backend() == "native":
                 try:
                     _native_db = str(
                         Path.home() / ".claude" / "projects" / project_id
@@ -475,7 +507,11 @@ def main():
 
         recall_ms = (time.perf_counter() - _t0) * 1000.0
 
-        if not _skip_memory and bool(mem_cfg.get("recall_skip_duplicate_brief", True)):
+        if (
+            not _skip_memory
+            and not _memory_recall_intent
+            and bool(mem_cfg.get("recall_skip_duplicate_brief", True))
+        ):
             try:
                 if memory_brief_has_content(brief):
                     sig = hashlib.sha256(brief.encode("utf-8")).hexdigest()
@@ -677,6 +713,17 @@ def main():
         if brief.strip() and memory_brief_has_content(brief):
             system_parts.append(brief)
 
+        if _memory_recall_intent:
+            try:
+                sys.path.insert(0, str(plugin_root / "mcp_server"))
+                from topical_recall import format_topical_knowledge_block
+
+                _tk = format_topical_knowledge_block(project_id, prompt_for_recall)
+                if _tk:
+                    system_parts.append(_tk)
+            except Exception as _tk_e:
+                logger.debug("topical knowledge block failed (non-fatal): %s", _tk_e)
+
         if not _skip_memory and not _conversation_only:
             try:
                 sys.path.insert(0, str(plugin_root / "mcp_server"))
@@ -757,6 +804,14 @@ def main():
             except Exception as _buf_e:
                 logger.debug("Compression event buffer failed (non-fatal): %s", _buf_e)
 
+        if _memory_store_intent:
+            system_parts.insert(
+                0,
+                "User asked to save knowledge to graph memory. AINL Cortex auto-ingests the "
+                "recent assistant reply, pasted text, and tool digests on this prompt — do not "
+                "call memory_store_semantic unless adding distinct facts beyond that ingest.",
+            )
+
         if _conversation_only:
             try:
                 conv_cfg = config.config.get("conversation", {}) if hasattr(config, "config") else {}
@@ -826,6 +881,40 @@ def main():
                 logger.info(f"Per-prompt flush: committed {flushed} captures")
         except Exception:
             pass
+
+        if _memory_store_intent:
+            try:
+                from prompt_remember_ingest import run as run_prompt_remember
+
+                _remember = run_prompt_remember(
+                    project_id,
+                    prompt,
+                    transcript_path=input_data.get("transcript_path"),
+                    plugin_root=plugin_root,
+                    session_id=input_data.get("session_id"),
+                )
+                _written = int(_remember.get("written", 0) or 0)
+                if _written > 0:
+                    _confirm = (
+                        f"[AINL Cortex] Saved {_written} knowledge fact(s) to graph memory "
+                        f"(sources: {', '.join(_remember.get('sources') or ['session'])})."
+                    )
+                    if result.get("systemMessage"):
+                        result["systemMessage"] = _confirm + "\n\n" + result["systemMessage"]
+                    else:
+                        result["systemMessage"] = _confirm
+                elif _remember.get("reason") == "insufficient_text":
+                    _hint = (
+                        "[AINL Cortex] Remember requested but no substantial text found yet — "
+                        "reply with content to save, or paste the plan/research, then say "
+                        "'remember this' again."
+                    )
+                    if result.get("systemMessage"):
+                        result["systemMessage"] = _hint + "\n\n" + result["systemMessage"]
+                    else:
+                        result["systemMessage"] = _hint
+            except Exception as _rem_e:
+                logger.warning("prompt_remember_ingest failed (non-fatal): %s", _rem_e)
 
         # Record prompt summary for cross-session semantic mining
         try:

@@ -14,6 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from shared.mcp_bootstrap import ensure_hook_mcp_imports
+ensure_hook_mcp_imports()
 
 from shared.project_id import get_project_id
 from shared.logger import log_event, get_logger

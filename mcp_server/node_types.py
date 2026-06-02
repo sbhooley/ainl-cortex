@@ -395,6 +395,18 @@ def failure_content_id(project_id: str, error_type: str, tool: str, error_messag
     return "fail-" + hashlib.sha1(key.encode()).hexdigest()[:16]
 
 
+def normalize_fact_text(fact: str) -> str:
+    """Collapse whitespace for stable semantic dedup keys."""
+    return " ".join((fact or "").split()).strip()
+
+
+def semantic_content_id(project_id: str, fact: str) -> str:
+    """Deterministic semantic node ID from normalized fact text."""
+    normalized = normalize_fact_text(fact)[:500]
+    key = f"{project_id}:semantic:{normalized}"
+    return "sem-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+
+
 def create_goal_node(
     project_id: str,
     title: str,

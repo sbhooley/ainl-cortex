@@ -134,7 +134,32 @@ You should see timestamped entries for `user_prompt_submit`, `post_tool_use`, et
 | `PostToolUse` | After each tool call | Episode capture, trajectory step, failure detection |
 | `PreCompact` | Before context compaction | Flush buffered captures; snapshot anchored summary |
 | `PostCompact` | After context compaction | Update anchored summary to post-compact state |
-| `Stop` | Session ends | Pattern consolidation, persona finalization, full flush |
+| `Stop` | Session ends | Pattern consolidation, persona finalization, full flush, **content knowledge capture** |
+
+### Content knowledge capture (v0.5.0+)
+
+By default the plugin learns **what** you researched and wrote—not only which files were touched:
+
+- **Artifact ingestion:** `.md` / plan files written or edited in a session are chunked into semantic facts at session end (`knowledge:<project_id>` topic cluster).
+- **Research capture:** `web_search` / `web_fetch` results (lower digest threshold) become `research`-tagged facts.
+- **Session synthesis:** Sessions that used web + write tools get 5–15 durable summary facts.
+- **Recall:** Prompts about prior research, game plans, or “do you remember…” inject topical FTS hits from the graph.
+- **“Remember this” in chat:** Saying `remember this`, `save to graph memory`, or similar on a prompt auto-ingests the **last assistant reply** (from Claude’s `transcript_path`), any pasted text, and recent tool digests—no `memory_store_semantic` MCP call required. If the prior reply was too short, you’ll get a hint to paste content and ask again.
+- **Optional LLM extraction:** Set `knowledge_capture.extraction.llm.enabled` to `true` and export `OPENROUTER_API_KEY` (or Anthropic) for higher-quality facts; heuristic mode works offline with no key.
+- **Optional Claude memory bridge:** Set `knowledge_capture.claude_memory_bridge.enabled` to `true` to mirror `reference_*.md` into the graph.
+
+Backfill existing docs:
+
+```bash
+python ~/.claude/plugins/ainl-cortex/scripts/backfill_knowledge.py \
+  --project-id YOUR_PROJECT_ID --dry-run
+python ~/.claude/plugins/ainl-cortex/scripts/backfill_knowledge.py \
+  --project-id YOUR_PROJECT_ID --include-reference-memory
+```
+
+Config block: `knowledge_capture` in `config.json` (override via `config.local.json`).
+
+**macOS + Windows:** Paths use `pathlib` + UTF-8 I/O; Claude project folders encode cwd as `-Users-…` (Unix) or `-C-Users-…` (Windows). Transcript JSONL may use CRLF line endings. Run battle tests: `pytest tests/test_knowledge_capture_xplat.py tests/test_*knowledge* tests/test_*remember* tests/test_transcript_tail.py -q`.
 
 ### What to expect over time
 

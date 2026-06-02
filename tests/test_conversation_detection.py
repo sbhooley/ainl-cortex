@@ -8,6 +8,7 @@ import pytest
 
 from hooks.shared.conversation_detection import (
     has_action_intent,
+    implies_memory_recall_intent,
     is_conversation_only_messages,
     is_conversation_only_turn,
     is_short_ack_or_ping_for_tool_latch,
@@ -96,3 +97,14 @@ def test_disable_detection_env(monkeypatch):
 def test_short_ack_ping_helper():
     assert is_short_ack_or_ping_for_tool_latch("ok")
     assert not is_short_ack_or_ping_for_tool_latch("x" * 60)
+
+
+def test_memory_recall_questions_have_action_intent():
+    assert implies_memory_recall_intent("you don't remember clipping these for me?")
+    assert has_action_intent("You don't remember clipping these for me?")
+    assert not is_conversation_only_turn("You don't remember clipping these for me?")
+
+
+def test_thanks_still_conversation_only():
+    assert is_conversation_only_turn("thanks")
+    assert not implies_memory_recall_intent("thanks")

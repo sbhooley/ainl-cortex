@@ -19,13 +19,63 @@ logger = logging.getLogger(__name__)
 
 _healed_once = False
 
-# Minimal legacy shims (full list removed after relative-import codemod).
+# Bare modules hooks import after adding mcp_server/ to sys.path (relative-import codemod).
 MCP_BARE_MODULES: Sequence[str] = (
     "node_types",
     "graph_store",
     "retrieval",
     "similarity",
     "native_graph_store",
+    "config",
+    "config_loader",
+    "compression",
+    "compression_pipeline",
+    "output_compression",
+    "recall_budget",
+    "procedure_cards",
+    "goal_tracker",
+    "failure_advisor",
+    "extractor",
+    "tool_digest",
+    "orchestration_ledger",
+    "project_context_sync",
+    "memory_reconcile",
+    "persona_engine",
+    "compression_profiles",
+    "adaptive_eco",
+    "semantic_scoring",
+    "project_profiles",
+    "cache_awareness",
+    "cost_profiles",
+    "anchored_summary",
+    "knowledge_config",
+    "knowledge_writer",
+    "fact_extraction",
+    "artifact_ingest",
+    "research_capture",
+    "session_synthesis",
+    "knowledge_pipeline",
+    "topical_recall",
+    "claude_memory_bridge",
+    "transcript_tail",
+    "prompt_remember_ingest",
+    "claude_paths",
+)
+
+# Optional: may fail when ainl_native wheel is broken/missing (python backend still works).
+MCP_BARE_MODULES_OPTIONAL = frozenset({"native_graph_store"})
+
+# Subset required for UserPromptSubmit recall injection.
+HOOK_RECALL_CRITICAL_MODULES = frozenset(
+    {
+        "config",
+        "compression",
+        "compression_pipeline",
+        "recall_budget",
+        "graph_store",
+        "node_types",
+        "retrieval",
+    }
 )
 
 
@@ -89,7 +139,7 @@ def _register_bare_module(bare_name: str, root: Path, *, force: bool = False) ->
         del sys.modules[bare_name]
     try:
         mod = _load_mcp_bare_module(bare_name, root)
-    except ImportError as exc:
+    except Exception as exc:
         logger.debug("register %s failed: %s", bare_name, exc)
         return False
     sys.modules[bare_name] = mod
@@ -101,10 +151,26 @@ def ensure_mcp_module_shims(*, force: bool = False) -> bool:
     root = plugin_root()
     ensure_sys_path(root)
     ensure_hooks_path(root)
-    ok = all(_register_bare_module(name, root, force=force) for name in MCP_BARE_MODULES)
-    if ok:
+    critical_ok = True
+    for name in MCP_BARE_MODULES:
+        ok = _register_bare_module(name, root, force=force)
+        if name in MCP_BARE_MODULES_OPTIONAL:
+            continue
+        critical_ok = critical_ok and ok
+    if critical_ok:
         _healed_once = True
-    return ok
+    return critical_ok
+
+
+def hook_recall_imports_ok(*, force: bool = False) -> bool:
+    """True when modules required for graph-memory recall injection are registered."""
+    root = plugin_root()
+    ensure_sys_path(root)
+    ensure_hooks_path(root)
+    return all(
+        _register_bare_module(name, root, force=force)
+        for name in HOOK_RECALL_CRITICAL_MODULES
+    )
 
 
 def ensure_node_types_alias(*, force: bool = False) -> bool:

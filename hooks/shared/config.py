@@ -16,7 +16,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional  # noqa: F401 used by get_knowledge_capture_block
 
 # Cache: (loaded_at_unix_seconds, parsed_config_dict)
 _CACHE: tuple[float, Dict[str, Any]] | None = None
@@ -91,3 +91,16 @@ def reset_cache() -> None:
     """Clear the in-process config cache. Used by tests."""
     global _CACHE
     _CACHE = None
+
+
+def get_knowledge_capture_block(force_refresh: bool = False) -> Dict[str, Any]:
+    """Merged knowledge_capture settings (see mcp_server/knowledge_config.py)."""
+    try:
+        root = str(_PLUGIN_ROOT / "mcp_server")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from knowledge_config import get_knowledge_capture_block as _kc
+
+        return _kc(force_refresh=force_refresh)
+    except Exception:
+        return {}
